@@ -19,6 +19,7 @@ pub(crate) async fn model_prices_list(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn model_price_upsert(
     app: tauri::AppHandle,
     db_state: tauri::State<'_, DbInitState>,

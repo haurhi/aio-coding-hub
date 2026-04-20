@@ -22,6 +22,7 @@ pub(crate) mod notice;
 pub(crate) mod prompts;
 pub(crate) mod provider_limit_usage;
 pub(crate) mod providers;
+pub(crate) mod registry;
 pub(crate) mod request_logs;
 pub(crate) mod settings;
 pub(crate) mod skills;

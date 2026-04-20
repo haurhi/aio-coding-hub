@@ -71,6 +71,9 @@ Use this checklist whenever a Tauri command is added or changed.
 - The Tauri command layer owns IPC shape adaptation.
 - The domain layer owns validation and persistence rules.
 - The frontend service layer owns the final JS wrapper used by pages/hooks.
+- Keep runtime command registration and Specta export coverage derived from one
+  registry module. If those lists diverge, the desktop contract is already
+  drifting even if tests still compile.
 - Generated bindings only protect the commands and types they actually export.
   If Specta covers only a subset, document that boundary explicitly and keep
   service-layer contract tests for the remaining commands.
@@ -81,6 +84,9 @@ Use this checklist whenever a Tauri command is added or changed.
 - If a command intentionally stays outside Specta, keep one explicit owner file
   for the handwritten DTO on the frontend and add a targeted contract test that
   names the Rust command and the JS wrapper together.
+- Keep runtime-only exceptions rare and named. In this project,
+  `desktop_updater_download_and_install` is the known handwritten command path
+  because it depends on a Tauri `Channel` callback.
 
 ---
 

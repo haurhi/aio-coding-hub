@@ -53,6 +53,7 @@ describe("generated/bindings.ts contract", () => {
     expect(bindingsSource).toContain("usage_summary_v2");
     expect(bindingsSource).toContain("cost_summary_v1");
     expect(bindingsSource).toContain("model_prices_list");
+    expect(bindingsSource).toContain("model_price_upsert");
     expect(bindingsSource).toContain("prompts_list");
     expect(bindingsSource).toContain("workspaces_list");
     expect(bindingsSource).toContain("skills_installed_list");
