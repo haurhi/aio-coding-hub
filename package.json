@@ -21,6 +21,7 @@
     "lint:fix": "eslint src/ --fix",
     "audit:deps": "node scripts/check-pnpm-audit.mjs",
     "check:no-instant-now-sub": "node scripts/check-no-instant-now-sub.mjs",
+    "check:release-pr-changelog": "node scripts/check-release-pr-changelog.mjs",
     "check:spec-links": "node scripts/check-spec-links.mjs",
     "check:support-matrix": "node scripts/support-matrix.mjs check",
     "check:precommit": "pnpm check:precommit:src && pnpm check:precommit:tauri",
@@ -44,7 +45,7 @@
     "tauri:gen-types": "node scripts/tauri-gen-types.mjs",
     "check:precommit:src": "pnpm lint && pnpm typecheck && pnpm check:no-instant-now-sub",
     "check:precommit:tauri": "pnpm tauri:check",
-    "check:precommit:full": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm check:no-instant-now-sub && pnpm check:spec-links && pnpm check:support-matrix && pnpm tauri:fmt && pnpm tauri:check && pnpm check:generated-bindings && pnpm tauri:clippy",
+    "check:precommit:full": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm check:no-instant-now-sub && pnpm check:release-pr-changelog && pnpm check:spec-links && pnpm check:support-matrix && pnpm tauri:fmt && pnpm tauri:check && pnpm check:generated-bindings && pnpm tauri:clippy",
     "check:generated-bindings": "node scripts/check-generated-bindings.mjs"
   },
   "dependencies": {
