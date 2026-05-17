@@ -2,6 +2,8 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UsageSummary } from "../../services/usage/usage";
 import {
+  usageDayDetailV1,
+  usageFolderOptionsV1,
   usageHourlySeries,
   usageLeaderboardV2,
   usageProviderCacheRateTrendV1,
@@ -13,6 +15,8 @@ import { setTauriRuntime } from "../../test/utils/tauriRuntime";
 import { usageKeys } from "../keys";
 import {
   useUsageHourlySeriesQuery,
+  useUsageDayDetailV1Query,
+  useUsageFolderOptionsV1Query,
   useUsageLeaderboardV2Query,
   useUsageProviderCacheRateTrendV1Query,
   useUsageSummaryQuery,
@@ -33,6 +37,8 @@ vi.mock("../../services/usage/usage", async () => {
   return {
     ...actual,
     usageHourlySeries: vi.fn(),
+    usageDayDetailV1: vi.fn(),
+    usageFolderOptionsV1: vi.fn(),
     usageSummary: vi.fn(),
     usageSummaryV2: vi.fn(),
     usageLeaderboardV2: vi.fn(),
@@ -156,6 +162,8 @@ describe("query/usage", () => {
       endTs: 2,
       cliKey: "claude" as const,
       providerId: 7,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
     };
 
     renderHook(
@@ -210,6 +218,8 @@ describe("query/usage", () => {
       cliKey: "claude" as const,
       providerId: 9,
       limit: null,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
     };
 
     renderHook(
@@ -260,6 +270,96 @@ describe("query/usage", () => {
     expect(usageLeaderboardV2).not.toHaveBeenCalled();
   });
 
+  it("calls usageDayDetailV1 with tauri runtime", async () => {
+    setTauriRuntime();
+
+    vi.mocked(usageDayDetailV1).mockResolvedValue({
+      day: "2026-04-16",
+      folders: [],
+      hours: Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        requests_total: 0,
+        total_tokens: 0,
+        io_total_tokens: 0,
+      })),
+    });
+
+    const client = createTestQueryClient();
+    const wrapper = createQueryWrapper(client);
+    const input = {
+      day: "2026-04-16",
+      cliKey: null,
+      providerId: null,
+      folderLimit: 8,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
+    };
+
+    renderHook(() => useUsageDayDetailV1Query(input), { wrapper });
+
+    await waitFor(() => {
+      expect(usageDayDetailV1).toHaveBeenCalledWith(input);
+    });
+
+    const query = client.getQueryCache().find({ queryKey: usageKeys.dayDetailV1(input) });
+    const options = queryRefreshOptions(query);
+    expect(options.refetchInterval).toBe(false);
+  });
+
+  it("does not call usageDayDetailV1 when disabled", async () => {
+    setTauriRuntime();
+
+    const client = createTestQueryClient();
+    const wrapper = createQueryWrapper(client);
+
+    renderHook(
+      () =>
+        useUsageDayDetailV1Query(
+          {
+            day: "2026-04-16",
+            cliKey: "claude",
+            providerId: 9,
+            folderLimit: 8,
+            folderKeys: ["/tmp/project"],
+            excludeCx2CcGatewayBridge: true,
+          },
+          { enabled: false }
+        ),
+      { wrapper }
+    );
+    await Promise.resolve();
+
+    expect(usageDayDetailV1).not.toHaveBeenCalled();
+  });
+
+  it("calls usageFolderOptionsV1 with tauri runtime", async () => {
+    setTauriRuntime();
+
+    vi.mocked(usageFolderOptionsV1).mockResolvedValue([]);
+
+    const client = createTestQueryClient();
+    const wrapper = createQueryWrapper(client);
+    const input = {
+      startTs: 1,
+      endTs: 2,
+      cliKey: "claude" as const,
+      providerId: 11,
+      excludeCx2CcGatewayBridge: true,
+    };
+
+    renderHook(() => useUsageFolderOptionsV1Query("daily", input), { wrapper });
+
+    await waitFor(() => {
+      expect(usageFolderOptionsV1).toHaveBeenCalledWith("daily", input);
+    });
+
+    const query = client
+      .getQueryCache()
+      .find({ queryKey: usageKeys.folderOptionsV1("daily", input) });
+    const options = queryRefreshOptions(query);
+    expect(options.refetchInterval).toBe(false);
+  });
+
   it("calls usageProviderCacheRateTrendV1 with tauri runtime", async () => {
     setTauriRuntime();
 
@@ -276,6 +376,7 @@ describe("query/usage", () => {
           cliKey: "claude",
           providerId: 11,
           limit: 20,
+          excludeCx2CcGatewayBridge: true,
         }),
       { wrapper }
     );
@@ -287,6 +388,7 @@ describe("query/usage", () => {
         cliKey: "claude",
         providerId: 11,
         limit: 20,
+        excludeCx2CcGatewayBridge: true,
       });
     });
   });

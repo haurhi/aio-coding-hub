@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { commands } from "../../../generated/bindings";
 import { logToConsole } from "../../consoleLog";
 import {
+  type UsageDayDetailV1,
+  type UsageFolderOptionV1,
   type UsageDayRow,
   type UsageHourlyRow,
   type UsageLeaderboardRow,
   type UsageProviderCacheRateTrendRowV1,
   type UsageProviderRow,
   type UsageSummary,
+  usageDayDetailV1,
+  usageFolderOptionsV1,
   usageHourlySeries,
   usageLeaderboardDay,
   usageLeaderboardProvider,
@@ -29,6 +33,8 @@ vi.mock("../../../generated/bindings", async () => {
       usageLeaderboardProvider: vi.fn(),
       usageLeaderboardDay: vi.fn(),
       usageHourlySeries: vi.fn(),
+      usageDayDetailV1: vi.fn(),
+      usageFolderOptionsV1: vi.fn(),
       usageSummaryV2: vi.fn(),
       usageLeaderboardV2: vi.fn(),
       usageProviderCacheRateTrendV1: vi.fn(),
@@ -154,6 +160,50 @@ function makeUsageProviderCacheRateTrendRow(
   };
 }
 
+function makeUsageDayDetail(overrides: Partial<UsageDayDetailV1> = {}): UsageDayDetailV1 {
+  return {
+    day: "2026-04-22",
+    folders: [
+      {
+        key: "/tmp/project",
+        name: "project",
+        folder_path: "/tmp/project",
+        requests_total: 1,
+        requests_success: 1,
+        requests_failed: 0,
+        total_tokens: 300,
+        io_total_tokens: 300,
+        input_tokens: 100,
+        output_tokens: 200,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        avg_duration_ms: 120,
+        avg_ttfb_ms: 30,
+        avg_output_tokens_per_second: 10,
+        cost_usd: 1.23,
+      },
+    ],
+    hours: Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      requests_total: hour === 13 ? 1 : 0,
+      total_tokens: hour === 13 ? 300 : 0,
+      io_total_tokens: hour === 13 ? 300 : 0,
+    })),
+    ...overrides,
+  };
+}
+
+function makeUsageFolderOption(overrides: Partial<UsageFolderOptionV1> = {}): UsageFolderOptionV1 {
+  return {
+    key: "/tmp/project",
+    name: "project",
+    folder_path: "/tmp/project",
+    requests_total: 1,
+    total_tokens: 300,
+    ...overrides,
+  };
+}
+
 describe("services/usage/usage", () => {
   it("rethrows invoke errors and logs", async () => {
     vi.mocked(commands.usageSummary).mockRejectedValueOnce(new Error("usage boom"));
@@ -189,6 +239,14 @@ describe("services/usage/usage", () => {
       status: "ok",
       data: [makeUsageHourlyRow()],
     });
+    vi.mocked(commands.usageDayDetailV1).mockResolvedValue({
+      status: "ok",
+      data: makeUsageDayDetail(),
+    });
+    vi.mocked(commands.usageFolderOptionsV1).mockResolvedValue({
+      status: "ok",
+      data: [makeUsageFolderOption()],
+    });
     vi.mocked(commands.usageSummaryV2).mockResolvedValue({
       status: "ok",
       data: makeUsageSummary({ requests_total: 2 }),
@@ -212,9 +270,24 @@ describe("services/usage/usage", () => {
     await usageLeaderboardDay("today", { cliKey: "gemini", limit: 20 });
 
     const hourlyRows = await usageHourlySeries(15);
+    const dayDetail = await usageDayDetailV1({
+      day: "2026-04-22",
+      cliKey: null,
+      providerId: null,
+      folderLimit: 8,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
+    });
 
     const summaryV2 = await usageSummaryV2("custom");
-    await usageSummaryV2("custom", { startTs: 1, endTs: 2, cliKey: "gemini", providerId: 7 });
+    await usageSummaryV2("custom", {
+      startTs: 1,
+      endTs: 2,
+      cliKey: "gemini",
+      providerId: 7,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
+    });
 
     const leaderboardRows = await usageLeaderboardV2("provider", "custom");
     await usageLeaderboardV2("provider", "custom", {
@@ -223,6 +296,15 @@ describe("services/usage/usage", () => {
       cliKey: "claude",
       providerId: 9,
       limit: null,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
+    });
+    const folderOptions = await usageFolderOptionsV1("custom", {
+      startTs: 1,
+      endTs: 2,
+      cliKey: "claude",
+      providerId: 9,
+      excludeCx2CcGatewayBridge: true,
     });
 
     const cacheRateRows = await usageProviderCacheRateTrendV1("daily", {
@@ -231,6 +313,7 @@ describe("services/usage/usage", () => {
       cliKey: "claude",
       providerId: 11,
       limit: 20,
+      excludeCx2CcGatewayBridge: true,
     });
 
     expect(todaySummary.requests_total).toBe(1);
@@ -238,8 +321,10 @@ describe("services/usage/usage", () => {
     expect(providerRows[0]?.cli_key).toBe("claude");
     expect(dayRows[0]?.day).toBe("2026-04-22");
     expect(hourlyRows[0]?.hour).toBe(13);
+    expect(dayDetail.folders[0]?.name).toBe("project");
     expect(summaryV2.requests_total).toBe(2);
     expect(leaderboardRows[0]?.key).toBe("provider:1");
+    expect(folderOptions[0]?.key).toBe("/tmp/project");
     expect(cacheRateRows[0]?.key).toBe("provider:1");
 
     expect(commands.usageSummary).toHaveBeenNthCalledWith(1, "today", null);
@@ -249,12 +334,22 @@ describe("services/usage/usage", () => {
     expect(commands.usageLeaderboardDay).toHaveBeenNthCalledWith(1, "today", null, null);
     expect(commands.usageLeaderboardDay).toHaveBeenNthCalledWith(2, "today", "gemini", 20);
     expect(commands.usageHourlySeries).toHaveBeenCalledWith(15);
+    expect(commands.usageDayDetailV1).toHaveBeenCalledWith({
+      day: "2026-04-22",
+      cliKey: null,
+      providerId: null,
+      folderLimit: 8,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
+    });
     expect(commands.usageSummaryV2).toHaveBeenNthCalledWith(1, {
       period: "custom",
       startTs: null,
       endTs: null,
       cliKey: null,
       providerId: null,
+      folderKeys: null,
+      excludeCx2CcGatewayBridge: null,
     });
     expect(commands.usageSummaryV2).toHaveBeenNthCalledWith(2, {
       period: "custom",
@@ -262,6 +357,8 @@ describe("services/usage/usage", () => {
       endTs: 2,
       cliKey: "gemini",
       providerId: 7,
+      folderKeys: ["/tmp/project"],
+      excludeCx2CcGatewayBridge: true,
     });
     expect(commands.usageLeaderboardV2).toHaveBeenNthCalledWith(
       1,
@@ -272,6 +369,8 @@ describe("services/usage/usage", () => {
         endTs: null,
         cliKey: null,
         providerId: null,
+        folderKeys: null,
+        excludeCx2CcGatewayBridge: null,
       },
       null
     );
@@ -284,9 +383,20 @@ describe("services/usage/usage", () => {
         endTs: 2,
         cliKey: "claude",
         providerId: 9,
+        folderKeys: ["/tmp/project"],
+        excludeCx2CcGatewayBridge: true,
       },
       null
     );
+    expect(commands.usageFolderOptionsV1).toHaveBeenCalledWith({
+      period: "custom",
+      startTs: 1,
+      endTs: 2,
+      cliKey: "claude",
+      providerId: 9,
+      folderKeys: null,
+      excludeCx2CcGatewayBridge: true,
+    });
     expect(commands.usageProviderCacheRateTrendV1).toHaveBeenCalledWith(
       {
         period: "daily",
@@ -294,6 +404,8 @@ describe("services/usage/usage", () => {
         endTs: 2,
         cliKey: "claude",
         providerId: 11,
+        folderKeys: null,
+        excludeCx2CcGatewayBridge: true,
       },
       20
     );
