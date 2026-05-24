@@ -49,9 +49,9 @@ function formatUnixSeconds(ts: number) {
   }
 }
 
-function isMarketSkill(sourceGitUrl: string): boolean {
+function isUpdatableSkillSource(sourceGitUrl: string): boolean {
   const url = sourceGitUrl.trim().toLowerCase();
-  return url.startsWith("http://") || url.startsWith("https://");
+  return url.length > 0 && !url.startsWith("local://");
 }
 
 function pruneSelectionSet<T>(prev: Set<T>, allowed: Set<T>) {
@@ -672,7 +672,7 @@ export function SkillsView({
                               }
                               onCheckedChange={(next) => void toggleSkillEnabled(skill, next)}
                             />
-                            {isMarketSkill(skill.source_git_url) &&
+                            {isUpdatableSkillSource(skill.source_git_url) &&
                             updateInfoMap.get(skill.id)?.has_update ? (
                               <Button
                                 size="sm"

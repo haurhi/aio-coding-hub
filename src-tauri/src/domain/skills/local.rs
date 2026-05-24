@@ -1,8 +1,9 @@
 use super::fs_ops::{
     copy_dir_recursive, is_managed_dir, is_symlink, read_source_metadata, remove_marker,
-    write_marker, write_source_metadata, SkillSourceMetadata,
+    skill_dir_content_hash, write_marker, write_source_metadata, SkillSourceMetadata,
 };
 use super::installed::{get_skill_by_id, skill_key_exists};
+use super::npx_lock::NpxSkillLock;
 use super::paths::{cli_skills_root, ensure_skills_roots, ssot_skills_root, validate_cli_key};
 use super::repo_cache::ensure_repo_cache;
 use super::skill_md::parse_skill_md;
@@ -20,6 +21,7 @@ use std::path::Path;
 
 fn summarize_local_skill_dir(
     path: &Path,
+    npx_lock: Option<&NpxSkillLock>,
 ) -> crate::shared::error::AppResult<Option<LocalSkillSummary>> {
     if !path.is_dir() || is_managed_dir(path) {
         return Ok(None);
@@ -43,7 +45,8 @@ fn summarize_local_skill_dir(
         Ok((name, description)) => (name, description),
         Err(_) => (dir_name.clone(), String::new()),
     };
-    let source = read_source_metadata(path)?;
+    let source = read_source_metadata(path)?
+        .or_else(|| npx_lock.and_then(|lock| lock.source_for_local_skill(&dir_name, &name)));
 
     Ok(Some(LocalSkillSummary {
         dir_name,
@@ -124,7 +127,7 @@ fn find_local_skill_by_source(
         let entry =
             entry.map_err(|e| format!("failed to read dir entry {}: {e}", root.display()))?;
         let path = entry.path();
-        let Some(summary) = summarize_local_skill_dir(&path)? else {
+        let Some(summary) = summarize_local_skill_dir(&path, None)? else {
             continue;
         };
 
@@ -160,6 +163,7 @@ pub fn local_list<R: tauri::Runtime>(
     if !root.exists() {
         return Ok(Vec::new());
     }
+    let npx_lock = NpxSkillLock::read(app);
 
     let entries = std::fs::read_dir(&root)
         .map_err(|e| format!("failed to read dir {}: {e}", root.display()))?;
@@ -169,7 +173,7 @@ pub fn local_list<R: tauri::Runtime>(
         let entry =
             entry.map_err(|e| format!("failed to read dir entry {}: {e}", root.display()))?;
         let path = entry.path();
-        let Some(summary) = summarize_local_skill_dir(&path)? else {
+        let Some(summary) = summarize_local_skill_dir(&path, Some(&npx_lock))? else {
             continue;
         };
         out.push(summary);
@@ -267,7 +271,7 @@ pub fn install_to_local<R: tauri::Runtime>(
         return Err(err);
     }
 
-    summarize_local_skill_dir(&local_dir)?
+    summarize_local_skill_dir(&local_dir, None)?
         .ok_or_else(|| "SKILL_LOCAL_INSTALL_FAILED: local skill summary unavailable".into())
 }
 
@@ -379,7 +383,9 @@ pub fn import_local<R: tauri::Runtime>(
         Err(_) => (dir_name.clone(), String::new()),
     };
     let normalized_name = normalize_name(&name);
-    let source_meta = read_source_metadata(&local_dir)?;
+    let npx_lock = NpxSkillLock::read(app);
+    let source_meta = read_source_metadata(&local_dir)?
+        .or_else(|| npx_lock.source_for_local_skill(&dir_name, &name));
 
     if let Some(source) = source_meta.as_ref() {
         if installed_skill_id_by_source(&conn, source)?.is_some() {
@@ -417,9 +423,10 @@ INSERT INTO skills(
   source_git_url,
   source_branch,
   source_subdir,
+  installed_content_hash,
   created_at,
   updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)
 "#,
         params![
             dir_name,
@@ -461,6 +468,25 @@ ON CONFLICT(workspace_id, skill_id) DO UPDATE SET
         let _ = std::fs::remove_dir_all(&ssot_dir);
         let _ = tx.execute("DELETE FROM skills WHERE id = ?1", params![skill_id]);
         return Err(err);
+    }
+
+    let installed_content_hash = match skill_dir_content_hash(&ssot_dir) {
+        Ok(hash) => hash,
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&ssot_dir);
+            let _ = tx.execute("DELETE FROM skills WHERE id = ?1", params![skill_id]);
+            return Err(err);
+        }
+    };
+    if let Err(err) = tx.execute(
+        "UPDATE skills SET installed_content_hash = ?1 WHERE id = ?2",
+        params![installed_content_hash, skill_id],
+    ) {
+        let _ = std::fs::remove_dir_all(&ssot_dir);
+        let _ = tx.execute("DELETE FROM skills WHERE id = ?1", params![skill_id]);
+        return Err(db_err!(
+            "failed to update imported skill content hash: {err}"
+        ));
     }
 
     if let Err(err) = write_marker(&local_dir) {

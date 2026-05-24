@@ -666,6 +666,27 @@ pub fn skills_installed_list_json<R: tauri::Runtime>(
     serialize_json(rows)
 }
 
+pub fn skill_install_json<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    workspace_id: i64,
+    git_url: &str,
+    branch: &str,
+    source_subdir: &str,
+    enabled: bool,
+) -> crate::shared::error::AppResult<serde_json::Value> {
+    let db = crate::infra::db::init(app)?;
+    let row = crate::skills::install(
+        app,
+        &db,
+        workspace_id,
+        git_url,
+        branch,
+        source_subdir,
+        enabled,
+    )?;
+    serialize_json(row)
+}
+
 pub fn skill_set_enabled_json<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     workspace_id: i64,
@@ -675,6 +696,25 @@ pub fn skill_set_enabled_json<R: tauri::Runtime>(
     let db = crate::infra::db::init(app)?;
     let row = crate::skills::set_enabled(app, &db, workspace_id, skill_id, enabled)?;
     serialize_json(row)
+}
+
+pub fn skill_update_json<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    workspace_id: i64,
+    skill_id: i64,
+) -> crate::shared::error::AppResult<serde_json::Value> {
+    let db = crate::infra::db::init(app)?;
+    let row = crate::skills::update_skill(app, &db, workspace_id, skill_id)?;
+    serialize_json(row)
+}
+
+pub fn skill_check_updates_json<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    workspace_id: i64,
+) -> crate::shared::error::AppResult<serde_json::Value> {
+    let db = crate::infra::db::init(app)?;
+    let rows = crate::skills::check_updates_for_workspace(app, &db, workspace_id)?;
+    serialize_json(rows)
 }
 
 pub fn skill_uninstall<R: tauri::Runtime>(

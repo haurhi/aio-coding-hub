@@ -4,7 +4,9 @@ use super::limits::{
 };
 use crate::shared::fs::{read_optional_file_with_max_len, write_file_atomic};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 const MANAGED_MARKER_FILE: &str = ".aio-coding-hub.managed";
@@ -210,6 +212,107 @@ fn validate_copy_relative_path(relative_path: &Path) -> crate::shared::error::Ap
         )
         .into());
     }
+    Ok(())
+}
+
+pub(super) fn skill_dir_content_hash(dir: &Path) -> crate::shared::error::AppResult<String> {
+    const HASH_READ_CHUNK_SIZE: usize = 8 * 1024;
+
+    if !dir.is_dir() {
+        return Err(format!(
+            "SEC_INVALID_INPUT: skill hash source is not a directory: {}",
+            dir.display()
+        )
+        .into());
+    }
+
+    let mut files = Vec::new();
+    let mut visited_dirs = HashSet::new();
+    let mut budget = SkillCopyBudget::default();
+    collect_skill_hash_files(
+        dir,
+        Path::new(""),
+        &mut visited_dirs,
+        &mut budget,
+        &mut files,
+    )?;
+
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; HASH_READ_CHUNK_SIZE];
+    for (relative_path, path) in files {
+        hasher.update(b"file\0");
+        hasher.update(relative_path.as_bytes());
+        hasher.update(b"\0");
+
+        let mut file = std::fs::File::open(&path)
+            .map_err(|e| format!("failed to open {} for hashing: {e}", path.display()))?;
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|e| format!("failed to read {} for hashing: {e}", path.display()))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        hasher.update(b"\0");
+    }
+
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+fn collect_skill_hash_files(
+    dir: &Path,
+    relative_root: &Path,
+    visited_dirs: &mut HashSet<PathBuf>,
+    budget: &mut SkillCopyBudget,
+    files: &mut Vec<(String, PathBuf)>,
+) -> crate::shared::error::AppResult<()> {
+    let canonical = dir
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize {}: {e}", dir.display()))?;
+    if !visited_dirs.insert(canonical) {
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read dir entry {}: {e}", dir.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+        if file_name_str == MANAGED_MARKER_FILE
+            || file_name_str == SOURCE_MARKER_FILE
+            || file_name_str == ".git"
+        {
+            continue;
+        }
+
+        let path = entry.path();
+        let relative_path = relative_root.join(&file_name);
+        let metadata = std::fs::metadata(&path)
+            .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?;
+
+        if metadata.is_dir() {
+            validate_copy_relative_path(&relative_path)?;
+            collect_skill_hash_files(&path, &relative_path, visited_dirs, budget, files)?;
+            continue;
+        }
+
+        if !metadata.is_file() {
+            return Err(format!("SKILL_HASH_BLOCKED_SPECIAL_FILE: {}", path.display()).into());
+        }
+
+        budget.reserve_file(&path, &relative_path, metadata.len())?;
+        let relative = relative_path.to_string_lossy().replace('\\', "/");
+        files.push((relative, path));
+    }
+
     Ok(())
 }
 

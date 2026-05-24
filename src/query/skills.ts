@@ -392,17 +392,9 @@ export function useSkillUpdateMutation(workspaceId: number) {
         skillsKeys.installedList(normalizedWorkspaceId),
         (cur) => {
           const prev = cur ?? [];
-          // The skill was uninstalled and reinstalled, so it has a new ID.
-          // We need to replace by matching source info or just add the new one.
-          const filtered = prev.filter(
-            (s) =>
-              !(
-                s.source_git_url === next.source_git_url &&
-                s.source_branch === next.source_branch &&
-                s.source_subdir === next.source_subdir
-              )
-          );
-          return [next, ...filtered];
+          const found = prev.some((s) => s.id === next.id);
+          if (!found) return [next, ...prev];
+          return prev.map((s) => (s.id === next.id ? next : s));
         }
       );
       queryClient.invalidateQueries({ queryKey: skillsKeys.discoverAvailable(false) });

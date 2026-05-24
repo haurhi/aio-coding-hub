@@ -7,6 +7,7 @@ mod installed;
 mod limits;
 mod local;
 mod local_swap;
+mod npx_lock;
 mod ops;
 mod paths;
 mod repo_cache;

@@ -21,6 +21,7 @@ pub(super) fn apply_ensure_patches(conn: &mut Connection) -> crate::shared::erro
     ensure_provider_bridge_type(conn)?;
     ensure_request_logs_extended_columns(conn)?;
     ensure_provider_stream_idle_timeout(conn)?;
+    ensure_skills_update_columns(conn)?;
     Ok(())
 }
 
@@ -312,6 +313,30 @@ WHERE {flag_col} = 1
         let clear_sql = format!("UPDATE skills SET {flag_col} = 0 WHERE {flag_col} != 0");
         conn.execute(&clear_sql, [])
             .map_err(|e| format!("failed to clear legacy skill enabled flag {flag_col}: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn ensure_skills_update_columns(conn: &Connection) -> crate::shared::error::AppResult<()> {
+    let has_skills_table: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skills' LIMIT 1",
+            [],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|e| format!("failed to query sqlite_master: {e}"))?
+        .unwrap_or(false);
+    if !has_skills_table {
+        return Ok(());
+    }
+
+    if !column_exists(conn, "skills", "installed_content_hash")? {
+        conn.execute_batch(
+            "ALTER TABLE skills ADD COLUMN installed_content_hash TEXT DEFAULT NULL",
+        )
+        .map_err(|e| format!("failed to add skills.installed_content_hash: {e}"))?;
     }
 
     Ok(())
