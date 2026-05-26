@@ -434,6 +434,45 @@ mod tests {
         insert_codex_provider_with_priority(db, "Timeout Stub", base_url, 0)
     }
 
+    fn insert_cc2cx_provider_with_priority(
+        db: &db::Db,
+        name: &str,
+        base_url: String,
+        priority: i64,
+    ) -> i64 {
+        providers::upsert(
+            db,
+            providers::ProviderUpsertParams {
+                provider_id: None,
+                cli_key: "codex".to_string(),
+                name: name.to_string(),
+                base_urls: vec![base_url],
+                base_url_mode: providers::ProviderBaseUrlMode::Order,
+                auth_mode: None,
+                api_key: Some("sk-test".to_string()),
+                enabled: true,
+                cost_multiplier: 1.0,
+                priority: Some(priority),
+                claude_models: None,
+                model_mapping: None,
+                limit_5h_usd: None,
+                limit_daily_usd: None,
+                daily_reset_mode: None,
+                daily_reset_time: None,
+                limit_weekly_usd: None,
+                limit_monthly_usd: None,
+                limit_total_usd: None,
+                tags: None,
+                note: None,
+                source_provider_id: None,
+                bridge_type: Some("cc2cx".to_string()),
+                stream_idle_timeout_seconds: None,
+            },
+        )
+        .expect("insert cc2cx provider")
+        .id
+    }
+
     fn insert_codex_oauth_provider_with_priority(db: &db::Db, name: &str, priority: i64) -> i64 {
         providers::upsert(
             db,
@@ -1686,6 +1725,114 @@ mod tests {
             .get("drained_chunks")
             .and_then(Value::as_i64)
             .is_some_and(|count| count >= 1));
+
+        sse_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_cc2cx_stream_returns_parseable_responses_done_item() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let app_settings = settings::AppSettings::default();
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-cc2cx-stream-done-item-test.sqlite"),
+        )
+        .expect("init test db");
+        let chat_sse = concat!(
+            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from chat\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":3,\"total_tokens\":4}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (sse_base_url, sse_task) = spawn_sse_upstream(chat_sse).await;
+        let provider_id =
+            insert_cc2cx_provider_with_priority(&db, "CC2CX Chat SSE Stub", sse_base_url, 0);
+
+        let (log_tx, writer_task) =
+            request_logs::start_buffered_writer(app_handle.clone(), db.clone());
+        let router = build_router(gateway_state(app_handle, db.clone(), log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"gpt-route-cc2cx","stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream")));
+        let trace_id = response
+            .headers()
+            .get("x-trace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("trace header")
+            .to_string();
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(body_text.contains("event: response.output_text.delta"));
+        assert!(body_text.contains("\"delta\":\"hello from chat\""));
+        assert!(body_text.contains("event: response.completed"));
+
+        let done_item = body_text
+            .split("\n\n")
+            .find_map(|frame| {
+                if !frame.lines().any(|line| {
+                    line.strip_prefix("event:")
+                        .map(str::trim)
+                        .is_some_and(|event| event == "response.output_item.done")
+                }) {
+                    return None;
+                }
+                let data = frame
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data:"))
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::from_str::<Value>(&data)
+                    .ok()
+                    .and_then(|value| value.get("item").cloned())
+            })
+            .expect("parseable response.output_item.done item");
+        assert_eq!(done_item["type"], "message");
+        assert_eq!(done_item["status"], "completed");
+        assert_eq!(done_item["role"], "assistant");
+        assert_eq!(done_item["content"][0]["type"], "output_text");
+        assert_eq!(done_item["content"][0]["text"], "hello from chat");
+
+        tokio::time::timeout(Duration::from_secs(2), writer_task)
+            .await
+            .expect("writer drain timeout")
+            .expect("writer task joins");
+
+        let detail = request_logs::get_by_trace_id(&db, &trace_id)
+            .expect("query request log")
+            .expect("persisted request log");
+        assert_eq!(detail.cli_key, "codex");
+        assert_eq!(detail.path, "/v1/responses");
+        assert_eq!(detail.status, Some(200));
+        assert_eq!(detail.error_code, None);
+        assert_eq!(detail.final_provider_id, provider_id);
 
         sse_task.abort();
     }

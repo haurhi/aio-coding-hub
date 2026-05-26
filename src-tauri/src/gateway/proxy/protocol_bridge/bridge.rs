@@ -99,10 +99,13 @@ impl Bridge {
             };
 
             // block start
-            for b in self
-                .inbound
-                .ir_chunk_to_sse(&IRStreamChunk::ContentBlockStart { index, block_type }, ctx)?
-            {
+            for b in self.inbound.ir_chunk_to_sse(
+                &IRStreamChunk::ContentBlockStart {
+                    index,
+                    block_type: block_type.clone(),
+                },
+                ctx,
+            )? {
                 frames.extend_from_slice(&b);
             }
 
@@ -144,6 +147,7 @@ impl Bridge {
             for b in self.inbound.ir_chunk_to_sse(
                 &IRStreamChunk::ContentBlockStop {
                     index,
+                    block_type: Some(block_type),
                     final_text,
                     final_json,
                 },

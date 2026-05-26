@@ -144,6 +144,9 @@ pub(crate) enum IRStreamChunk {
     /// The open content block is complete.
     ContentBlockStop {
         index: u32,
+        /// The block identity/type being closed. Some client protocols need
+        /// this to render a parseable completed output item.
+        block_type: Option<IRBlockType>,
         /// Final text content for protocols whose done events need the full block text.
         final_text: Option<String>,
         /// Final JSON argument content for protocols whose done events need full tool args.

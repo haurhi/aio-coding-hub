@@ -387,6 +387,14 @@ fn open_text_block_if_needed(state: &mut StreamState, chunks: &mut Vec<IRStreamC
 
 fn close_active_block(state: &mut StreamState, chunks: &mut Vec<IRStreamChunk>) {
     if state.block_open {
+        let block_type = if let Some(tool) = state.active_tool.as_ref() {
+            Some(IRBlockType::ToolUse {
+                id: tool.id.clone(),
+                name: tool.name.clone(),
+            })
+        } else {
+            Some(IRBlockType::Text)
+        };
         let final_json = state
             .active_tool
             .is_some()
@@ -398,6 +406,7 @@ fn close_active_block(state: &mut StreamState, chunks: &mut Vec<IRStreamChunk>) 
         };
         chunks.push(IRStreamChunk::ContentBlockStop {
             index: state.block_index.saturating_sub(1),
+            block_type,
             final_text,
             final_json,
         });

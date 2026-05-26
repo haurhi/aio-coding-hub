@@ -504,6 +504,7 @@ fn handle_output_item_added(
             if state.block_open {
                 chunks.push(IRStreamChunk::ContentBlockStop {
                     index: state.block_index.saturating_sub(1),
+                    block_type: Some(IRBlockType::Text),
                     final_text: None,
                     final_json: None,
                 });
@@ -598,6 +599,7 @@ fn emit_reasoning_chunks(
     if state.block_open {
         chunks.push(IRStreamChunk::ContentBlockStop {
             index: state.block_index.saturating_sub(1),
+            block_type: Some(IRBlockType::Text),
             final_text: None,
             final_json: None,
         });
@@ -619,6 +621,7 @@ fn emit_reasoning_chunks(
     });
     chunks.push(IRStreamChunk::ContentBlockStop {
         index: reasoning_index,
+        block_type: Some(IRBlockType::Thinking),
         final_text: None,
         final_json: None,
     });
@@ -674,10 +677,15 @@ fn handle_output_item_done(
             .map(|t| t.id == item_call_id)
             .unwrap_or(false);
         if matches {
+            let block_type = state.active_tool.as_ref().map(|tool| IRBlockType::ToolUse {
+                id: tool.id.clone(),
+                name: tool.name.clone(),
+            });
             state.active_tool = None;
             state.block_open = false;
             chunks.push(IRStreamChunk::ContentBlockStop {
                 index: state.block_index.saturating_sub(1),
+                block_type,
                 final_text: None,
                 final_json: None,
             });
@@ -795,8 +803,18 @@ fn handle_response_completed(
 
     // Close any open block
     if state.block_open {
+        let block_type = state
+            .active_tool
+            .as_ref()
+            .map_or(Some(IRBlockType::Text), |tool| {
+                Some(IRBlockType::ToolUse {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                })
+            });
         chunks.push(IRStreamChunk::ContentBlockStop {
             index: state.block_index.saturating_sub(1),
+            block_type,
             final_text: None,
             final_json: None,
         });

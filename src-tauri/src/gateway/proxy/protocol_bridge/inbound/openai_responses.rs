@@ -428,11 +428,16 @@ fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>
         },
         IRStreamChunk::ContentBlockStop {
             index,
+            block_type,
             final_text,
             final_json,
         } => {
             let mut frames = Vec::new();
             if let Some(arguments) = final_json {
+                let (id, name) = match block_type {
+                    Some(IRBlockType::ToolUse { id, name }) => (id.clone(), name.clone()),
+                    _ => (format!("call_{index}"), String::new()),
+                };
                 frames.push(sse_frame(
                     "response.function_call_arguments.done",
                     json!({
@@ -441,14 +446,30 @@ fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>
                         "arguments": arguments
                     }),
                 ));
+                frames.push(sse_frame(
+                    "response.output_item.done",
+                    json!({
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": {
+                            "id": id,
+                            "type": "function_call",
+                            "status": "completed",
+                            "call_id": id,
+                            "name": name,
+                            "arguments": arguments
+                        }
+                    }),
+                ));
             } else {
                 let text = final_text.as_deref().unwrap_or("");
+                let item_id = format!("msg_{index}");
                 frames.extend([
                     sse_frame(
                         "response.output_text.done",
                         json!({
                             "type": "response.output_text.done",
-                            "item_id": format!("msg_{index}"),
+                            "item_id": item_id,
                             "output_index": index,
                             "content_index": 0,
                             "text": text
@@ -458,22 +479,28 @@ fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>
                         "response.content_part.done",
                         json!({
                             "type": "response.content_part.done",
-                            "item_id": format!("msg_{index}"),
+                            "item_id": item_id,
                             "output_index": index,
                             "content_index": 0,
                             "part": {"type": "output_text", "text": text}
                         }),
                     ),
+                    sse_frame(
+                        "response.output_item.done",
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": index,
+                            "item": {
+                                "id": item_id,
+                                "type": "message",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": text}]
+                            }
+                        }),
+                    ),
                 ]);
             }
-            frames.push(sse_frame(
-                "response.output_item.done",
-                json!({
-                    "type": "response.output_item.done",
-                    "output_index": index,
-                    "item": {"id": format!("msg_{index}"), "status": "completed"}
-                }),
-            ));
             frames
         }
         IRStreamChunk::MessageDelta { .. } => Vec::new(),

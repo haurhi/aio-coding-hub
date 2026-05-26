@@ -233,6 +233,16 @@ mod tests {
             .and_then(|(_, data)| data.get("text"))
             .and_then(|text| text.as_str());
         assert_eq!(done_text, Some("hello"));
+        let done_item = events
+            .iter()
+            .find(|(name, _)| name == "response.output_item.done")
+            .and_then(|(_, data)| data.get("item"))
+            .expect("output_item.done should include a parseable item");
+        assert_eq!(done_item["type"], "message");
+        assert_eq!(done_item["status"], "completed");
+        assert_eq!(done_item["role"], "assistant");
+        assert_eq!(done_item["content"][0]["type"], "output_text");
+        assert_eq!(done_item["content"][0]["text"], "hello");
     }
 
     #[test]
@@ -310,6 +320,17 @@ mod tests {
         assert!(sse_text.contains("\"call_id\":\"call_456\""));
         assert!(sse_text.contains("\"name\":\"read_file\""));
         assert!(sse_text.contains("\\\"path\\\":\\\"Cargo.toml\\\""));
+
+        let done_item = events
+            .iter()
+            .find(|(name, _)| name == "response.output_item.done")
+            .and_then(|(_, data)| data.get("item"))
+            .expect("tool output_item.done should include a parseable item");
+        assert_eq!(done_item["type"], "function_call");
+        assert_eq!(done_item["status"], "completed");
+        assert_eq!(done_item["call_id"], "call_456");
+        assert_eq!(done_item["name"], "read_file");
+        assert_eq!(done_item["arguments"], "{\"path\":\"Cargo.toml\"}");
     }
 
     // ── Request round-trip ──────────────────────────────────────────────

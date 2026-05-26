@@ -1093,6 +1093,7 @@ mod tests {
     fn sse_content_block_stop() {
         let chunk = IRStreamChunk::ContentBlockStop {
             index: 2,
+            block_type: None,
             final_text: None,
             final_json: None,
         };
