@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 const USD_FEMTO_DENOM: f64 = 1_000_000_000_000_000.0;
 const SQL_MODEL_KEY_EXPR: &str = "COALESCE(NULLIF(TRIM(requested_model), ''), 'Unknown')";
+const SQL_COST_USD_EXPR: &str = "CASE WHEN cost_usd_femto IS NULL OR cost_usd_femto < 0 THEN 0.0 ELSE CAST(cost_usd_femto AS REAL) / 1000000000000000.0 END";
+const SQL_COST_USD_EXPR_R: &str = "CASE WHEN r.cost_usd_femto IS NULL OR r.cost_usd_femto < 0 THEN 0.0 ELSE CAST(r.cost_usd_femto AS REAL) / 1000000000000000.0 END";
 const MODEL_FILTER_MAX_CHARS: usize = 200;
 
 /// Common query parameters shared by all cost analytics endpoints.
@@ -244,7 +246,7 @@ SELECT
       cost_usd_femto IS NOT NULL
     ) THEN 1 ELSE 0 END
   ) AS cost_covered_success,
-  SUM(COALESCE(cost_usd_femto, 0)) AS total_cost_usd_femto
+  TOTAL({cost_usd_expr}) AS total_cost_usd
 FROM request_logs
 WHERE excluded_from_stats = 0
 AND (?1 IS NULL OR created_at >= ?1)
@@ -253,7 +255,8 @@ AND (?3 IS NULL OR cli_key = ?3)
 AND (?4 IS NULL OR final_provider_id = ?4)
 AND (?5 IS NULL OR {model_key_expr} = ?5)
 "#,
-        model_key_expr = SQL_MODEL_KEY_EXPR
+        model_key_expr = SQL_MODEL_KEY_EXPR,
+        cost_usd_expr = SQL_COST_USD_EXPR
     );
 
     conn.query_row(
@@ -266,12 +269,10 @@ AND (?5 IS NULL OR {model_key_expr} = ?5)
             let cost_covered_success: i64 = row
                 .get::<_, Option<i64>>("cost_covered_success")?
                 .unwrap_or(0);
-            let total_cost_usd_femto: i64 = row
-                .get::<_, Option<i64>>("total_cost_usd_femto")?
-                .unwrap_or(0)
-                .max(0);
-
-            let total_cost_usd = cost_usd_from_femto(total_cost_usd_femto);
+            let total_cost_usd: f64 = row
+                .get::<_, Option<f64>>("total_cost_usd")?
+                .unwrap_or(0.0)
+                .max(0.0);
             let avg_cost_usd_per_covered_success = if cost_covered_success > 0 {
                 Some(total_cost_usd / (cost_covered_success as f64))
             } else {
@@ -323,7 +324,7 @@ SELECT
   {select_fields},
   COUNT(*) AS requests_success,
   SUM(CASE WHEN cost_usd_femto IS NOT NULL THEN 1 ELSE 0 END) AS cost_covered_success,
-  SUM(COALESCE(cost_usd_femto, 0)) AS total_cost_usd_femto
+  TOTAL({cost_usd_expr}) AS total_cost_usd
 FROM request_logs
 WHERE excluded_from_stats = 0
 AND status >= 200 AND status < 300 AND error_code IS NULL
@@ -338,7 +339,8 @@ ORDER BY {order_by_fields}
         select_fields = select_fields,
         group_by_fields = group_by_fields,
         order_by_fields = order_by_fields,
-        model_key_expr = SQL_MODEL_KEY_EXPR
+        model_key_expr = SQL_MODEL_KEY_EXPR,
+        cost_usd_expr = SQL_COST_USD_EXPR
     );
 
     let mut stmt = conn
@@ -355,15 +357,15 @@ ORDER BY {order_by_fields}
                 let cost_covered_success: i64 = row
                     .get::<_, Option<i64>>("cost_covered_success")?
                     .unwrap_or(0);
-                let total_cost_usd_femto: i64 = row
-                    .get::<_, Option<i64>>("total_cost_usd_femto")?
-                    .unwrap_or(0)
-                    .max(0);
+                let total_cost_usd: f64 = row
+                    .get::<_, Option<f64>>("total_cost_usd")?
+                    .unwrap_or(0.0)
+                    .max(0.0);
 
                 Ok(CostTrendRowV1 {
                     day,
                     hour,
-                    cost_usd: cost_usd_from_femto(total_cost_usd_femto),
+                    cost_usd: total_cost_usd,
                     requests_success: requests_success.max(0),
                     cost_covered_success: cost_covered_success.max(0),
                 })
@@ -402,7 +404,7 @@ SELECT
   COALESCE(p.name, 'Unknown') AS provider_name,
   COUNT(*) AS requests_success,
   SUM(CASE WHEN r.cost_usd_femto IS NOT NULL THEN 1 ELSE 0 END) AS cost_covered_success,
-  SUM(COALESCE(r.cost_usd_femto, 0)) AS total_cost_usd_femto
+  TOTAL({cost_usd_expr}) AS total_cost_usd
 FROM request_logs r
 LEFT JOIN providers p ON p.id = r.final_provider_id
 WHERE r.excluded_from_stats = 0
@@ -413,10 +415,11 @@ AND (?3 IS NULL OR r.cli_key = ?3)
 AND (?4 IS NULL OR r.final_provider_id = ?4)
 AND (?5 IS NULL OR {model_key_expr} = ?5)
 GROUP BY r.cli_key, provider_id, provider_name
-ORDER BY total_cost_usd_femto DESC, requests_success DESC, provider_name ASC
+ORDER BY total_cost_usd DESC, requests_success DESC, provider_name ASC
 LIMIT ?6
 "#,
-        model_key_expr = SQL_MODEL_KEY_EXPR
+        model_key_expr = SQL_MODEL_KEY_EXPR,
+        cost_usd_expr = SQL_COST_USD_EXPR_R
     );
 
     let mut stmt = conn
@@ -434,10 +437,10 @@ LIMIT ?6
                 let cost_covered_success: i64 = row
                     .get::<_, Option<i64>>("cost_covered_success")?
                     .unwrap_or(0);
-                let total_cost_usd_femto: i64 = row
-                    .get::<_, Option<i64>>("total_cost_usd_femto")?
-                    .unwrap_or(0)
-                    .max(0);
+                let total_cost_usd: f64 = row
+                    .get::<_, Option<f64>>("total_cost_usd")?
+                    .unwrap_or(0.0)
+                    .max(0.0);
 
                 Ok(CostProviderBreakdownRowV1 {
                     cli_key,
@@ -445,7 +448,7 @@ LIMIT ?6
                     provider_name,
                     requests_success: requests_success.max(0),
                     cost_covered_success: cost_covered_success.max(0),
-                    cost_usd: cost_usd_from_femto(total_cost_usd_femto),
+                    cost_usd: total_cost_usd,
                 })
             },
         )
@@ -480,7 +483,7 @@ SELECT
   {model_key_expr} AS model_key,
   COUNT(*) AS requests_success,
   SUM(CASE WHEN cost_usd_femto IS NOT NULL THEN 1 ELSE 0 END) AS cost_covered_success,
-  SUM(COALESCE(cost_usd_femto, 0)) AS total_cost_usd_femto
+  TOTAL({cost_usd_expr}) AS total_cost_usd
 FROM request_logs
 WHERE excluded_from_stats = 0
 AND status >= 200 AND status < 300 AND error_code IS NULL
@@ -490,10 +493,11 @@ AND (?3 IS NULL OR cli_key = ?3)
 AND (?4 IS NULL OR final_provider_id = ?4)
 AND (?5 IS NULL OR {model_key_expr} = ?5)
 GROUP BY model_key
-ORDER BY total_cost_usd_femto DESC, requests_success DESC, model_key ASC
+ORDER BY total_cost_usd DESC, requests_success DESC, model_key ASC
 LIMIT ?6
 "#,
-        model_key_expr = SQL_MODEL_KEY_EXPR
+        model_key_expr = SQL_MODEL_KEY_EXPR,
+        cost_usd_expr = SQL_COST_USD_EXPR
     );
 
     let mut stmt = conn
@@ -509,16 +513,16 @@ LIMIT ?6
                 let cost_covered_success: i64 = row
                     .get::<_, Option<i64>>("cost_covered_success")?
                     .unwrap_or(0);
-                let total_cost_usd_femto: i64 = row
-                    .get::<_, Option<i64>>("total_cost_usd_femto")?
-                    .unwrap_or(0)
-                    .max(0);
+                let total_cost_usd: f64 = row
+                    .get::<_, Option<f64>>("total_cost_usd")?
+                    .unwrap_or(0.0)
+                    .max(0.0);
 
                 Ok(CostModelBreakdownRowV1 {
                     model,
                     requests_success: requests_success.max(0),
                     cost_covered_success: cost_covered_success.max(0),
-                    cost_usd: cost_usd_from_femto(total_cost_usd_femto),
+                    cost_usd: total_cost_usd,
                 })
             },
         )
@@ -554,7 +558,7 @@ SELECT
   COALESCE(p.name, 'Unknown') AS provider_name,
   {model_key_expr} AS model_key,
   COUNT(*) AS requests_success,
-  SUM(r.cost_usd_femto) AS total_cost_usd_femto,
+  TOTAL({cost_usd_expr}) AS total_cost_usd,
   SUM(CASE WHEN r.duration_ms IS NULL OR r.duration_ms < 0 THEN 0 ELSE r.duration_ms END) AS total_duration_ms
 FROM request_logs r
 LEFT JOIN providers p ON p.id = r.final_provider_id
@@ -567,10 +571,11 @@ AND (?3 IS NULL OR r.cli_key = ?3)
 AND (?4 IS NULL OR r.final_provider_id = ?4)
 AND (?5 IS NULL OR {model_key_expr} = ?5)
 GROUP BY r.cli_key, provider_name, model_key
-ORDER BY total_cost_usd_femto DESC, total_duration_ms DESC, requests_success DESC, cli_key ASC, provider_name ASC, model_key ASC
+ORDER BY total_cost_usd DESC, total_duration_ms DESC, requests_success DESC, cli_key ASC, provider_name ASC, model_key ASC
 LIMIT ?6
 "#,
-        model_key_expr = SQL_MODEL_KEY_EXPR
+        model_key_expr = SQL_MODEL_KEY_EXPR,
+        cost_usd_expr = SQL_COST_USD_EXPR_R
     );
 
     let mut stmt = conn
@@ -585,10 +590,10 @@ LIMIT ?6
                 let model: String = row.get("model_key")?;
                 let requests_success: i64 =
                     row.get::<_, Option<i64>>("requests_success")?.unwrap_or(0);
-                let total_cost_usd_femto: i64 = row
-                    .get::<_, Option<i64>>("total_cost_usd_femto")?
-                    .unwrap_or(0)
-                    .max(0);
+                let total_cost_usd: f64 = row
+                    .get::<_, Option<f64>>("total_cost_usd")?
+                    .unwrap_or(0.0)
+                    .max(0.0);
                 let total_duration_ms: i64 = row
                     .get::<_, Option<i64>>("total_duration_ms")?
                     .unwrap_or(0)
@@ -599,7 +604,7 @@ LIMIT ?6
                     provider_name,
                     model,
                     requests_success: requests_success.max(0),
-                    total_cost_usd: cost_usd_from_femto(total_cost_usd_femto),
+                    total_cost_usd,
                     total_duration_ms: total_duration_ms.max(0),
                 })
             },
@@ -928,6 +933,80 @@ LIMIT ?6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setup_cost_db() -> (tempfile::TempDir, crate::db::Db) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cost-stats-test.db");
+        let db = crate::db::init_for_tests(&path).expect("init db");
+        (dir, db)
+    }
+
+    fn insert_cost_log(db: &crate::db::Db, trace_id: &str, cost_usd_femto: i64) {
+        let conn = db.open_connection().expect("open connection");
+        conn.execute(
+            r#"
+INSERT INTO request_logs (
+  trace_id,
+  cli_key,
+  method,
+  path,
+  status,
+  error_code,
+  duration_ms,
+  attempts_json,
+  created_at,
+  created_at_ms,
+  requested_model,
+  final_provider_id,
+  cost_usd_femto
+) VALUES (?1, 'codex', 'POST', '/v1/responses', 200, NULL, 1000, '[]', 1, 1000, 'gpt-test', 1, ?2)
+"#,
+            params![trace_id, cost_usd_femto],
+        )
+        .expect("insert cost log");
+    }
+
+    fn all_time_params() -> CostQueryParams {
+        CostQueryParams {
+            period: "allTime".to_string(),
+            start_ts: None,
+            end_ts: None,
+            cli_key: None,
+            provider_id: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn all_time_cost_analytics_do_not_overflow_large_femto_sums() {
+        let (_dir, db) = setup_cost_db();
+        insert_cost_log(&db, "trace-1", i64::MAX);
+        insert_cost_log(&db, "trace-2", i64::MAX);
+
+        let params = all_time_params();
+
+        let summary = summary_v1(&db, &params).expect("summary");
+        let trend = trend_v1(&db, &params).expect("trend");
+        let providers = breakdown_provider_v1(&db, &params, 10).expect("providers");
+        let models = breakdown_model_v1(&db, &params, 10).expect("models");
+        let scatter = scatter_cli_provider_model_v1(&db, &params, 10).expect("scatter");
+
+        assert_eq!(summary.requests_success, 2);
+        assert!(summary.total_cost_usd.is_finite());
+        assert!(summary.total_cost_usd > 18_000.0);
+        assert_eq!(trend.len(), 1);
+        assert!(trend[0].cost_usd.is_finite());
+        assert!(trend[0].cost_usd > 18_000.0);
+        assert_eq!(providers.len(), 1);
+        assert!(providers[0].cost_usd.is_finite());
+        assert!(providers[0].cost_usd > 18_000.0);
+        assert_eq!(models.len(), 1);
+        assert!(models[0].cost_usd.is_finite());
+        assert!(models[0].cost_usd > 18_000.0);
+        assert_eq!(scatter.len(), 1);
+        assert!(scatter[0].total_cost_usd.is_finite());
+        assert!(scatter[0].total_cost_usd > 18_000.0);
+    }
 
     #[test]
     fn normalize_model_filter_trims_blanks_and_truncates_on_char_boundary() {
