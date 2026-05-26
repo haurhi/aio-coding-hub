@@ -504,6 +504,8 @@ fn handle_output_item_added(
             if state.block_open {
                 chunks.push(IRStreamChunk::ContentBlockStop {
                     index: state.block_index.saturating_sub(1),
+                    final_text: None,
+                    final_json: None,
                 });
                 state.block_open = false;
             }
@@ -596,6 +598,8 @@ fn emit_reasoning_chunks(
     if state.block_open {
         chunks.push(IRStreamChunk::ContentBlockStop {
             index: state.block_index.saturating_sub(1),
+            final_text: None,
+            final_json: None,
         });
         state.block_open = false;
         state.text_emitted = false;
@@ -615,6 +619,8 @@ fn emit_reasoning_chunks(
     });
     chunks.push(IRStreamChunk::ContentBlockStop {
         index: reasoning_index,
+        final_text: None,
+        final_json: None,
     });
     mark_reasoning_emitted(state);
 
@@ -672,6 +678,8 @@ fn handle_output_item_done(
             state.block_open = false;
             chunks.push(IRStreamChunk::ContentBlockStop {
                 index: state.block_index.saturating_sub(1),
+                final_text: None,
+                final_json: None,
             });
             return Ok(chunks);
         }
@@ -789,6 +797,8 @@ fn handle_response_completed(
     if state.block_open {
         chunks.push(IRStreamChunk::ContentBlockStop {
             index: state.block_index.saturating_sub(1),
+            final_text: None,
+            final_json: None,
         });
         state.block_open = false;
         state.active_tool = None;
@@ -1610,7 +1620,7 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(matches!(
             &chunks[0],
-            IRStreamChunk::ContentBlockStop { index: 0 }
+            IRStreamChunk::ContentBlockStop { index: 0, .. }
         ));
         assert!(matches!(
             &chunks[1],
@@ -1650,7 +1660,7 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert!(matches!(
             &chunks[0],
-            IRStreamChunk::ContentBlockStop { index: 1 }
+            IRStreamChunk::ContentBlockStop { index: 1, .. }
         ));
         assert!(state.active_tool.is_none());
     }
@@ -1708,7 +1718,7 @@ mod tests {
         assert_eq!(chunks.len(), 3);
         assert!(matches!(
             &chunks[0],
-            IRStreamChunk::ContentBlockStop { index: 0 }
+            IRStreamChunk::ContentBlockStop { index: 0, .. }
         ));
         assert!(matches!(
             &chunks[1],

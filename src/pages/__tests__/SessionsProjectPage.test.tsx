@@ -83,6 +83,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f.json",
+        title: null,
         first_prompt: "Hello world",
         message_count: 10,
         created_at: 1740000000,
@@ -108,6 +109,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "Alpha task",
         message_count: 5,
         created_at: 1740000000,
@@ -124,6 +126,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-2",
         file_path: "/f2.json",
+        title: null,
         first_prompt: "Beta task",
         message_count: 3,
         created_at: 1740000000,
@@ -145,6 +148,56 @@ describe("pages/SessionsProjectPage", () => {
     expect(screen.getByText("Beta task")).toBeInTheDocument();
   });
 
+  it("uses session title instead of first prompt for display and search", async () => {
+    setTauriRuntime();
+    vi.mocked(cliSessionsSessionsList).mockResolvedValue([
+      {
+        source: "codex",
+        session_id: "s-1",
+        file_path: "/f1.json",
+        title: "Readable session title",
+        first_prompt: "First prompt should not be the card title",
+        message_count: 5,
+        created_at: 1740000000,
+        modified_at: 1740000000,
+        git_branch: null,
+        project_path: null,
+        is_sidechain: null,
+        cwd: null,
+        model_provider: null,
+        cli_version: null,
+        wsl_distro: null,
+      },
+      {
+        source: "codex",
+        session_id: "s-2",
+        file_path: "/f2.json",
+        title: "Another visible title",
+        first_prompt: "Different fallback prompt",
+        message_count: 3,
+        created_at: 1740000000,
+        modified_at: 1740000000,
+        git_branch: null,
+        project_path: null,
+        is_sidechain: null,
+        cwd: null,
+        model_provider: null,
+        cli_version: null,
+        wsl_distro: null,
+      },
+    ]);
+
+    renderWithRoute("/sessions/codex/proj1");
+
+    expect(await screen.findByText("Readable session title")).toBeInTheDocument();
+    expect(screen.queryByText("First prompt should not be the card title")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("搜索会话"), { target: { value: "Readable" } });
+
+    expect(screen.getByText("Readable session title")).toBeInTheDocument();
+    expect(screen.queryByText("Another visible title")).not.toBeInTheDocument();
+  });
+
   it("changes sort key", async () => {
     setTauriRuntime();
     vi.mocked(cliSessionsSessionsList).mockResolvedValue([
@@ -152,6 +205,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "First",
         message_count: 10,
         created_at: 1740000000,
@@ -168,6 +222,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-2",
         file_path: "/f2.json",
+        title: null,
         first_prompt: "Second",
         message_count: 20,
         created_at: 1740000100,
@@ -197,6 +252,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "Task A",
         message_count: 1,
         created_at: 1740000000,
@@ -227,6 +283,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "Task A",
         message_count: 1,
         created_at: 1740000000,
@@ -255,6 +312,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-abc",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "Task",
         message_count: 1,
         created_at: 1740000000,
@@ -282,7 +340,8 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
-        first_prompt: "Hello\uFFFDWorld",
+        title: "Hello\uFFFDWorld",
+        first_prompt: "Fallback prompt",
         message_count: 1,
         created_at: 1740000000,
         modified_at: 1740000000,
@@ -320,6 +379,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-1",
         file_path: "/f1.json",
+        title: null,
         first_prompt: "Alpha task",
         message_count: 1,
         created_at: 1740000000,
@@ -336,6 +396,7 @@ describe("pages/SessionsProjectPage", () => {
         source: "claude",
         session_id: "s-2",
         file_path: "/f2.json",
+        title: null,
         first_prompt: "Beta task",
         message_count: 1,
         created_at: 1740000000,

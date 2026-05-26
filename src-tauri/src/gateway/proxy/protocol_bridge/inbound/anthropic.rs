@@ -467,7 +467,7 @@ fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>
             )]
         }
 
-        IRStreamChunk::ContentBlockStop { index } => {
+        IRStreamChunk::ContentBlockStop { index, .. } => {
             vec![sse_frame(
                 "content_block_stop",
                 json!({"type": "content_block_stop", "index": index}),
@@ -1090,7 +1090,11 @@ mod tests {
 
     #[test]
     fn sse_content_block_stop() {
-        let chunk = IRStreamChunk::ContentBlockStop { index: 2 };
+        let chunk = IRStreamChunk::ContentBlockStop {
+            index: 2,
+            final_text: None,
+            final_json: None,
+        };
         let frames = render_chunk(&chunk, &default_ctx()).unwrap();
         let parsed = parse_sse_frames(&frames);
         assert_eq!(parsed[0].0, "content_block_stop");

@@ -51,6 +51,7 @@ function makeCliSessionsSessionSummary(
     source: "claude",
     session_id: "sess-1",
     file_path: "/tmp/session.json",
+    title: null,
     first_prompt: null,
     message_count: 0,
     created_at: null,

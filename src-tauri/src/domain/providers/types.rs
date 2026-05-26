@@ -6,6 +6,7 @@ use std::collections::HashSet;
 pub(super) const DEFAULT_PRIORITY: i64 = 100;
 pub(super) const MAX_MODEL_NAME_LEN: usize = 200;
 pub(crate) const CX2CC_BRIDGE_TYPE: &str = "cx2cc";
+pub(crate) const CC2CX_BRIDGE_TYPE: &str = "cc2cx";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -49,6 +50,10 @@ impl ProviderAuthMode {
 
 pub(crate) fn is_cx2cc_bridge(source_provider_id: Option<i64>, bridge_type: Option<&str>) -> bool {
     source_provider_id.is_some() || bridge_type == Some(CX2CC_BRIDGE_TYPE)
+}
+
+pub(crate) fn is_cc2cx_bridge(bridge_type: Option<&str>) -> bool {
+    bridge_type == Some(CC2CX_BRIDGE_TYPE)
 }
 
 fn take_first_chars(value: &str, max_chars: usize) -> String {

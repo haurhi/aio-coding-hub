@@ -474,10 +474,12 @@ export interface ProviderTypeInfo {
   isCx2cc: boolean;
   /** Whether this is a CX2CC gateway (bridge_type=cx2cc but no source_provider_id) */
   isCx2ccGateway: boolean;
+  /** Whether this is a CC2CX bridge (Chat Completions provider exposed to Codex) */
+  isCc2cx: boolean;
   /** Whether this is OAuth mode */
   isOAuth: boolean;
-  /** Effective auth mode: api_key / oauth / cx2cc */
-  effectiveAuthMode: "api_key" | "oauth" | "cx2cc";
+  /** Effective auth mode: api_key / oauth / cx2cc / cc2cx */
+  effectiveAuthMode: "api_key" | "oauth" | "cx2cc" | "cc2cx";
 }
 
 export function getProviderTypeInfo(
@@ -487,15 +489,24 @@ export function getProviderTypeInfo(
     | undefined
 ): ProviderTypeInfo {
   if (!provider) {
-    return { isCx2cc: false, isCx2ccGateway: false, isOAuth: false, effectiveAuthMode: "api_key" };
+    return {
+      isCx2cc: false,
+      isCx2ccGateway: false,
+      isCc2cx: false,
+      isOAuth: false,
+      effectiveAuthMode: "api_key",
+    };
   }
   const isCx2cc = provider.source_provider_id != null || provider.bridge_type === "cx2cc";
   const isCx2ccGateway = provider.bridge_type === "cx2cc" && provider.source_provider_id == null;
+  const isCc2cx = provider.bridge_type === "cc2cx";
   const isOAuth = provider.auth_mode === "oauth";
   const effectiveAuthMode: ProviderTypeInfo["effectiveAuthMode"] = isCx2cc
     ? "cx2cc"
-    : isOAuth
-      ? "oauth"
-      : "api_key";
-  return { isCx2cc, isCx2ccGateway, isOAuth, effectiveAuthMode };
+    : isCc2cx
+      ? "cc2cx"
+      : isOAuth
+        ? "oauth"
+        : "api_key";
+  return { isCx2cc, isCx2ccGateway, isCc2cx, isOAuth, effectiveAuthMode };
 }

@@ -22,6 +22,7 @@ const MAX_OUTPUT_BLOCK_SIZE: usize = 30_000;
 #[derive(Debug, Clone)]
 struct CodexSessionMeta {
     id: String,
+    title: Option<String>,
     cwd: Option<String>,
     project_path: Option<String>,
     cli_version: Option<String>,
@@ -43,6 +44,59 @@ fn file_times(path: &Path) -> (Option<i64>, Option<i64>) {
     let created = meta.created().ok().and_then(unix_seconds_from_system_time);
     let modified = meta.modified().ok().and_then(unix_seconds_from_system_time);
     (created, modified)
+}
+
+fn normalize_session_title(raw: &str) -> Option<String> {
+    let title = raw.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(truncate_string(title, FIRST_PROMPT_MAX_LEN))
+}
+
+fn read_session_index_titles(codex_home: &Path) -> HashMap<String, String> {
+    let path = codex_home.join("session_index.jsonl");
+    let Ok(file) = fs::File::open(path) else {
+        return HashMap::new();
+    };
+
+    let reader = BufReader::new(file);
+    let mut titles = HashMap::new();
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let row: Value = match serde_json::from_str(trimmed) {
+            Ok(row) => row,
+            Err(_) => continue,
+        };
+        let Some(id) = row
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(title) = row
+            .get("thread_name")
+            .or_else(|| row.get("threadName"))
+            .or_else(|| row.get("title"))
+            .and_then(|value| value.as_str())
+            .and_then(normalize_session_title)
+        else {
+            continue;
+        };
+        titles.insert(id.to_string(), title);
+    }
+
+    titles
 }
 
 fn scan_all_session_files(app: &tauri::AppHandle) -> AppResult<Vec<PathBuf>> {
@@ -131,6 +185,13 @@ fn extract_session_meta(path: &Path) -> Option<CodexSessionMeta> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let title = payload
+            .get("title")
+            .or_else(|| payload.get("thread_name"))
+            .or_else(|| payload.get("threadName"))
+            .or_else(|| payload.get("name"))
+            .and_then(|v| v.as_str())
+            .and_then(normalize_session_title);
         let cwd = payload
             .get("cwd")
             .and_then(|v| v.as_str())
@@ -160,6 +221,7 @@ fn extract_session_meta(path: &Path) -> Option<CodexSessionMeta> {
 
         return Some(CodexSessionMeta {
             id,
+            title,
             cwd,
             project_path,
             cli_version,
@@ -547,6 +609,7 @@ pub fn sessions_list(
         return Ok(Vec::new());
     }
 
+    let title_index = read_session_index_titles(&crate::codex_paths::codex_home_dir(app)?);
     let mut out: Vec<CliSessionsSessionSummary> = Vec::new();
 
     for file_path in files {
@@ -579,12 +642,18 @@ pub fn sessions_list(
 
         let (created_at, modified_at) = file_times(&file_path);
         let first_prompt = extract_first_prompt(&file_path);
+        let title = title_index
+            .get(&session_id)
+            .cloned()
+            .or_else(|| meta.as_ref().and_then(|m| m.title.clone()))
+            .or_else(|| first_prompt.clone());
         let message_count = count_messages(&file_path);
 
         out.push(CliSessionsSessionSummary {
             source: "codex".to_string(),
             session_id,
             file_path: file_path.to_string_lossy().to_string(),
+            title,
             first_prompt,
             message_count,
             created_at,
@@ -710,9 +779,13 @@ pub fn session_delete(app: &tauri::AppHandle, file_path: &str) -> AppResult<bool
 
 // ── WSL support ─────────────────────────────────────────────────────────────
 
-fn wsl_codex_sessions_dir(distro: &str) -> AppResult<PathBuf> {
+fn wsl_codex_home_dir(distro: &str) -> AppResult<PathBuf> {
     let home = crate::wsl::resolve_wsl_home_unc(distro)?;
-    Ok(home.join(".codex").join("sessions"))
+    Ok(home.join(".codex"))
+}
+
+fn wsl_codex_sessions_dir(distro: &str) -> AppResult<PathBuf> {
+    Ok(wsl_codex_home_dir(distro)?.join("sessions"))
 }
 
 fn wsl_scan_all_session_files(distro: &str) -> AppResult<Vec<PathBuf>> {
@@ -831,6 +904,7 @@ pub fn wsl_sessions_list(
     }
 
     let sessions_dir = wsl_codex_sessions_dir(distro)?;
+    let title_index = read_session_index_titles(&wsl_codex_home_dir(distro)?);
     let distro_opt = Some(distro.to_string());
     let mut out: Vec<CliSessionsSessionSummary> = Vec::new();
 
@@ -862,12 +936,18 @@ pub fn wsl_sessions_list(
 
         let (created_at, modified_at) = file_times(&file_path);
         let first_prompt = extract_first_prompt(&file_path);
+        let title = title_index
+            .get(&session_id)
+            .cloned()
+            .or_else(|| meta.as_ref().and_then(|m| m.title.clone()))
+            .or_else(|| first_prompt.clone());
         let message_count = count_messages(&file_path);
 
         out.push(CliSessionsSessionSummary {
             source: "codex".to_string(),
             session_id,
             file_path: file_path.to_string_lossy().to_string(),
+            title,
             first_prompt,
             message_count,
             created_at,
@@ -941,9 +1021,32 @@ pub fn wsl_session_delete(distro: &str, file_path: &str) -> AppResult<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::folder_lookup_in_files;
+    use super::{folder_lookup_in_files, read_session_index_titles};
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn read_session_index_titles_maps_thread_name_by_id() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("session_index.jsonl"),
+            r#"{"id":"session-1","thread_name":"Readable Codex Title","updated_at":"2026-05-22T03:29:44Z"}
+{"id":"session-2","thread_name":"  ","updated_at":"2026-05-22T03:29:45Z"}
+{"id":"","thread_name":"Ignored","updated_at":"2026-05-22T03:29:46Z"}
+not-json
+"#,
+        )
+        .unwrap();
+
+        let titles = read_session_index_titles(dir.path());
+
+        assert_eq!(
+            titles.get("session-1"),
+            Some(&"Readable Codex Title".to_string())
+        );
+        assert!(!titles.contains_key("session-2"));
+        assert!(!titles.contains_key(""));
+    }
 
     #[test]
     fn folder_lookup_prefers_cwd_and_falls_back_to_project_path() {

@@ -95,4 +95,39 @@ describe("pages/providers/providerEditorSubmitModel", () => {
     expect(result.value.payload.sourceProviderId).toBeNull();
     expect(result.value.payload.authMode).toBe("api_key");
   });
+
+  it("marks codex api-key providers as cc2cx bridge when selected", () => {
+    const result = buildProviderEditorUpsertInput(
+      makeContext({
+        cliKey: "codex",
+        authMode: "cc2cx",
+        baseUrlRows: [
+          {
+            id: "1",
+            url: "https://ark.cn-beijing.volces.com/api/coding/v3",
+            ping: { status: "idle" },
+          },
+        ],
+        formValues: {
+          ...DEFAULT_FORM_VALUES,
+          name: "Volcengine Coding Plan",
+          api_key: "sk-volc",
+        },
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.payload).toEqual(
+      expect.objectContaining({
+        cliKey: "codex",
+        authMode: "api_key",
+        apiKey: "sk-volc",
+        baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+        sourceProviderId: null,
+        bridgeType: "cc2cx",
+      })
+    );
+  });
 });

@@ -86,6 +86,11 @@ struct SessionsIndex {
 struct SessionsIndexFileEntry {
     session_id: String,
     full_path: Option<String>,
+    title: Option<String>,
+    #[serde(default, alias = "thread_name")]
+    thread_name: Option<String>,
+    name: Option<String>,
+    slug: Option<String>,
     first_prompt: Option<String>,
     message_count: Option<u32>,
     git_branch: Option<String>,
@@ -452,6 +457,79 @@ fn extract_first_prompt(path: &Path) -> Option<String> {
     None
 }
 
+fn normalize_session_title(raw: &str) -> Option<String> {
+    let title = raw.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(truncate_string(title, FIRST_PROMPT_MAX_LEN))
+}
+
+fn title_from_value(v: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(title) = v
+            .get(*key)
+            .and_then(|value| value.as_str())
+            .and_then(normalize_session_title)
+        {
+            return Some(title);
+        }
+    }
+    None
+}
+
+fn title_from_index_entry(entry: &SessionsIndexFileEntry) -> Option<String> {
+    entry
+        .title
+        .as_deref()
+        .and_then(normalize_session_title)
+        .or_else(|| {
+            entry
+                .thread_name
+                .as_deref()
+                .and_then(normalize_session_title)
+        })
+        .or_else(|| entry.name.as_deref().and_then(normalize_session_title))
+        .or_else(|| entry.slug.as_deref().and_then(normalize_session_title))
+}
+
+fn extract_session_title(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let mut fallback: Option<String> = None;
+
+    for line in reader.lines().take(50) {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if SKIP_TYPES
+            .iter()
+            .any(|t| trimmed.contains(&format!("\"type\":\"{t}\"")))
+        {
+            continue;
+        }
+
+        let v: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some(title) = title_from_value(&v, &["title", "thread_name", "threadName"]) {
+            return Some(title);
+        }
+        if fallback.is_none() {
+            fallback = title_from_value(&v, &["name", "slug"]);
+        }
+    }
+
+    fallback
+}
+
 fn count_messages(path: &Path) -> u32 {
     let Ok(file) = fs::File::open(path) else {
         return 0;
@@ -632,6 +710,9 @@ pub fn sessions_list(
                 .first_prompt
                 .clone()
                 .or_else(|| extract_first_prompt(&file_path));
+            let title = title_from_index_entry(&entry)
+                .or_else(|| extract_session_title(&file_path))
+                .or_else(|| first_prompt.clone());
             let message_count = entry
                 .message_count
                 .unwrap_or_else(|| count_messages(&file_path));
@@ -640,6 +721,7 @@ pub fn sessions_list(
                 source: "claude".to_string(),
                 session_id: entry.session_id,
                 file_path: file_path.to_string_lossy().to_string(),
+                title,
                 first_prompt,
                 message_count,
                 created_at,
@@ -668,6 +750,7 @@ pub fn sessions_list(
         }
         let (created_at, modified_at) = file_times(&file_path);
         let first_prompt = extract_first_prompt(&file_path);
+        let title = extract_session_title(&file_path).or_else(|| first_prompt.clone());
         let message_count = count_messages(&file_path);
         if message_count == 0 {
             continue;
@@ -677,6 +760,7 @@ pub fn sessions_list(
             source: "claude".to_string(),
             session_id,
             file_path: file_path.to_string_lossy().to_string(),
+            title,
             first_prompt,
             message_count,
             created_at,
@@ -981,6 +1065,9 @@ pub fn wsl_sessions_list(
                 .first_prompt
                 .clone()
                 .or_else(|| extract_first_prompt(&file_path));
+            let title = title_from_index_entry(&entry)
+                .or_else(|| extract_session_title(&file_path))
+                .or_else(|| first_prompt.clone());
             let message_count = entry
                 .message_count
                 .unwrap_or_else(|| count_messages(&file_path));
@@ -989,6 +1076,7 @@ pub fn wsl_sessions_list(
                 source: "claude".to_string(),
                 session_id: entry.session_id,
                 file_path: file_path.to_string_lossy().to_string(),
+                title,
                 first_prompt,
                 message_count,
                 created_at,
@@ -1016,6 +1104,7 @@ pub fn wsl_sessions_list(
         }
         let (created_at, modified_at) = file_times(&file_path);
         let first_prompt = extract_first_prompt(&file_path);
+        let title = extract_session_title(&file_path).or_else(|| first_prompt.clone());
         let message_count = count_messages(&file_path);
         if message_count == 0 {
             continue;
@@ -1025,6 +1114,7 @@ pub fn wsl_sessions_list(
             source: "claude".to_string(),
             session_id,
             file_path: file_path.to_string_lossy().to_string(),
+            title,
             first_prompt,
             message_count,
             created_at,
@@ -1099,9 +1189,37 @@ pub fn wsl_session_delete(distro: &str, file_path: &str) -> AppResult<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::folder_lookup_in_projects_dir;
+    use super::{extract_session_title, folder_lookup_in_projects_dir};
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn extract_session_title_prefers_explicit_title_then_slug() {
+        let dir = tempdir().unwrap();
+        let title_file = dir.path().join("title.jsonl");
+        fs::write(
+            &title_file,
+            r#"{"type":"user","title":"Readable Session Title","slug":"fallback-slug","message":{"role":"user","content":"first prompt"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_session_title(&title_file),
+            Some("Readable Session Title".to_string())
+        );
+
+        let slug_file = dir.path().join("slug.jsonl");
+        fs::write(
+            &slug_file,
+            r#"{"type":"user","slug":"useful-session-slug","message":{"role":"user","content":"first prompt"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_session_title(&slug_file),
+            Some("useful-session-slug".to_string())
+        );
+    }
 
     #[test]
     fn folder_lookup_uses_project_path_and_disk_fallback() {

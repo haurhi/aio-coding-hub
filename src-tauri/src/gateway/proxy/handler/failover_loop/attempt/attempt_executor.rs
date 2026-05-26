@@ -197,7 +197,7 @@ fn build_attempt_ctx<'a>(
     retry_index: u32,
     attempt_started_ms: u128,
     circuit_before: &'a crate::circuit_breaker::CircuitSnapshot,
-    prepared: &PreparedProvider,
+    prepared: &'a PreparedProvider,
 ) -> AttemptCtx<'a> {
     AttemptCtx {
         attempt_index,
@@ -207,6 +207,7 @@ fn build_attempt_ctx<'a>(
         circuit_before,
         gemini_oauth_response_mode: prepared.gemini_oauth_response_mode,
         cx2cc_active: prepared.cx2cc_active,
+        protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
     }
 }

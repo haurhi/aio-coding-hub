@@ -269,6 +269,55 @@ describe("pages/providers/ProviderEditorDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("saves codex providers with cc2cx bridge from the auth mode tabs", async () => {
+    vi.mocked(providerUpsert).mockResolvedValue(
+      makeProvider({
+        id: 4,
+        cli_key: "codex",
+        name: "Volcengine Coding Plan",
+        base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+        bridge_type: "cc2cx",
+        api_key_configured: true,
+      })
+    );
+
+    render(
+      <ProviderEditorDialog
+        mode="create"
+        open={true}
+        cliKey="codex"
+        onSaved={vi.fn()}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(dialog.getByRole("tab", { name: "CC2CX 转译" }));
+    fireEvent.change(dialog.getByPlaceholderText("default"), {
+      target: { value: "Volcengine Coding Plan" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("sk-…"), { target: { value: "sk-volc" } });
+    fireEvent.change(dialog.getByPlaceholderText(/中转 endpoint/), {
+      target: { value: "https://ark.cn-beijing.volces.com/api/coding/v3" },
+    });
+
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(providerUpsert)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliKey: "codex",
+          name: "Volcengine Coding Plan",
+          authMode: "api_key",
+          apiKey: "sk-volc",
+          baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+          bridgeType: "cc2cx",
+          sourceProviderId: null,
+        })
+      )
+    );
+  });
+
   it("passes stream idle timeout override when saving", async () => {
     vi.mocked(providerUpsert).mockResolvedValue(
       makeProvider({

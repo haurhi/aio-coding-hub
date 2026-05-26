@@ -4,6 +4,7 @@
 //! produce fully assembled [`Bridge`] instances.
 
 use super::bridge::Bridge;
+use super::traits::{BridgeContext, ModelMapper};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -14,6 +15,7 @@ fn registry() -> &'static RwLock<HashMap<&'static str, BridgeFactory>> {
     REGISTRY.get_or_init(|| {
         let mut m = HashMap::new();
         m.insert("cx2cc", cx2cc_factory as BridgeFactory);
+        m.insert("cc2cx", cc2cx_factory as BridgeFactory);
         RwLock::new(m)
     })
 }
@@ -59,5 +61,22 @@ fn cx2cc_factory() -> Bridge {
         inbound: Box::new(super::inbound::anthropic::AnthropicMessagesInbound),
         outbound: Box::new(super::outbound::openai_responses::OpenAIResponsesOutbound),
         model_mapper: Box::new(super::cx2cc::CX2CCModelMapper),
+    }
+}
+
+fn cc2cx_factory() -> Bridge {
+    Bridge {
+        bridge_type: "cc2cx",
+        inbound: Box::new(super::inbound::openai_responses::OpenAIResponsesInbound),
+        outbound: Box::new(super::outbound::openai_chat_completions::OpenAIChatCompletionsOutbound),
+        model_mapper: Box::new(IdentityModelMapper),
+    }
+}
+
+struct IdentityModelMapper;
+
+impl ModelMapper for IdentityModelMapper {
+    fn map(&self, source_model: &str, _ctx: &BridgeContext) -> String {
+        source_model.to_string()
     }
 }

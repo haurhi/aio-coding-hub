@@ -19,6 +19,7 @@ pub struct CliSessionsSessionSummary {
     pub source: String,
     pub session_id: String,
     pub file_path: String,
+    pub title: Option<String>,
     pub first_prompt: Option<String>,
     pub message_count: u32,
     pub created_at: Option<i64>,

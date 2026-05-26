@@ -120,10 +120,16 @@ pub(crate) struct StreamState {
     pub saw_tool_use: bool,
     /// The currently active tool-use block identity.
     pub active_tool: Option<ActiveToolState>,
+    /// Full text accumulated for the currently open text block.
+    pub active_text: String,
+    /// Full JSON arguments accumulated for the currently open tool block.
+    pub active_tool_arguments: String,
     /// Whether the current text block already emitted visible text.
     pub text_emitted: bool,
     /// Whether *any* visible text has been emitted in this stream.
     pub saw_visible_text: bool,
+    /// Whether a terminal stream event has already been converted.
+    pub stream_completed: bool,
     /// Whether reasoning should be converted into Anthropic thinking blocks.
     pub enable_reasoning_to_thinking: bool,
     /// Provider-specific extension state.
@@ -137,8 +143,11 @@ impl Default for StreamState {
             block_open: false,
             saw_tool_use: false,
             active_tool: None,
+            active_text: String::new(),
+            active_tool_arguments: String::new(),
             text_emitted: false,
             saw_visible_text: false,
+            stream_completed: false,
             enable_reasoning_to_thinking: true,
             extra: HashMap::new(),
         }

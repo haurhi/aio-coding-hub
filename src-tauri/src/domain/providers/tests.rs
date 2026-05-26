@@ -461,6 +461,42 @@ fn upsert_oauth_provider_drops_submitted_base_urls() {
 }
 
 #[test]
+fn upsert_accepts_cc2cx_bridge_for_codex_api_key_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_cc2cx_codex.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("volcengine-coding-plan-chat");
+    params.cli_key = "codex".to_string();
+    params.base_urls = vec!["https://ark.cn-beijing.volces.com/api/coding/v3".to_string()];
+    params.bridge_type = Some("cc2cx".to_string());
+
+    let saved = upsert(&db, params).expect("save cc2cx provider");
+
+    assert_eq!(saved.cli_key, "codex");
+    assert_eq!(saved.bridge_type.as_deref(), Some("cc2cx"));
+    assert_eq!(
+        saved.base_urls,
+        vec!["https://ark.cn-beijing.volces.com/api/coding/v3"]
+    );
+}
+
+#[test]
+fn upsert_rejects_cc2cx_bridge_for_non_codex_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_cc2cx_claude.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("invalid-cc2cx-claude");
+    params.bridge_type = Some("cc2cx".to_string());
+
+    let err = upsert(&db, params).expect_err("cc2cx is codex-only");
+    assert!(err
+        .to_string()
+        .contains("cc2cx bridge is only supported for codex"));
+}
+
+#[test]
 fn reorder_rejects_invalid_duplicate_and_oversized_provider_ids() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("providers_reorder_bounds.db");

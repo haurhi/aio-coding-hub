@@ -162,6 +162,16 @@ function avatarTextForRole(roleRaw: string) {
   return "AI";
 }
 
+function stripReplacementChars(text: string) {
+  return text.replace(/\uFFFD/g, "");
+}
+
+function sessionDisplayTitle(session: CliSessionsSessionSummary) {
+  const raw = session.title?.trim() || session.first_prompt?.trim() || "";
+  const clean = stripReplacementChars(raw);
+  return clean || session.session_id || "Session";
+}
+
 export function SessionsMessagesPage() {
   const params = useParams();
   const navigate = useNavigate();
@@ -257,7 +267,7 @@ export function SessionsMessagesPage() {
     ? `/sessions/${source}/${encodeURIComponent(projectId)}?distro=${encodeURIComponent(distro)}`
     : `/sessions/${source}/${encodeURIComponent(projectId)}`;
 
-  const title = session?.first_prompt?.trim() || session?.session_id || "Session";
+  const title = sessionDisplayTitle(session);
   const subtitleParts: string[] = [];
   if (session?.session_id) subtitleParts.push(`Session ID：${session.session_id}`);
   if (session?.git_branch) subtitleParts.push(`分支：${session.git_branch}`);

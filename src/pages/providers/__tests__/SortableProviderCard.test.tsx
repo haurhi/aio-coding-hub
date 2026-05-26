@@ -380,6 +380,21 @@ describe("pages/providers/SortableProviderCard", () => {
     expect(screen.getByText("跟随当前 Codex 分流")).toBeInTheDocument();
   });
 
+  it("renders cc2cx bridge as its own codex provider mode", () => {
+    renderCard({
+      cli_key: "codex",
+      bridge_type: "cc2cx",
+      base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+    });
+
+    const badge = screen.getByRole("button", { name: "CC2CX" });
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute("title")).toContain("Chat Completions");
+    expect(badge.getAttribute("title")).toContain("Codex");
+    fireEvent.click(badge);
+    expect(screen.getByText("https://ark.cn-beijing.volces.com/api/coding/v3")).toBeInTheDocument();
+  });
+
   it("shows only one 免费 label for zero-cost cx2cc cards", () => {
     renderCard({
       bridge_type: "cx2cc",

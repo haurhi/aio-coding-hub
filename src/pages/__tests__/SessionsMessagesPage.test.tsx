@@ -50,6 +50,7 @@ const SESSION: CliSessionsSessionSummary = {
   source: "claude",
   session_id: "ses-abc-123",
   file_path: "/path/to/file.json",
+  title: "Readable session title",
   first_prompt: "Hello world prompt",
   message_count: 10,
   created_at: 1740000000,
@@ -152,6 +153,8 @@ describe("pages/SessionsMessagesPage", () => {
 
     // Session info renders
     expect(await screen.findByText("Hello from user")).toBeInTheDocument();
+    expect(screen.getByText("Readable session title")).toBeInTheDocument();
+    expect(screen.queryByText("Hello world prompt")).not.toBeInTheDocument();
     expect(screen.getByText("Hello from assistant")).toBeInTheDocument();
     expect(screen.getByText("System message")).toBeInTheDocument();
     expect(screen.getByText("Tool output")).toBeInTheDocument();
@@ -317,6 +320,7 @@ describe("pages/SessionsMessagesPage", () => {
       source: "claude",
       session_id: "ses-min",
       file_path: "/f.json",
+      title: null,
       first_prompt: null,
       message_count: 1,
       created_at: null,

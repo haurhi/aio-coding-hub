@@ -8,6 +8,8 @@ import type {
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
 
+export type ProviderEditorAuthMode = "api_key" | "oauth" | "cx2cc" | "cc2cx";
+
 /** Provider identity and lifecycle */
 export type ProviderActionContext = {
   mode: "create" | "edit";
@@ -24,7 +26,7 @@ export type OAuthStatusValue = ProviderOAuthStatusResult | null;
 
 /** Authentication and bridge state */
 export type AuthActionContext = {
-  authMode: "api_key" | "oauth" | "cx2cc";
+  authMode: ProviderEditorAuthMode;
   oauthStatus: OAuthStatusValue;
   setOauthStatus: (v: OAuthStatusValue) => void;
   refreshOauthStatus: (providerId?: number | null) => Promise<OAuthStatusValue>;
@@ -63,7 +65,7 @@ export type ProviderEditorPayloadContext = {
   mode: "create" | "edit";
   cliKey: CliKey;
   editingProviderId: number | null;
-  authMode: "api_key" | "oauth" | "cx2cc";
+  authMode: ProviderEditorAuthMode;
   baseUrlMode: ProviderBaseUrlMode;
   baseUrlRows: BaseUrlRow[];
   tags: string[];

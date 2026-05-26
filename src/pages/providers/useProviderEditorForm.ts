@@ -9,6 +9,7 @@ import type {
   CopyApiKeyActionContext,
   OAuthActionContext,
   OAuthStatusValue,
+  ProviderEditorAuthMode,
   ProviderEditorPayloadContext,
   SaveActionContext,
 } from "./providerEditorActionContext";
@@ -62,9 +63,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const [saving, setSaving] = useState(false);
   const [copyingApiKey, setCopyingApiKey] = useState(false);
 
-  const [authMode, setAuthMode] = useState<"api_key" | "oauth" | "cx2cc">(
-    deriveAuthMode(editProvider)
-  );
+  const [authMode, setAuthMode] = useState<ProviderEditorAuthMode>(deriveAuthMode(editProvider));
   const [cx2ccSourceValue, setCx2ccSourceValue] = useState<string>(
     deriveCx2ccSourceValue(editProvider)
   );
@@ -179,6 +178,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       : 0;
   const supportsOAuth = cliKey === "codex" || cliKey === "gemini";
   const supportsCx2cc = cliKey === "claude";
+  const supportsCc2cx = cliKey === "codex";
 
   const buildPayloadContext = useCallback(
     (): ProviderEditorPayloadContext => ({
@@ -316,6 +316,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     setAuthMode,
     supportsOAuth,
     supportsCx2cc,
+    supportsCc2cx,
     register,
     setValue,
     watch,

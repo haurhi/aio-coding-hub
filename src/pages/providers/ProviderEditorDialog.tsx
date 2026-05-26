@@ -49,16 +49,26 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
         {/* ── Auth mode selector ── */}
         {f.supportsOAuth ? (
           <FormField label="认证方式" hint="选择后下方表单会相应变化">
-            <TabList<"api_key" | "oauth">
+            <TabList<"api_key" | "oauth" | "cc2cx">
               ariaLabel="认证方式"
-              items={[
-                { key: "api_key", label: "API 密钥" },
-                { key: "oauth", label: "OAuth 登录" },
-              ]}
-              value={f.authMode as "api_key" | "oauth"}
+              items={
+                f.supportsCc2cx
+                  ? [
+                      { key: "api_key", label: "API 密钥" },
+                      { key: "oauth", label: "OAuth 登录" },
+                      { key: "cc2cx", label: "CC2CX 转译" },
+                    ]
+                  : [
+                      { key: "api_key", label: "API 密钥" },
+                      { key: "oauth", label: "OAuth 登录" },
+                    ]
+              }
+              value={f.authMode as "api_key" | "oauth" | "cc2cx"}
               onChange={(next) => {
                 f.setAuthMode(next);
-                f.setValue("auth_mode", next, { shouldDirty: true });
+                f.setValue("auth_mode", next === "oauth" ? "oauth" : "api_key", {
+                  shouldDirty: true,
+                });
               }}
             />
           </FormField>
@@ -74,7 +84,9 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
               value={f.authMode as "api_key" | "oauth" | "cx2cc"}
               onChange={(next) => {
                 f.setAuthMode(next);
-                f.setValue("auth_mode", next === "cx2cc" ? "api_key" : next, { shouldDirty: true });
+                f.setValue("auth_mode", next === "oauth" ? "oauth" : "api_key", {
+                  shouldDirty: true,
+                });
               }}
             />
           </FormField>

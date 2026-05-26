@@ -142,7 +142,13 @@ pub(crate) enum IRStreamChunk {
     /// Incremental data for an open content block.
     ContentBlockDelta { index: u32, delta: IRDelta },
     /// The open content block is complete.
-    ContentBlockStop { index: u32 },
+    ContentBlockStop {
+        index: u32,
+        /// Final text content for protocols whose done events need the full block text.
+        final_text: Option<String>,
+        /// Final JSON argument content for protocols whose done events need full tool args.
+        final_json: Option<String>,
+    },
     /// Final usage / stop-reason metadata.
     MessageDelta {
         stop_reason: IRStopReason,

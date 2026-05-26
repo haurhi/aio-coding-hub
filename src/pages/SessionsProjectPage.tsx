@@ -50,7 +50,7 @@ function stripReplacementChars(text: string) {
 }
 
 function sessionTitle(session: CliSessionsSessionSummary) {
-  const raw = session.first_prompt?.trim() || "";
+  const raw = session.title?.trim() || session.first_prompt?.trim() || "";
   const clean = stripReplacementChars(raw);
   return clean || session.session_id || "Session";
 }

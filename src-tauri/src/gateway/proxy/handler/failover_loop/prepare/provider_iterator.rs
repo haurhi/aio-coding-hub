@@ -30,6 +30,7 @@ pub(super) struct PreparedProvider {
     pub(super) use_codex_chatgpt_backend: bool,
     pub(super) codex_chatgpt_account_id: Option<String>,
     pub(super) cx2cc_active: bool,
+    pub(super) protocol_bridge_type: Option<String>,
     pub(super) cx2cc_source: Option<(crate::providers::ProviderForGateway, String)>,
     pub(super) cx2cc_codex_session_id: Option<String>,
     pub(super) circuit_snapshot: crate::circuit_breaker::CircuitSnapshot,
@@ -178,6 +179,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
     let mut upstream_body_bytes = input.body_bytes.clone();
     let mut strip_request_content_encoding = input.strip_request_content_encoding_seed;
     let mut gemini_oauth_response_mode = None;
+    let mut protocol_bridge_type: Option<String> = None;
 
     if let Some(adapter) = &oauth_adapter {
         if adapter.provider_type() == "gemini_oauth" {
@@ -235,6 +237,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
             cx2cc_preparation::Cx2ccOutcome::Ready(boxed) => {
                 let result = *boxed;
                 cx2cc_active = result.cx2cc_active;
+                protocol_bridge_type = Some(crate::providers::CX2CC_BRIDGE_TYPE.to_string());
                 cx2cc_source = result.cx2cc_source;
                 cx2cc_codex_session_id = result.cx2cc_codex_session_id;
                 effective_credential = result.effective_credential;
@@ -254,6 +257,41 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
                     &provider_base_url_display,
                     input.started.elapsed().as_millis(),
                     reason,
+                );
+                return PreparationOutcome::Skipped;
+            }
+        }
+    }
+
+    if provider.bridge_type.as_deref() == Some(crate::providers::CC2CX_BRIDGE_TYPE)
+        && is_responses_request_path(&upstream_forwarded_path)
+    {
+        match translate_direct_bridge_request(
+            crate::providers::CC2CX_BRIDGE_TYPE,
+            &upstream_body_bytes,
+            input.requested_model.as_deref(),
+            anthropic_stream_requested,
+            &input.cx2cc_settings,
+        ) {
+            Ok(translated) => {
+                protocol_bridge_type = Some(crate::providers::CC2CX_BRIDGE_TYPE.to_string());
+                upstream_forwarded_path = translated.forwarded_path;
+                upstream_query = None;
+                upstream_body_bytes = translated.body_bytes;
+                strip_request_content_encoding = true;
+            }
+            Err(err) => {
+                provider_checks::skip_with_reason(
+                    attempts,
+                    provider_id,
+                    &provider_name_base,
+                    &provider_base_url_display,
+                    input.started.elapsed().as_millis(),
+                    SkipReason {
+                        error_category: "translation",
+                        error_code: GatewayErrorCode::InternalError.as_str(),
+                        reason: format!("cc2cx translation failed: {err}"),
+                    },
                 );
                 return PreparationOutcome::Skipped;
             }
@@ -335,6 +373,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         use_codex_chatgpt_backend,
         codex_chatgpt_account_id,
         cx2cc_active,
+        protocol_bridge_type,
         cx2cc_source,
         cx2cc_codex_session_id,
         circuit_snapshot,
@@ -374,9 +413,54 @@ fn provider_max_attempts_for_request(
     configured_max_attempts.max(1 + required_internal_retries)
 }
 
+fn is_responses_request_path(path: &str) -> bool {
+    matches!(path.trim_end_matches('/'), "/v1/responses" | "/responses")
+}
+
+struct DirectBridgeTranslation {
+    forwarded_path: String,
+    body_bytes: Bytes,
+}
+
+fn translate_direct_bridge_request(
+    bridge_type: &str,
+    body_bytes: &Bytes,
+    requested_model: Option<&str>,
+    stream_requested: bool,
+    cx2cc_settings: &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
+) -> Result<DirectBridgeTranslation, String> {
+    let body_val: serde_json::Value =
+        serde_json::from_slice(body_bytes.as_ref()).map_err(|err| err.to_string())?;
+    let bridge = crate::gateway::proxy::protocol_bridge::get_bridge(bridge_type)
+        .ok_or_else(|| format!("{bridge_type} bridge not registered"))?;
+    let bridge_ctx = crate::gateway::proxy::protocol_bridge::BridgeContext {
+        claude_models: crate::domain::providers::ClaudeModels::default(),
+        cx2cc_settings: cx2cc_settings.clone(),
+        requested_model: requested_model.filter(|m| !m.is_empty()).map(String::from),
+        mapped_model: None,
+        stream_requested,
+        is_chatgpt_backend: false,
+    };
+    let translated = bridge
+        .translate_request(body_val, &bridge_ctx)
+        .map_err(|err| err.to_string())?;
+    let body_bytes = serde_json::to_vec(&translated.body)
+        .map(Bytes::from)
+        .map_err(|err| err.to_string())?;
+
+    Ok(DirectBridgeTranslation {
+        forwarded_path: translated.target_path,
+        body_bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{codex_body_has_previous_response_id, provider_max_attempts_for_request};
+    use super::{
+        codex_body_has_previous_response_id, is_responses_request_path,
+        provider_max_attempts_for_request, translate_direct_bridge_request,
+    };
+    use axum::body::Bytes;
 
     fn body(value: serde_json::Value) -> Vec<u8> {
         serde_json::to_vec(&value).expect("serialize body")
@@ -415,5 +499,47 @@ mod tests {
         assert_eq!(provider_max_attempts_for_request(1, false, true), 2);
         assert_eq!(provider_max_attempts_for_request(1, true, true), 3);
         assert_eq!(provider_max_attempts_for_request(5, true, true), 5);
+    }
+
+    #[test]
+    fn responses_bridge_path_guard_only_matches_responses_endpoint() {
+        assert!(is_responses_request_path("/v1/responses"));
+        assert!(is_responses_request_path("/responses/"));
+        assert!(!is_responses_request_path("/v1/models"));
+        assert!(!is_responses_request_path("/chat/completions"));
+    }
+
+    #[test]
+    fn translate_direct_bridge_request_maps_responses_to_chat_completions() {
+        let body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "DeepSeek-V4-Pro",
+                "instructions": "You are Codex.",
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+                ],
+                "stream": true
+            }))
+            .unwrap(),
+        );
+
+        let translated = translate_direct_bridge_request(
+            crate::providers::CC2CX_BRIDGE_TYPE,
+            &body,
+            Some("DeepSeek-V4-Pro"),
+            true,
+            &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+        )
+        .expect("translate cc2cx request");
+        let translated_body: serde_json::Value =
+            serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
+
+        assert_eq!(translated.forwarded_path, "/chat/completions");
+        assert_eq!(translated_body["model"], "DeepSeek-V4-Pro");
+        assert_eq!(translated_body["messages"][0]["role"], "system");
+        assert_eq!(translated_body["messages"][0]["content"], "You are Codex.");
+        assert_eq!(translated_body["messages"][1]["role"], "user");
+        assert_eq!(translated_body["messages"][1]["content"], "hi");
+        assert_eq!(translated_body["stream"], true);
     }
 }

@@ -2003,6 +2003,7 @@ export type CliSessionsSessionSummary = {
   source: string;
   session_id: string;
   file_path: string;
+  title: string | null;
   first_prompt: string | null;
   message_count: number;
   created_at: number | null;

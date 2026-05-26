@@ -131,10 +131,24 @@ impl Bridge {
             }
 
             // block stop
-            for b in self
-                .inbound
-                .ir_chunk_to_sse(&IRStreamChunk::ContentBlockStop { index }, ctx)?
-            {
+            let final_text = match block {
+                IRContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            };
+            let final_json = match block {
+                IRContentBlock::ToolUse { input, .. } => {
+                    Some(serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string()))
+                }
+                _ => None,
+            };
+            for b in self.inbound.ir_chunk_to_sse(
+                &IRStreamChunk::ContentBlockStop {
+                    index,
+                    final_text,
+                    final_json,
+                },
+                ctx,
+            )? {
                 frames.extend_from_slice(&b);
             }
         }

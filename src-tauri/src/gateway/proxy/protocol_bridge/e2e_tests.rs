@@ -20,6 +20,34 @@ mod tests {
         }
     }
 
+    fn cc2cx_ctx() -> BridgeContext {
+        BridgeContext {
+            claude_models: crate::domain::providers::ClaudeModels::default(),
+            cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            requested_model: Some("gpt-5.4".into()),
+            mapped_model: None,
+            stream_requested: true,
+            is_chatgpt_backend: false,
+        }
+    }
+
+    fn parse_sse_events(text: &str) -> Vec<(String, serde_json::Value)> {
+        text.split("\n\n")
+            .filter_map(|frame| {
+                let mut event = None;
+                let mut data = None;
+                for line in frame.lines() {
+                    if let Some(rest) = line.strip_prefix("event: ") {
+                        event = Some(rest.to_string());
+                    } else if let Some(rest) = line.strip_prefix("data: ") {
+                        data = serde_json::from_str(rest).ok();
+                    }
+                }
+                Some((event?, data?))
+            })
+            .collect()
+    }
+
     // ── Registry ────────────────────────────────────────────────────────
 
     #[test]
@@ -38,6 +66,248 @@ mod tests {
     fn available_bridge_types_includes_cx2cc() {
         let types = registry::available_bridge_types();
         assert!(types.contains(&"cx2cc"));
+    }
+
+    #[test]
+    fn available_bridge_types_includes_cc2cx() {
+        let types = registry::available_bridge_types();
+        assert!(types.contains(&"cc2cx"));
+    }
+
+    #[test]
+    fn cc2cx_translates_codex_responses_request_to_chat_completions() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+
+        let responses_req = json!({
+            "model": "gpt-5.4",
+            "instructions": "You are Codex.",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Create a plan"}
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_123",
+                    "name": "read_file",
+                    "arguments": "{\"path\":\"Cargo.toml\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": "package metadata"
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"]
+                    }
+                }
+            ],
+            "tool_choice": "auto",
+            "max_output_tokens": 2048,
+            "temperature": 0.2,
+            "stream": true
+        });
+
+        let translated = bridge.translate_request(responses_req, &ctx).unwrap();
+
+        assert_eq!(translated.target_path, "/chat/completions");
+        assert_eq!(translated.body["model"], "gpt-5.4");
+        assert_eq!(translated.body["stream"], true);
+        assert_eq!(translated.body["max_tokens"], 2048);
+        assert_eq!(translated.body["temperature"], 0.2);
+
+        let messages = translated.body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "You are Codex.");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "Create a plan");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_123");
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_123");
+        assert_eq!(messages[3]["content"], "package metadata");
+
+        let tools = translated.body["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "read_file");
+        assert_eq!(translated.body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn cc2cx_translates_chat_completions_text_stream_to_responses_sse() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+        let mut translator = bridge.create_stream_translator();
+
+        let first = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_text",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let delta = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_text",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"content": "hello"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let done = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_text",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1}
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let duplicate_done = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_text",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"content": "", "role": "assistant"}, "finish_reason": "stop"}],
+                    "usage": null
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        let sse_text = first
+            .into_iter()
+            .chain(delta)
+            .chain(done)
+            .chain(duplicate_done)
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<String>();
+        let events = parse_sse_events(&sse_text);
+        let event_names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
+
+        assert!(event_names.contains(&"response.created"));
+        assert!(event_names.contains(&"response.output_item.added"));
+        assert!(event_names.contains(&"response.content_part.added"));
+        assert!(event_names.contains(&"response.output_text.delta"));
+        assert!(event_names.contains(&"response.output_text.done"));
+        assert!(event_names.contains(&"response.completed"));
+        assert!(sse_text.contains("\"delta\":\"hello\""));
+        assert_eq!(
+            event_names
+                .iter()
+                .filter(|name| **name == "response.completed")
+                .count(),
+            1
+        );
+        let done_text = events
+            .iter()
+            .find(|(name, _)| name == "response.output_text.done")
+            .and_then(|(_, data)| data.get("text"))
+            .and_then(|text| text.as_str());
+        assert_eq!(done_text, Some("hello"));
+    }
+
+    #[test]
+    fn cc2cx_translates_chat_completions_tool_stream_to_responses_sse() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+        let mut translator = bridge.create_stream_translator();
+
+        let first = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_tool",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_456",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": ""}
+                            }]
+                        }
+                    }]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let args = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_tool",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {"arguments": "{\"path\":\"Cargo.toml\"}"}
+                            }]
+                        }
+                    }]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let done = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_tool",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        let sse_text = first
+            .into_iter()
+            .chain(args)
+            .chain(done)
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<String>();
+        let events = parse_sse_events(&sse_text);
+        let event_names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
+
+        assert!(event_names.contains(&"response.output_item.added"));
+        assert!(event_names.contains(&"response.function_call_arguments.delta"));
+        assert!(event_names.contains(&"response.function_call_arguments.done"));
+        assert!(event_names.contains(&"response.completed"));
+        assert!(sse_text.contains("\"type\":\"function_call\""));
+        assert!(sse_text.contains("\"call_id\":\"call_456\""));
+        assert!(sse_text.contains("\"name\":\"read_file\""));
+        assert!(sse_text.contains("\\\"path\\\":\\\"Cargo.toml\\\""));
     }
 
     // ── Request round-trip ──────────────────────────────────────────────

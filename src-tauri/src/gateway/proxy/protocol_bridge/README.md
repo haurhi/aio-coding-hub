@@ -25,14 +25,23 @@ protocol_bridge/
 ├── e2e_tests.rs     # End-to-end integration tests
 │
 ├── inbound/         # Client-facing adapters
-│   └── anthropic.rs # Anthropic Messages API ↔ IR
+│   ├── anthropic.rs        # Anthropic Messages API ↔ IR
+│   └── openai_responses.rs # OpenAI Responses API ↔ IR
 │
 ├── outbound/        # Provider-facing adapters
-│   └── openai_responses.rs  # OpenAI Responses API ↔ IR
+│   ├── openai_responses.rs         # OpenAI Responses API ↔ IR
+│   └── openai_chat_completions.rs  # OpenAI Chat Completions API ↔ IR
 │
 └── cx2cc/           # CX2CC-specific configuration
     └── mod.rs       # Model mapper + ChatGPT compat helpers
 ```
+
+## Built-in Bridges
+
+| `bridge_type` | Client protocol | Provider protocol | Typical use |
+|---------------|-----------------|-------------------|-------------|
+| `cx2cc` | Anthropic Messages | OpenAI Responses | Use Codex-compatible providers from Claude Code |
+| `cc2cx` | OpenAI Responses | OpenAI Chat Completions | Use Chat Completions-compatible providers from Codex |
 
 ## Adding a New Protocol Pair
 

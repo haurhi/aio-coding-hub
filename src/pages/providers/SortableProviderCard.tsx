@@ -185,7 +185,7 @@ export const ProviderCard = memo(function ProviderCard({
 
   const circuitState = useMemo(() => getGatewayCircuitDerivedState(circuit), [circuit]);
   const { isUnavailable, unavailableUntil } = circuitState;
-  const { isOAuth, isCx2cc, isCx2ccGateway } = getProviderTypeInfo(provider);
+  const { isOAuth, isCx2cc, isCx2ccGateway, isCc2cx } = getProviderTypeInfo(provider);
   const [apiKeyDetailsVisible, setApiKeyDetailsVisible] = useState(false);
   const [limitsRefreshing, setLimitsRefreshing] = useState(false);
   const queryClient = useQueryClient();
@@ -318,10 +318,15 @@ export const ProviderCard = memo(function ProviderCard({
                     e.stopPropagation();
                     setApiKeyDetailsVisible((current) => !current);
                   }}
-                  className="inline-flex w-16 shrink-0 cursor-pointer items-center justify-center rounded-full px-2 py-0.5 font-mono text-[10px] transition-opacity hover:opacity-80 bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
-                  title="API Key 认证"
+                  className={cn(
+                    "inline-flex w-16 shrink-0 cursor-pointer items-center justify-center rounded-full px-2 py-0.5 font-mono text-[10px] transition-opacity hover:opacity-80",
+                    isCc2cx
+                      ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                      : "bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
+                  )}
+                  title={isCc2cx ? "CC2CX 转译：Chat Completions 供应商接入 Codex" : "API Key 认证"}
                 >
-                  API Key
+                  {isCc2cx ? "CC2CX" : "API Key"}
                 </button>
                 <span className="shrink-0 rounded-full bg-cyan-50 px-2 py-0.5 font-mono text-[10px] text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">
                   {provider.base_url_mode === "ping" ? "Ping" : "顺序"}

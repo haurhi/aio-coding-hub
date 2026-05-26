@@ -10,6 +10,7 @@ import {
 import type { GatewayStatus } from "../../services/gateway/gateway";
 import type { AppSettings } from "../../services/settings/settings";
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
+import type { ProviderEditorAuthMode } from "./providerEditorActionContext";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
 import type { ProviderEditorInitialValues } from "./providerDuplicate";
 import type { UseFormReset, UseFormSetValue } from "react-hook-form";
@@ -32,7 +33,7 @@ export type EffectDeps = {
   editProvider: ProviderSummary | null;
   editingProviderId: number | null;
   createInitialValues: ProviderEditorInitialValues | null;
-  authMode: "api_key" | "oauth" | "cx2cc";
+  authMode: ProviderEditorAuthMode;
   costMultiplierValue: string;
   isCodexGatewaySource: boolean;
   selectedCx2ccSourceProvider: ProviderSummary | null;
@@ -49,7 +50,7 @@ export type EffectDeps = {
   setTags: React.Dispatch<React.SetStateAction<string[]>>;
   setTagInput: (v: string) => void;
   setStreamIdleTimeoutSeconds: (v: string) => void;
-  setAuthMode: (v: "api_key" | "oauth" | "cx2cc") => void;
+  setAuthMode: (v: ProviderEditorAuthMode) => void;
   setCx2ccSourceValue: (v: string) => void;
   setOauthStatus: (v: ProviderOAuthStatusResult | null) => void;
   setOauthLoading: (v: boolean) => void;
@@ -132,11 +133,7 @@ export function useProviderEditorEffects(d: EffectDeps) {
       setTagInput("");
       setStreamIdleTimeoutSeconds(valueOrEmpty(createInitialValues?.stream_idle_timeout_seconds));
       setCx2ccSourceValue(deriveCx2ccSourceValue(createInitialValues));
-      setAuthMode(
-        deriveCx2ccSourceValue(createInitialValues)
-          ? "cx2cc"
-          : (createInitialValues?.auth_mode ?? "api_key")
-      );
+      setAuthMode(deriveAuthMode(createInitialValues));
       setOauthStatus(null);
       reset(buildFormValues(createInitialValues));
       return;
@@ -159,7 +156,7 @@ export function useProviderEditorEffects(d: EffectDeps) {
     reset({
       name: snapshot.name,
       api_key: "",
-      auth_mode: initialAuthMode === "cx2cc" ? "api_key" : initialAuthMode,
+      auth_mode: initialAuthMode === "oauth" ? "oauth" : "api_key",
       cost_multiplier: String(snapshot.cost_multiplier ?? 1.0),
       limit_5h_usd: snapshot.limit_5h_usd != null ? String(snapshot.limit_5h_usd) : "",
       limit_daily_usd: snapshot.limit_daily_usd != null ? String(snapshot.limit_daily_usd) : "",

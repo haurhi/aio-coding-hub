@@ -193,9 +193,9 @@ fn summarize_json_keys(body_bytes: &[u8]) -> String {
 fn should_passthrough_non_stream_success(
     gemini_oauth_response_mode: Option<gemini_oauth::GeminiOAuthResponseMode>,
     cx2cc_buffered_event_stream: bool,
-    cx2cc_active: bool,
+    protocol_bridge_active: bool,
 ) -> bool {
-    gemini_oauth_response_mode.is_none() && !cx2cc_buffered_event_stream && !cx2cc_active
+    gemini_oauth_response_mode.is_none() && !cx2cc_buffered_event_stream && !protocol_bridge_active
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,35 +288,34 @@ async fn read_non_stream_body_with_limit(
     }
 }
 
-fn translate_cx2cc_non_stream_body(
-    cx2cc_active: bool,
-    anthropic_stream_requested: bool,
+fn translate_protocol_bridge_non_stream_body(
+    bridge_type: Option<&str>,
+    client_stream_requested: bool,
     requested_model: Option<&str>,
     cx2cc_settings: &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
     response_headers: &mut HeaderMap,
     body_bytes: Bytes,
 ) -> Result<Bytes, String> {
-    if !cx2cc_active {
+    let Some(bridge_type) = bridge_type else {
         return Ok(body_bytes);
-    }
+    };
 
-    let openai_body: serde_json::Value = serde_json::from_slice(body_bytes.as_ref())
-        .map_err(|err| format!("failed to parse cx2cc response JSON: {err}"))?;
-
-    let bridge = protocol_bridge::get_bridge("cx2cc")
-        .ok_or_else(|| "cx2cc bridge not registered".to_string())?;
+    let upstream_body: serde_json::Value = serde_json::from_slice(body_bytes.as_ref())
+        .map_err(|err| format!("failed to parse {bridge_type} response JSON: {err}"))?;
+    let bridge = protocol_bridge::get_bridge(bridge_type)
+        .ok_or_else(|| format!("{bridge_type} bridge not registered"))?;
     let bridge_ctx = protocol_bridge::BridgeContext {
         claude_models: crate::domain::providers::ClaudeModels::default(),
         cx2cc_settings: cx2cc_settings.clone(),
         requested_model: requested_model.filter(|m| !m.is_empty()).map(String::from),
         mapped_model: None,
-        stream_requested: anthropic_stream_requested,
+        stream_requested: client_stream_requested,
         is_chatgpt_backend: false,
     };
 
-    if anthropic_stream_requested {
+    if client_stream_requested {
         let sse_body = bridge
-            .translate_response_to_sse(openai_body, &bridge_ctx)
+            .translate_response_to_sse(upstream_body, &bridge_ctx)
             .map_err(|e| e.to_string())?;
         response_headers.remove(header::CONTENT_LENGTH);
         response_headers.remove(header::CONTENT_ENCODING);
@@ -327,11 +326,11 @@ fn translate_cx2cc_non_stream_body(
         return Ok(sse_body);
     }
 
-    let anthropic_body = bridge
-        .translate_response(openai_body, &bridge_ctx)
+    let response_body = bridge
+        .translate_response(upstream_body, &bridge_ctx)
         .map_err(|e| e.to_string())?;
-    let encoded = serde_json::to_vec(&anthropic_body)
-        .map_err(|err| format!("failed to serialize anthropic response JSON: {err}"))?;
+    let encoded = serde_json::to_vec(&response_body)
+        .map_err(|err| format!("failed to serialize bridged response JSON: {err}"))?;
     response_headers.remove(header::CONTENT_LENGTH);
     response_headers.insert(
         header::CONTENT_TYPE,
@@ -385,6 +384,7 @@ where
         circuit_before,
         gemini_oauth_response_mode,
         cx2cc_active,
+        protocol_bridge_type,
         anthropic_stream_requested,
     } = attempt_ctx;
     let selection_method = dc::selection_method(provider_index, retry_index, session_reuse);
@@ -403,7 +403,7 @@ where
     if should_passthrough_non_stream_success(
         gemini_oauth_response_mode,
         cx2cc_buffered_event_stream,
-        cx2cc_active,
+        protocol_bridge_type.is_some(),
     ) {
         let should_gunzip = has_gzip_content_encoding(&response_headers);
 
@@ -814,9 +814,9 @@ where
         response_headers.remove(header::CONTENT_LENGTH);
     }
 
-    // CX2CC: translate OpenAI Responses API response → Anthropic Messages API.
-    match translate_cx2cc_non_stream_body(
-        cx2cc_active,
+    // Protocol bridge: translate upstream response back to the client protocol.
+    match translate_protocol_bridge_non_stream_body(
+        protocol_bridge_type,
         anthropic_stream_requested,
         common.requested_model.as_deref(),
         &common.cx2cc_settings,
@@ -1129,7 +1129,7 @@ mod tests {
     use super::{
         buffer_cx2cc_event_stream_as_json, classify_cx2cc_success_payload,
         read_non_stream_body_with_limit, should_passthrough_non_stream_success,
-        translate_cx2cc_non_stream_body, Cx2ccSuccessPayloadKind, NonStreamBodyReadError,
+        translate_protocol_bridge_non_stream_body, Cx2ccSuccessPayloadKind, NonStreamBodyReadError,
     };
     use crate::domain::usage;
     use axum::body::Bytes;
@@ -1319,6 +1319,50 @@ mod tests {
     }
 
     #[test]
+    fn cc2cx_non_stream_json_translates_to_responses_json() {
+        let chat_body = json!({
+            "id": "chatcmpl_123",
+            "model": "DeepSeek-V4-Pro",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello from chat"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("321"));
+
+        let body = translate_protocol_bridge_non_stream_body(
+            Some(crate::providers::CC2CX_BRIDGE_TYPE),
+            false,
+            Some("DeepSeek-V4-Pro"),
+            &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &mut headers,
+            Bytes::from(serde_json::to_vec(&chat_body).unwrap()),
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(body.as_ref()).unwrap();
+
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert!(headers.get(header::CONTENT_LENGTH).is_none());
+        assert_eq!(json["object"], "response");
+        assert_eq!(json["model"], "DeepSeek-V4-Pro");
+        assert_eq!(json["output"][0]["type"], "message");
+        assert_eq!(json["output"][0]["content"][0]["type"], "output_text");
+        assert_eq!(json["output"][0]["content"][0]["text"], "Hello from chat");
+        assert_eq!(json["usage"]["input_tokens"], 11);
+        assert_eq!(json["usage"]["output_tokens"], 7);
+    }
+
+    #[test]
     fn classifies_headerless_cx2cc_sse_payload_before_logging_non_stream_success() {
         let raw = concat!(
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_123\",\"model\":\"gpt-5\",\"status\":\"in_progress\",\"output\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":0}}}\n\n",
@@ -1394,8 +1438,8 @@ mod tests {
         );
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("321"));
 
-        let body = translate_cx2cc_non_stream_body(
-            true,
+        let body = translate_protocol_bridge_non_stream_body(
+            Some(crate::providers::CX2CC_BRIDGE_TYPE),
             true,
             None,
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
@@ -1446,8 +1490,8 @@ mod tests {
             HeaderValue::from_static("application/json"),
         );
 
-        let body = translate_cx2cc_non_stream_body(
-            true,
+        let body = translate_protocol_bridge_non_stream_body(
+            Some(crate::providers::CX2CC_BRIDGE_TYPE),
             true,
             Some("claude-sonnet-4-5"),
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
@@ -1491,8 +1535,8 @@ mod tests {
             HeaderValue::from_static("application/json"),
         );
 
-        let body = translate_cx2cc_non_stream_body(
-            true,
+        let body = translate_protocol_bridge_non_stream_body(
+            Some(crate::providers::CX2CC_BRIDGE_TYPE),
             true,
             Some("claude-opus-4-6"),
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),

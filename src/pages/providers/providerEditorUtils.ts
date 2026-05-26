@@ -6,6 +6,7 @@ import {
   type ProviderSummary,
 } from "../../services/providers/providers";
 import { cliLongLabel } from "../../constants/clis";
+import type { ProviderEditorAuthMode } from "./providerEditorActionContext";
 import type { ProviderEditorInitialValues } from "./providerDuplicate";
 import type { BaseUrlRow } from "./types";
 
@@ -111,8 +112,12 @@ export function buildBaseUrlRows(
 }
 
 export function deriveAuthMode(
-  provider: ProviderSummary | null | undefined
-): "api_key" | "oauth" | "cx2cc" {
+  provider:
+    | Pick<ProviderSummary, "auth_mode" | "bridge_type" | "source_provider_id">
+    | Pick<ProviderEditorInitialValues, "auth_mode" | "bridge_type" | "source_provider_id">
+    | null
+    | undefined
+): ProviderEditorAuthMode {
   return getProviderTypeInfo(provider).effectiveAuthMode;
 }
 

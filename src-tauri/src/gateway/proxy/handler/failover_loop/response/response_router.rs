@@ -65,6 +65,7 @@ where
         circuit_before: &circuit_before,
         gemini_oauth_response_mode: prepared.gemini_oauth_response_mode,
         cx2cc_active: prepared.cx2cc_active,
+        protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
     };
     let provider_ctx = ProviderCtx {
@@ -164,6 +165,7 @@ where
         circuit_before: &circuit_before,
         gemini_oauth_response_mode: prepared.gemini_oauth_response_mode,
         cx2cc_active: prepared.cx2cc_active,
+        protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
     };
     let provider_ctx = ProviderCtx {

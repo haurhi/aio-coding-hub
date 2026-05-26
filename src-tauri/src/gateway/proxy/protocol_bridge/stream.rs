@@ -80,7 +80,21 @@ where
         requested_model: Option<String>,
         cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
     ) -> Self {
-        if !active {
+        let bridge_type = active.then_some("cx2cc");
+        Self::for_bridge(upstream, bridge_type, requested_model, cx2cc_settings)
+    }
+
+    /// Convenience constructor for any registered protocol bridge.
+    ///
+    /// When `bridge_type` is `None`, the stream simply passes upstream bytes
+    /// through unchanged.
+    pub fn for_bridge(
+        upstream: S,
+        bridge_type: Option<&str>,
+        requested_model: Option<String>,
+        cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
+    ) -> Self {
+        let Some(bridge_type) = bridge_type else {
             let dummy_ctx = BridgeContext {
                 claude_models: crate::domain::providers::ClaudeModels::default(),
                 cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
@@ -90,12 +104,15 @@ where
                 is_chatgpt_backend: false,
             };
             return Self::new(upstream, false, None, dummy_ctx);
-        }
+        };
 
-        let bridge = match super::registry::get_bridge("cx2cc") {
+        let bridge = match super::registry::get_bridge(bridge_type) {
             Some(b) => b,
             None => {
-                tracing::error!("cx2cc bridge not found in registry; falling back to passthrough");
+                tracing::error!(
+                    bridge_type,
+                    "protocol bridge not found in registry; falling back to passthrough"
+                );
                 let dummy_ctx = BridgeContext {
                     claude_models: crate::domain::providers::ClaudeModels::default(),
                     cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(
