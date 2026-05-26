@@ -180,13 +180,17 @@ pub(super) async fn prepare<R: tauri::Runtime>(args: Cx2ccPreparationInput<'_, R
     let body_val: serde_json::Value =
         serde_json::from_slice(&args.upstream_body_bytes).unwrap_or_default();
     let requested_model = body_val.get("model").and_then(|m| m.as_str()).unwrap_or("");
+    let provider_model_config = args
+        .input
+        .providers
+        .iter()
+        .find(|p| p.id == args.provider_id);
     let bridge_ctx = BridgeContext {
-        claude_models: args
-            .input
-            .providers
-            .iter()
-            .find(|p| p.id == args.provider_id)
+        claude_models: provider_model_config
             .map(|p| p.claude_models.clone())
+            .unwrap_or_default(),
+        model_mapping: provider_model_config
+            .map(|p| p.model_mapping.clone())
             .unwrap_or_default(),
         cx2cc_settings: args.input.cx2cc_settings.clone(),
         requested_model: Some(requested_model.to_string()),

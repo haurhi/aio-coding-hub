@@ -17,6 +17,7 @@ fn decode_provider_row(
     let base_urls_json: String = row.get("base_urls_json")?;
     let base_url_mode_raw: String = row.get("base_url_mode")?;
     let claude_models_json: String = row.get("claude_models_json")?;
+    let model_mapping_json: String = row.get("model_mapping_json")?;
     let daily_reset_mode_raw: String = row.get("daily_reset_mode")?;
     let daily_reset_time_raw: String = row.get("daily_reset_time")?;
 
@@ -30,6 +31,11 @@ fn decode_provider_row(
             claude_models_from_json(&claude_models_json)
         } else {
             ClaudeModels::default()
+        },
+        model_mapping: if cli_key == "codex" {
+            model_mapping_from_json(&model_mapping_json)
+        } else {
+            ProviderModelMapping::default()
         },
         limit_5h_usd: row.get("limit_5h_usd")?,
         limit_daily_usd: row.get("limit_daily_usd")?,
@@ -60,6 +66,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<ProviderSummary, rusqlite::
         base_urls: decoded.base_urls,
         base_url_mode: decoded.base_url_mode,
         claude_models: decoded.claude_models,
+        model_mapping: decoded.model_mapping,
         enabled: row.get::<_, i64>("enabled")? != 0,
         priority: row.get("priority")?,
         cost_multiplier: row.get("cost_multiplier")?,
@@ -106,6 +113,7 @@ SELECT
   base_urls_json,
   base_url_mode,
   claude_models_json,
+  model_mapping_json,
   tags_json,
   note,
   enabled,
@@ -363,6 +371,7 @@ SELECT
   base_urls_json,
   base_url_mode,
   claude_models_json,
+  model_mapping_json,
   tags_json,
   note,
   enabled,
@@ -420,6 +429,7 @@ fn map_gateway_provider_row(
         base_url_mode: decoded.base_url_mode,
         api_key_plaintext: row.get("api_key_plaintext")?,
         claude_models: decoded.claude_models,
+        model_mapping: decoded.model_mapping,
         limit_5h_usd: decoded.limit_5h_usd,
         limit_daily_usd: decoded.limit_daily_usd,
         daily_reset_mode: decoded.daily_reset_mode,
@@ -454,6 +464,7 @@ SELECT
   p.base_url_mode,
   p.api_key_plaintext,
   p.claude_models_json,
+  p.model_mapping_json,
   p.limit_5h_usd,
   p.limit_daily_usd,
   p.daily_reset_mode,
@@ -506,6 +517,7 @@ SELECT
   base_url_mode,
   api_key_plaintext,
   claude_models_json,
+  model_mapping_json,
   limit_5h_usd,
   limit_daily_usd,
   daily_reset_mode,
@@ -633,6 +645,7 @@ SELECT
   base_url_mode,
   api_key_plaintext,
   claude_models_json,
+  model_mapping_json,
   limit_5h_usd,
   limit_daily_usd,
   daily_reset_mode,
@@ -684,6 +697,7 @@ pub fn upsert(
         cost_multiplier,
         priority,
         claude_models,
+        model_mapping,
         limit_5h_usd,
         limit_daily_usd,
         daily_reset_mode,
@@ -856,6 +870,13 @@ pub fn upsert(
             };
             let claude_models_json =
                 serde_json::to_string(&claude_models).map_err(|e| format!("SYSTEM_ERROR: {e}"))?;
+            let model_mapping = if cli_key == "codex" {
+                normalize_model_mapping(model_mapping.unwrap_or_default())
+            } else {
+                ProviderModelMapping::default()
+            };
+            let model_mapping_json =
+                serde_json::to_string(&model_mapping).map_err(|e| format!("SYSTEM_ERROR: {e}"))?;
 
             let limit_5h_usd = validate_limit_usd("limit_5h_usd", limit_5h_usd)?;
             let limit_daily_usd = validate_limit_usd("limit_daily_usd", limit_daily_usd)?;
@@ -904,7 +925,7 @@ INSERT INTO providers(
   stream_idle_timeout_seconds,
   created_at,
   updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', '{}', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
 "#,
                 params![
                     cli_key,
@@ -914,6 +935,7 @@ INSERT INTO providers(
                     base_url_mode.as_str(),
                     requested_auth_mode.as_str(),
                     claude_models_json,
+                    model_mapping_json,
                     api_key,
                     sort_order,
                     enabled_to_int(enabled),
@@ -964,13 +986,14 @@ INSERT INTO providers(
                 String,
                 String,
                 String,
+                String,
                 Option<i64>,
             );
             let existing: Option<ExistingProviderRow> = tx
                 .query_row(
-                    "SELECT cli_key, api_key_plaintext, priority, claude_models_json, auth_mode, daily_reset_mode, daily_reset_time, tags_json, note, stream_idle_timeout_seconds FROM providers WHERE id = ?1",
+                    "SELECT cli_key, api_key_plaintext, priority, claude_models_json, model_mapping_json, auth_mode, daily_reset_mode, daily_reset_time, tags_json, note, stream_idle_timeout_seconds FROM providers WHERE id = ?1",
                     params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
                 )
                 .optional()
                 .map_err(|e| db_err!("failed to query provider: {e}"))?;
@@ -980,6 +1003,7 @@ INSERT INTO providers(
                 existing_api_key,
                 existing_priority,
                 existing_claude_models_json,
+                existing_model_mapping_json,
                 existing_auth_mode_raw,
                 existing_daily_reset_mode_raw,
                 existing_daily_reset_time_raw,
@@ -1023,6 +1047,24 @@ INSERT INTO providers(
                 .unwrap_or(&existing_claude_models);
             let next_claude_models_json = if cli_key == "claude" {
                 serde_json::to_string(final_claude_models)
+                    .map_err(|e| format!("SYSTEM_ERROR: {e}"))?
+            } else {
+                "{}".to_string()
+            };
+            let existing_model_mapping = if cli_key == "codex" {
+                model_mapping_from_json(&existing_model_mapping_json)
+            } else {
+                ProviderModelMapping::default()
+            };
+            let next_model_mapping = match model_mapping {
+                Some(v) if cli_key == "codex" => Some(normalize_model_mapping(v)),
+                _ => None,
+            };
+            let final_model_mapping = next_model_mapping
+                .as_ref()
+                .unwrap_or(&existing_model_mapping);
+            let next_model_mapping_json = if cli_key == "codex" {
+                serde_json::to_string(final_model_mapping)
                     .map_err(|e| format!("SYSTEM_ERROR: {e}"))?
             } else {
                 "{}".to_string()
@@ -1075,25 +1117,25 @@ SET
   auth_mode = ?5,
   claude_models_json = ?6,
   supported_models_json = '{}',
-  model_mapping_json = '{}',
-  api_key_plaintext = ?7,
-  enabled = ?8,
-  cost_multiplier = ?9,
-  priority = ?10,
-  limit_5h_usd = ?11,
-  limit_daily_usd = ?12,
-  daily_reset_mode = ?13,
-  daily_reset_time = ?14,
-  limit_weekly_usd = ?15,
-  limit_monthly_usd = ?16,
-  limit_total_usd = ?17,
-  tags_json = ?18,
-  note = ?19,
-  source_provider_id = ?20,
-  bridge_type = ?21,
-  stream_idle_timeout_seconds = ?22,
-  updated_at = ?23
-WHERE id = ?24
+  model_mapping_json = ?7,
+  api_key_plaintext = ?8,
+  enabled = ?9,
+  cost_multiplier = ?10,
+  priority = ?11,
+  limit_5h_usd = ?12,
+  limit_daily_usd = ?13,
+  daily_reset_mode = ?14,
+  daily_reset_time = ?15,
+  limit_weekly_usd = ?16,
+  limit_monthly_usd = ?17,
+  limit_total_usd = ?18,
+  tags_json = ?19,
+  note = ?20,
+  source_provider_id = ?21,
+  bridge_type = ?22,
+  stream_idle_timeout_seconds = ?23,
+  updated_at = ?24
+WHERE id = ?25
 "#,
                 params![
                     name,
@@ -1102,6 +1144,7 @@ WHERE id = ?24
                     base_url_mode.as_str(),
                     next_auth_mode,
                     next_claude_models_json,
+                    next_model_mapping_json,
                     next_api_key,
                     enabled_to_int(enabled),
                     cost_multiplier,

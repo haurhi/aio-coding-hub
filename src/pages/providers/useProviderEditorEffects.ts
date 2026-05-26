@@ -12,6 +12,7 @@ import type { AppSettings } from "../../services/settings/settings";
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
 import type { ProviderEditorAuthMode } from "./providerEditorActionContext";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
+import type { ModelMappingRow } from "./modelMappingRows";
 import type { ProviderEditorInitialValues } from "./providerDuplicate";
 import type { UseFormReset, UseFormSetValue } from "react-hook-form";
 import {
@@ -25,6 +26,7 @@ import {
   deriveAuthMode,
   deriveCx2ccSourceValue,
 } from "./providerEditorUtils";
+import { modelMappingRowsFromRecord } from "./modelMappingRows";
 
 export type EffectDeps = {
   open: boolean;
@@ -41,10 +43,13 @@ export type EffectDeps = {
   setValue: UseFormSetValue<ProviderEditorDialogFormInput>;
   editProviderSnapshotRef: React.MutableRefObject<ProviderSummary | null>;
   baseUrlRowSeqRef: React.MutableRefObject<number>;
+  modelMappingRowSeqRef: React.MutableRefObject<number>;
   oauthStatusRequestSeqRef: React.MutableRefObject<number>;
   newBaseUrlRow: (url?: string) => BaseUrlRow;
+  newModelMappingRow: (source?: string, target?: string) => ModelMappingRow;
   setBaseUrlMode: (v: ProviderBaseUrlMode) => void;
   setBaseUrlRows: (v: BaseUrlRow[]) => void;
+  setModelMappingRows: (v: ModelMappingRow[]) => void;
   setPingingAll: (v: boolean) => void;
   setClaudeModels: (v: ClaudeModels) => void;
   setTags: React.Dispatch<React.SetStateAction<string[]>>;
@@ -85,10 +90,13 @@ export function useProviderEditorEffects(d: EffectDeps) {
     setValue,
     editProviderSnapshotRef,
     baseUrlRowSeqRef,
+    modelMappingRowSeqRef,
     oauthStatusRequestSeqRef,
     newBaseUrlRow,
+    newModelMappingRow,
     setBaseUrlMode,
     setBaseUrlRows,
+    setModelMappingRows,
     setPingingAll,
     setClaudeModels,
     setTags,
@@ -123,10 +131,14 @@ export function useProviderEditorEffects(d: EffectDeps) {
     }
 
     baseUrlRowSeqRef.current = 1;
+    modelMappingRowSeqRef.current = 1;
 
     if (mode === "create") {
       setBaseUrlMode(createInitialValues?.base_url_mode ?? "order");
       setBaseUrlRows(buildBaseUrlRows(createInitialValues, newBaseUrlRow));
+      setModelMappingRows(
+        modelMappingRowsFromRecord(createInitialValues?.model_mapping, newModelMappingRow)
+      );
       setPingingAll(false);
       setClaudeModels(createInitialValues?.claude_models ?? {});
       setTags(createInitialValues?.tags ?? []);
@@ -148,6 +160,7 @@ export function useProviderEditorEffects(d: EffectDeps) {
     setOauthStatus(null);
     setBaseUrlMode(snapshot.base_url_mode);
     setBaseUrlRows(snapshot.base_urls.map((url) => newBaseUrlRow(url)));
+    setModelMappingRows(modelMappingRowsFromRecord(snapshot.model_mapping, newModelMappingRow));
     setPingingAll(false);
     setClaudeModels(snapshot.claude_models ?? {});
     setTags(snapshot.tags ?? []);
@@ -179,7 +192,9 @@ export function useProviderEditorEffects(d: EffectDeps) {
     editProviderSnapshotRef,
     editingProviderId,
     mode,
+    modelMappingRowSeqRef,
     newBaseUrlRow,
+    newModelMappingRow,
     oauthStatusRequestSeqRef,
     open,
     reset,
@@ -188,6 +203,7 @@ export function useProviderEditorEffects(d: EffectDeps) {
     setBaseUrlRows,
     setClaudeModels,
     setCx2ccSourceValue,
+    setModelMappingRows,
     setOauthLoading,
     setOauthStatus,
     setPingingAll,

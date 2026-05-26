@@ -69,14 +69,14 @@ fn cc2cx_factory() -> Bridge {
         bridge_type: "cc2cx",
         inbound: Box::new(super::inbound::openai_responses::OpenAIResponsesInbound),
         outbound: Box::new(super::outbound::openai_chat_completions::OpenAIChatCompletionsOutbound),
-        model_mapper: Box::new(IdentityModelMapper),
+        model_mapper: Box::new(ExactModelMapper),
     }
 }
 
-struct IdentityModelMapper;
+struct ExactModelMapper;
 
-impl ModelMapper for IdentityModelMapper {
-    fn map(&self, source_model: &str, _ctx: &BridgeContext) -> String {
-        source_model.to_string()
+impl ModelMapper for ExactModelMapper {
+    fn map(&self, source_model: &str, ctx: &BridgeContext) -> String {
+        crate::domain::providers::map_provider_model(&ctx.model_mapping, source_model)
     }
 }

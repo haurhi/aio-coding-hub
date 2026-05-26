@@ -53,6 +53,7 @@ function makeProvider(partial: Partial<ProviderSummary> = {}): ProviderSummary {
     base_urls: ["https://example.com/v1"],
     base_url_mode: "order",
     claude_models: {},
+    model_mapping: {},
     enabled: true,
     priority: 0,
     cost_multiplier: 1.0,
@@ -90,6 +91,7 @@ function makeInitialValues(
     base_urls: ["https://example.com/v1"],
     base_url_mode: "order",
     claude_models: { main_model: "claude-copy" },
+    model_mapping: {},
     enabled: true,
     cost_multiplier: 1.5,
     limit_5h_usd: 5,
@@ -313,6 +315,59 @@ describe("pages/providers/ProviderEditorDialog", () => {
           baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
           bridgeType: "cc2cx",
           sourceProviderId: null,
+        })
+      )
+    );
+  });
+
+  it("saves codex cc2cx model mappings from the editor", async () => {
+    vi.mocked(providerUpsert).mockResolvedValue(
+      makeProvider({
+        id: 4,
+        cli_key: "codex",
+        name: "Volcengine Coding Plan",
+        base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+        bridge_type: "cc2cx",
+        model_mapping: { "gpt-5.5": "DeepSeek-V4-Pro" },
+        api_key_configured: true,
+      })
+    );
+
+    render(
+      <ProviderEditorDialog
+        mode="create"
+        open={true}
+        cliKey="codex"
+        onSaved={vi.fn()}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(dialog.getByRole("tab", { name: "CC2CX 转译" }));
+    fireEvent.click(dialog.getByText("Codex 模型映射"));
+    fireEvent.change(dialog.getByPlaceholderText("gpt-5.5"), {
+      target: { value: "gpt-5.5" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("DeepSeek-V4-Pro"), {
+      target: { value: "DeepSeek-V4-Pro" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("default"), {
+      target: { value: "Volcengine Coding Plan" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("sk-…"), { target: { value: "sk-volc" } });
+    fireEvent.change(dialog.getByPlaceholderText(/中转 endpoint/), {
+      target: { value: "https://ark.cn-beijing.volces.com/api/coding/v3" },
+    });
+
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(providerUpsert)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliKey: "codex",
+          bridgeType: "cc2cx",
+          modelMapping: { "gpt-5.5": "DeepSeek-V4-Pro" },
         })
       )
     );

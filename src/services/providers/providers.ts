@@ -38,6 +38,7 @@ export type {
 export type CliKey = "claude" | "codex" | "gemini";
 
 export type ClaudeModels = GeneratedClaudeModels;
+export type ProviderModelMapping = Record<string, string>;
 export type DailyResetMode = GeneratedDailyResetMode;
 export type ProviderAuthMode = GeneratedProviderAuthMode;
 export type ProviderBaseUrlMode = GeneratedProviderBaseUrlMode;
@@ -50,10 +51,11 @@ const PROVIDER_AUTH_MODE_VALUES = [
 export const MAX_PROVIDER_ORDER_IDS = 512;
 
 export type ProviderSummary = Override<
-  GeneratedProviderSummary,
+  GeneratedProviderSummary & { model_mapping?: ProviderModelMapping },
   {
     cli_key: CliKey;
     auth_mode: ProviderAuthMode;
+    model_mapping: ProviderModelMapping;
   }
 >;
 
@@ -69,6 +71,7 @@ type ProviderUpsertFieldMap = {
   costMultiplier: "costMultiplier";
   priority: "priority";
   claudeModels: "claudeModels";
+  modelMapping: "modelMapping";
   limit5hUsd: "limit5hUsd";
   limitDailyUsd: "limitDailyUsd";
   dailyResetMode: "dailyResetMode";
@@ -98,6 +101,7 @@ export type ProviderUpsertInput = Omit<
   ProviderUpsertOptionalKeys | "cliKey"
 > & {
   cliKey: CliKey;
+  modelMapping?: ProviderModelMapping | null;
 } & Partial<Pick<ProviderUpsertAuthority, ProviderUpsertOptionalKeys>>;
 
 type ProviderUpsertTransportInput = Omit<
@@ -105,6 +109,7 @@ type ProviderUpsertTransportInput = Omit<
   "streamIdleTimeoutSeconds"
 > & {
   streamIdleTimeoutSeconds?: GeneratedProviderUpsertInput["streamIdleTimeoutSeconds"];
+  modelMapping?: ProviderModelMapping | null;
 };
 
 function toCliKey(value: string, label: string): CliKey {
@@ -124,10 +129,14 @@ function toProviderAuthMode(value: string, label: string): ProviderAuthMode {
 }
 
 function toProviderSummary(value: GeneratedProviderSummary): ProviderSummary {
+  const valueWithMapping = value as GeneratedProviderSummary & {
+    model_mapping?: ProviderModelMapping | null;
+  };
   return {
     ...value,
     cli_key: toCliKey(value.cli_key, "providers.cli_key"),
     auth_mode: toProviderAuthMode(value.auth_mode, "providers.auth_mode"),
+    model_mapping: valueWithMapping.model_mapping ?? {},
   };
 }
 
@@ -146,7 +155,7 @@ function toProviderUpsertPayload(input: ProviderUpsertInput): ProviderUpsertTran
       : validateProviderId(input.sourceProviderId, "sourceProviderId");
   const cliKey = validateProviderCliKey(input.cliKey);
 
-  const payloadBase = {
+  const payloadBase: ProviderUpsertTransportInput = {
     providerId,
     cliKey,
     name: input.name,
@@ -158,6 +167,7 @@ function toProviderUpsertPayload(input: ProviderUpsertInput): ProviderUpsertTran
     costMultiplier: input.costMultiplier,
     priority: input.priority ?? null,
     claudeModels: input.claudeModels ?? null,
+    modelMapping: input.modelMapping ?? null,
     limit5hUsd: input.limit5hUsd ?? null,
     limitDailyUsd: input.limitDailyUsd ?? null,
     dailyResetMode: input.dailyResetMode ?? null,
@@ -169,7 +179,7 @@ function toProviderUpsertPayload(input: ProviderUpsertInput): ProviderUpsertTran
     note: input.note ?? null,
     sourceProviderId,
     bridgeType: input.bridgeType ?? null,
-  } satisfies Omit<GeneratedProviderUpsertInput, "streamIdleTimeoutSeconds">;
+  };
 
   if (Object.prototype.hasOwnProperty.call(input, "streamIdleTimeoutSeconds")) {
     return {

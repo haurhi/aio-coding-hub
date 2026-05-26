@@ -90,6 +90,7 @@ function createProviderSummary(overrides: Partial<ProviderSummary> = {}): Provid
     stream_idle_timeout_seconds: null,
     api_key_configured: false,
     ...overrides,
+    model_mapping: overrides.model_mapping ?? {},
   };
 }
 

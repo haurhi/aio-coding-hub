@@ -15,6 +15,7 @@ function makeContext(
     baseUrlRows: [{ id: "1", url: "https://example.com/v1", ping: { status: "idle" } }],
     tags: [],
     claudeModels: {},
+    modelMappingRows: [],
     streamIdleTimeoutSeconds: "",
     apiKeyConfigured: false,
     isCodexGatewaySource: false,
@@ -129,5 +130,37 @@ describe("pages/providers/providerEditorSubmitModel", () => {
         bridgeType: "cc2cx",
       })
     );
+  });
+
+  it("includes normalized codex model mapping for cc2cx providers", () => {
+    const result = buildProviderEditorUpsertInput(
+      makeContext({
+        cliKey: "codex",
+        authMode: "cc2cx",
+        modelMappingRows: [
+          { id: "1", source: " gpt-5.5 ", target: " DeepSeek-V4-Pro " },
+          { id: "2", source: "gpt-5", target: "" },
+        ],
+        baseUrlRows: [
+          {
+            id: "1",
+            url: "https://ark.cn-beijing.volces.com/api/coding/v3",
+            ping: { status: "idle" },
+          },
+        ],
+        formValues: {
+          ...DEFAULT_FORM_VALUES,
+          name: "Volcengine Coding Plan",
+          api_key: "sk-volc",
+        },
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.payload.modelMapping).toEqual({
+      "gpt-5.5": "DeepSeek-V4-Pro",
+    });
   });
 });

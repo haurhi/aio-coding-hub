@@ -69,6 +69,7 @@ function makeProvider(partial: Partial<ProviderSummary> = {}): ProviderSummary {
     bridge_type: null,
     api_key_configured: partial.api_key_configured ?? false,
     ...partial,
+    model_mapping: partial.model_mapping ?? {},
     stream_idle_timeout_seconds: partial.stream_idle_timeout_seconds ?? null,
   };
 }

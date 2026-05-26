@@ -53,6 +53,16 @@ function getConfiguredClaudeModelMappings(claudeModels: ClaudeModels | null | un
   });
 }
 
+function getConfiguredModelMappings(
+  modelMapping: ProviderSummary["model_mapping"] | null | undefined
+) {
+  return Object.entries(modelMapping ?? {}).flatMap(([source, target]) => {
+    const from = source.trim();
+    const to = target.trim();
+    return from && to ? [`${from} -> ${to}`] : [];
+  });
+}
+
 function trimTrailingUrlPunctuation(url: string) {
   return url.replace(/[.,!?;:，。；：]+$/u, "");
 }
@@ -167,6 +177,8 @@ export const ProviderCard = memo(function ProviderCard({
   const claudeModelMappings = getConfiguredClaudeModelMappings(provider.claude_models);
   const claudeModelsCount = claudeModelMappings.length;
   const hasClaudeModels = claudeModelsCount > 0;
+  const modelMappings = getConfiguredModelMappings(provider.model_mapping);
+  const modelMappingCount = modelMappings.length;
 
   const limitChips = [
     provider.limit_5h_usd != null ? `5h ≤ ${formatUsdRaw(provider.limit_5h_usd)}` : null,
@@ -353,6 +365,16 @@ export const ProviderCard = memo(function ProviderCard({
                 ].join("\n")}
               >
                 模型映射 {claudeModelsCount}/5
+              </span>
+            ) : null}
+            {isCc2cx && modelMappingCount > 0 ? (
+              <span
+                className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[10px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
+                title={[`已配置 Codex 模型映射（${modelMappingCount}）`, ...modelMappings].join(
+                  "\n"
+                )}
+              >
+                模型映射 {modelMappingCount}
               </span>
             ) : null}
             {hasLimits ? (

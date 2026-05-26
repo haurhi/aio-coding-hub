@@ -8,6 +8,7 @@ import type {
   ProviderEditorPayloadContext,
 } from "./providerEditorActionContext";
 import { normalizeBaseUrlRows } from "./baseUrl";
+import { normalizeModelMappingRows } from "./modelMappingRows";
 import { resolveStreamIdleTimeoutSeconds } from "./providerEditorTimeout";
 
 export function buildProviderEditorUpsertInput(
@@ -111,6 +112,7 @@ export function buildProviderEditorUpsertInput(
   const effectiveAuthMode: "api_key" | "oauth" = ctx.authMode === "oauth" ? "oauth" : "api_key";
   const bridgeType: "cx2cc" | "cc2cx" | null =
     ctx.authMode === "cx2cc" ? "cx2cc" : ctx.authMode === "cc2cx" ? "cc2cx" : null;
+  const modelMapping = normalizeModelMappingRows(ctx.modelMappingRows);
 
   const payload = {
     ...(ctx.editingProviderId ? { providerId: ctx.editingProviderId } : {}),
@@ -136,6 +138,7 @@ export function buildProviderEditorUpsertInput(
     note: parsed.data.note,
     streamIdleTimeoutSeconds: parsedTimeout,
     ...(ctx.cliKey === "claude" ? { claudeModels: ctx.claudeModels } : {}),
+    ...(ctx.cliKey === "codex" ? { modelMapping } : {}),
     sourceProviderId:
       ctx.authMode === "cx2cc" && !ctx.isCodexGatewaySource ? ctx.sourceProviderId : null,
     bridgeType,

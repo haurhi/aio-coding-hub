@@ -272,6 +272,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
             input.requested_model.as_deref(),
             anthropic_stream_requested,
             &input.cx2cc_settings,
+            &provider.model_mapping,
         ) {
             Ok(translated) => {
                 protocol_bridge_type = Some(crate::providers::CC2CX_BRIDGE_TYPE.to_string());
@@ -428,6 +429,7 @@ fn translate_direct_bridge_request(
     requested_model: Option<&str>,
     stream_requested: bool,
     cx2cc_settings: &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
+    model_mapping: &crate::providers::ProviderModelMapping,
 ) -> Result<DirectBridgeTranslation, String> {
     let body_val: serde_json::Value =
         serde_json::from_slice(body_bytes.as_ref()).map_err(|err| err.to_string())?;
@@ -435,6 +437,7 @@ fn translate_direct_bridge_request(
         .ok_or_else(|| format!("{bridge_type} bridge not registered"))?;
     let bridge_ctx = crate::gateway::proxy::protocol_bridge::BridgeContext {
         claude_models: crate::domain::providers::ClaudeModels::default(),
+        model_mapping: model_mapping.clone(),
         cx2cc_settings: cx2cc_settings.clone(),
         requested_model: requested_model.filter(|m| !m.is_empty()).map(String::from),
         mapped_model: None,
@@ -529,6 +532,7 @@ mod tests {
             Some("DeepSeek-V4-Pro"),
             true,
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &crate::providers::ProviderModelMapping::default(),
         )
         .expect("translate cc2cx request");
         let translated_body: serde_json::Value =
@@ -541,5 +545,37 @@ mod tests {
         assert_eq!(translated_body["messages"][1]["role"], "user");
         assert_eq!(translated_body["messages"][1]["content"], "hi");
         assert_eq!(translated_body["stream"], true);
+    }
+
+    #[test]
+    fn translate_direct_bridge_request_applies_exact_model_mapping() {
+        let body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "gpt-5.5",
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+                ],
+                "stream": true
+            }))
+            .unwrap(),
+        );
+        let mapping = crate::providers::ProviderModelMapping::from_iter([(
+            "gpt-5.5".to_string(),
+            "DeepSeek-V4-Pro".to_string(),
+        )]);
+
+        let translated = translate_direct_bridge_request(
+            crate::providers::CC2CX_BRIDGE_TYPE,
+            &body,
+            Some("gpt-5.5"),
+            true,
+            &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &mapping,
+        )
+        .expect("translate cc2cx request with model mapping");
+        let translated_body: serde_json::Value =
+            serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
+
+        assert_eq!(translated_body["model"], "DeepSeek-V4-Pro");
     }
 }

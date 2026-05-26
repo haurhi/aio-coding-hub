@@ -1,4 +1,8 @@
-import type { ClaudeModels, ProviderSummary } from "../../services/providers/providers";
+import type {
+  ClaudeModels,
+  ProviderModelMapping,
+  ProviderSummary,
+} from "../../services/providers/providers";
 
 const DUPLICATE_SUFFIX = " 副本";
 
@@ -9,6 +13,7 @@ export type ProviderEditorInitialValues = {
   base_urls: string[];
   base_url_mode: "order" | "ping";
   claude_models: ClaudeModels;
+  model_mapping: ProviderModelMapping;
   enabled: boolean;
   cost_multiplier: number;
   limit_5h_usd: number | null;
@@ -64,6 +69,7 @@ export function buildDuplicatedProviderInitialValues(
     base_urls: [...provider.base_urls],
     base_url_mode: provider.base_url_mode,
     claude_models: { ...(provider.claude_models ?? {}) } as ClaudeModels,
+    model_mapping: { ...(provider.model_mapping ?? {}) },
     enabled: provider.enabled,
     cost_multiplier: provider.cost_multiplier,
     limit_5h_usd: provider.limit_5h_usd,

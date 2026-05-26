@@ -404,6 +404,7 @@ fn default_provider_params(name: &str) -> ProviderUpsertParams {
         cost_multiplier: 1.0,
         priority: Some(100),
         claude_models: None,
+        model_mapping: None,
         limit_5h_usd: None,
         limit_daily_usd: None,
         daily_reset_mode: Some(DailyResetMode::Fixed),
@@ -470,11 +471,20 @@ fn upsert_accepts_cc2cx_bridge_for_codex_api_key_provider() {
     params.cli_key = "codex".to_string();
     params.base_urls = vec!["https://ark.cn-beijing.volces.com/api/coding/v3".to_string()];
     params.bridge_type = Some("cc2cx".to_string());
+    params.model_mapping = Some(ProviderModelMapping::from_iter([
+        (" gpt-5.5 ".to_string(), " DeepSeek-V4-Pro ".to_string()),
+        ("gpt-5".to_string(), "".to_string()),
+    ]));
 
     let saved = upsert(&db, params).expect("save cc2cx provider");
 
     assert_eq!(saved.cli_key, "codex");
     assert_eq!(saved.bridge_type.as_deref(), Some("cc2cx"));
+    assert_eq!(
+        saved.model_mapping.get("gpt-5.5").map(String::as_str),
+        Some("DeepSeek-V4-Pro")
+    );
+    assert!(!saved.model_mapping.contains_key("gpt-5"));
     assert_eq!(
         saved.base_urls,
         vec!["https://ark.cn-beijing.volces.com/api/coding/v3"]
@@ -533,6 +543,7 @@ fn create_oauth_provider_for_cas_test(db: &crate::db::Db, name: &str) -> i64 {
             cost_multiplier: 1.0,
             priority: Some(100),
             claude_models: None,
+            model_mapping: None,
             limit_5h_usd: None,
             limit_daily_usd: None,
             daily_reset_mode: Some(DailyResetMode::Fixed),

@@ -38,6 +38,7 @@ function makeSavedProvider(partial: Partial<ProviderSummary> = {}): ProviderSumm
     source_provider_id: partial.source_provider_id ?? null,
     bridge_type: partial.bridge_type ?? null,
     stream_idle_timeout_seconds: partial.stream_idle_timeout_seconds ?? null,
+    model_mapping: partial.model_mapping ?? {},
     api_key_configured: partial.api_key_configured ?? true,
   };
 }
@@ -67,6 +68,7 @@ function makeContext(overrides: Partial<SaveActionContext> = {}): SaveActionCont
     isCodexGatewaySource: false,
     sourceProviderId: null,
     selectedCx2ccSourceProvider: null,
+    modelMappingRows: [],
     formValues: getValues(),
     saving: false,
     setSaving: vi.fn(),

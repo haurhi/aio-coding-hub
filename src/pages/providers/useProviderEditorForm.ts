@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import type { ClaudeModels, ProviderSummary } from "../../services/providers/providers";
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
+import type { ModelMappingRow } from "./modelMappingRows";
 import type { ProviderEditorDialogProps } from "./ProviderEditorDialog";
 import type {
   CopyApiKeyActionContext,
@@ -48,15 +49,23 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const editProvider = mode === "edit" ? props.provider : null;
 
   const baseUrlRowSeqRef = useRef(1);
+  const modelMappingRowSeqRef = useRef(1);
   const newBaseUrlRow = useCallback((url = ""): BaseUrlRow => {
     const id = String(baseUrlRowSeqRef.current++);
     return { id, url, ping: { status: "idle" } };
+  }, []);
+  const newModelMappingRow = useCallback((source = "", target = ""): ModelMappingRow => {
+    const id = String(modelMappingRowSeqRef.current++);
+    return { id, source, target };
   }, []);
 
   const [baseUrlMode, setBaseUrlMode] = useState<ProviderBaseUrlMode>("order");
   const [baseUrlRows, setBaseUrlRows] = useState<BaseUrlRow[]>(() => [newBaseUrlRow()]);
   const [pingingAll, setPingingAll] = useState(false);
   const [claudeModels, setClaudeModels] = useState<ClaudeModels>({});
+  const [modelMappingRows, setModelMappingRows] = useState<ModelMappingRow[]>(() => [
+    newModelMappingRow(),
+  ]);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [streamIdleTimeoutSeconds, setStreamIdleTimeoutSeconds] = useState("");
@@ -148,8 +157,11 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     baseUrlRowSeqRef,
     oauthStatusRequestSeqRef,
     newBaseUrlRow,
+    newModelMappingRow,
     setBaseUrlMode,
     setBaseUrlRows,
+    modelMappingRowSeqRef,
+    setModelMappingRows,
     setPingingAll,
     setClaudeModels,
     setTags,
@@ -190,6 +202,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       baseUrlRows,
       tags,
       claudeModels,
+      modelMappingRows,
       streamIdleTimeoutSeconds,
       apiKeyConfigured,
       isCodexGatewaySource,
@@ -206,6 +219,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       baseUrlRows,
       tags,
       claudeModels,
+      modelMappingRows,
       streamIdleTimeoutSeconds,
       apiKeyConfigured,
       isCodexGatewaySource,
@@ -345,6 +359,9 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     newBaseUrlRow,
     claudeModels,
     setClaudeModels,
+    modelMappingRows,
+    setModelMappingRows,
+    newModelMappingRow,
     claudeModelCount,
     streamIdleTimeoutSeconds,
     setStreamIdleTimeoutSeconds,

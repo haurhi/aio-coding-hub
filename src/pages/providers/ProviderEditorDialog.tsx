@@ -12,6 +12,7 @@ import { Cx2ccSection } from "./Cx2ccSection";
 import { ApiKeySection } from "./ApiKeySection";
 import { LimitsSection } from "./LimitsSection";
 import { ClaudeModelSection } from "./ClaudeModelSection";
+import { CodexModelMappingSection } from "./CodexModelMappingSection";
 
 type ProviderEditorDialogBaseProps = {
   open: boolean;
@@ -118,6 +119,7 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
 
         <LimitsSection form={f} />
         <ClaudeModelSection form={f} />
+        <CodexModelMappingSection form={f} />
 
         <div className="flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-700">
           <div className="flex items-center gap-2">

@@ -205,6 +205,10 @@ export const handlers = [
       source_provider_id:
         typeof input.sourceProviderId === "number" ? input.sourceProviderId : null,
       bridge_type: typeof input.bridgeType === "string" ? input.bridgeType : null,
+      model_mapping:
+        input.modelMapping && typeof input.modelMapping === "object"
+          ? (input.modelMapping as ProviderSummary["model_mapping"])
+          : (existing?.model_mapping ?? {}),
       api_key_configured:
         input.authMode === "oauth"
           ? false

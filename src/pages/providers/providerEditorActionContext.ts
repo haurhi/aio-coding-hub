@@ -6,6 +6,7 @@ import type {
   ProviderSummary,
 } from "../../services/providers/providers";
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
+import type { ModelMappingRow } from "./modelMappingRows";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
 
 export type ProviderEditorAuthMode = "api_key" | "oauth" | "cx2cc" | "cc2cx";
@@ -48,6 +49,7 @@ export type FormActionContext = {
   baseUrlRows: BaseUrlRow[];
   tags: string[];
   claudeModels: ClaudeModels;
+  modelMappingRows: ModelMappingRow[];
   streamIdleTimeoutSeconds: string;
   apiKeyConfigured: boolean;
   apiKeyValue: string;
@@ -70,6 +72,7 @@ export type ProviderEditorPayloadContext = {
   baseUrlRows: BaseUrlRow[];
   tags: string[];
   claudeModels: ClaudeModels;
+  modelMappingRows: ModelMappingRow[];
   streamIdleTimeoutSeconds: string;
   apiKeyConfigured: boolean;
   isCodexGatewaySource: boolean;

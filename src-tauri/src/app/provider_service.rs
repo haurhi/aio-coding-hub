@@ -16,6 +16,7 @@ pub(crate) struct ProviderUpsertInput {
     pub cost_multiplier: f64,
     pub priority: Option<i64>,
     pub claude_models: Option<providers::ClaudeModels>,
+    pub model_mapping: Option<providers::ProviderModelMapping>,
     #[serde(rename = "limit5hUsd", alias = "limit5HUsd")]
     #[specta(rename = "limit5hUsd")]
     pub limit_5h_usd: Option<f64>,
@@ -98,6 +99,7 @@ fn provider_runtime_reset_decision(
         || previous.base_url_mode != next.base_url_mode
         || previous.enabled != next.enabled
         || previous.auth_mode != next.auth_mode
+        || previous.model_mapping != next.model_mapping
         || submitted_api_key_changed(previous_api_key, submitted_api_key)
         || previous.source_provider_id != next.source_provider_id
         || previous.bridge_type != next.bridge_type;
@@ -137,6 +139,7 @@ pub(crate) async fn provider_upsert(
         cost_multiplier,
         priority,
         claude_models,
+        model_mapping,
         limit_5h_usd,
         limit_daily_usd,
         daily_reset_mode,
@@ -183,6 +186,7 @@ pub(crate) async fn provider_upsert(
                 cost_multiplier,
                 priority,
                 claude_models,
+                model_mapping,
                 limit_5h_usd,
                 limit_daily_usd,
                 daily_reset_mode,
@@ -275,6 +279,7 @@ pub(crate) async fn provider_duplicate(
                 cost_multiplier: source.cost_multiplier,
                 priority: None,
                 claude_models: Some(source.claude_models.clone()),
+                model_mapping: Some(source.model_mapping.clone()),
                 limit_5h_usd: source.limit_5h_usd,
                 limit_daily_usd: source.limit_daily_usd,
                 daily_reset_mode: Some(source.daily_reset_mode),
@@ -483,6 +488,7 @@ mod tests {
             base_urls: vec!["https://api.example.com".to_string()],
             base_url_mode: providers::ProviderBaseUrlMode::Order,
             claude_models: Default::default(),
+            model_mapping: Default::default(),
             enabled: true,
             priority: 1,
             cost_multiplier: 1.0,
@@ -567,6 +573,7 @@ mod tests {
             base_urls: vec!["https://api.old.example.com".to_string()],
             base_url_mode: providers::ProviderBaseUrlMode::Order,
             claude_models: Default::default(),
+            model_mapping: Default::default(),
             enabled: true,
             priority: 1,
             cost_multiplier: 1.0,

@@ -1,12 +1,14 @@
 //! Types for provider configuration and gateway selection.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub(super) const DEFAULT_PRIORITY: i64 = 100;
 pub(super) const MAX_MODEL_NAME_LEN: usize = 200;
+pub(super) const MAX_MODEL_MAPPING_ENTRIES: usize = 128;
 pub(crate) const CX2CC_BRIDGE_TYPE: &str = "cx2cc";
 pub(crate) const CC2CX_BRIDGE_TYPE: &str = "cc2cx";
+pub type ProviderModelMapping = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -76,6 +78,7 @@ pub struct ProviderUpsertParams {
     pub cost_multiplier: f64,
     pub priority: Option<i64>,
     pub claude_models: Option<ClaudeModels>,
+    pub model_mapping: Option<ProviderModelMapping>,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: Option<DailyResetMode>,
@@ -119,6 +122,37 @@ pub(super) fn normalize_model_slot(raw: Option<String>) -> Option<String> {
         return Some(take_first_chars(value, MAX_MODEL_NAME_LEN));
     }
     Some(value.to_string())
+}
+
+pub(super) fn normalize_model_mapping(raw: ProviderModelMapping) -> ProviderModelMapping {
+    let mut out = ProviderModelMapping::new();
+    for (source, target) in raw {
+        if out.len() >= MAX_MODEL_MAPPING_ENTRIES {
+            break;
+        }
+        let Some(source) = normalize_model_slot(Some(source)) else {
+            continue;
+        };
+        let Some(target) = normalize_model_slot(Some(target)) else {
+            continue;
+        };
+        out.insert(source, target);
+    }
+    out
+}
+
+pub(super) fn model_mapping_from_json(raw: &str) -> ProviderModelMapping {
+    serde_json::from_str::<ProviderModelMapping>(raw)
+        .ok()
+        .map(normalize_model_mapping)
+        .unwrap_or_default()
+}
+
+pub(crate) fn map_provider_model(mapping: &ProviderModelMapping, requested_model: &str) -> String {
+    mapping
+        .get(requested_model)
+        .cloned()
+        .unwrap_or_else(|| requested_model.to_string())
 }
 
 impl ClaudeModels {
@@ -209,6 +243,7 @@ pub struct ProviderSummary {
     pub base_urls: Vec<String>,
     pub base_url_mode: ProviderBaseUrlMode,
     pub claude_models: ClaudeModels,
+    pub model_mapping: ProviderModelMapping,
     pub enabled: bool,
     pub priority: i64,
     pub cost_multiplier: f64,
@@ -242,6 +277,7 @@ pub(crate) struct ProviderForGateway {
     pub base_url_mode: ProviderBaseUrlMode,
     pub api_key_plaintext: String,
     pub claude_models: ClaudeModels,
+    pub model_mapping: ProviderModelMapping,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: DailyResetMode,
@@ -291,6 +327,7 @@ pub(super) struct DecodedProviderRow {
     pub base_urls: Vec<String>,
     pub base_url_mode: ProviderBaseUrlMode,
     pub claude_models: ClaudeModels,
+    pub model_mapping: ProviderModelMapping,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: DailyResetMode,

@@ -4,9 +4,10 @@ mod queries;
 mod types;
 mod validation;
 
+pub(crate) use types::map_provider_model;
 pub use types::{
-    ClaudeModels, DailyResetMode, ProviderAuthMode, ProviderBaseUrlMode, ProviderSummary,
-    ProviderUpsertParams,
+    ClaudeModels, DailyResetMode, ProviderAuthMode, ProviderBaseUrlMode, ProviderModelMapping,
+    ProviderSummary, ProviderUpsertParams,
 };
 
 #[allow(unused_imports)]

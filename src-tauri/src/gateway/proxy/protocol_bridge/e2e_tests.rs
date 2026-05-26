@@ -12,6 +12,7 @@ mod tests {
     fn cx2cc_ctx() -> BridgeContext {
         BridgeContext {
             claude_models: crate::domain::providers::ClaudeModels::default(),
+            model_mapping: Default::default(),
             cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
             requested_model: Some("claude-sonnet-4-20250514".into()),
             mapped_model: None,
@@ -23,6 +24,7 @@ mod tests {
     fn cc2cx_ctx() -> BridgeContext {
         BridgeContext {
             claude_models: crate::domain::providers::ClaudeModels::default(),
+            model_mapping: Default::default(),
             cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
             requested_model: Some("gpt-5.4".into()),
             mapped_model: None,

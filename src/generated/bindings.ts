@@ -2523,6 +2523,7 @@ export type ProviderSummary = {
   base_urls: string[];
   base_url_mode: ProviderBaseUrlMode;
   claude_models: ClaudeModels;
+  model_mapping: Partial<{ [key in string]: string }>;
   enabled: boolean;
   priority: number;
   cost_multiplier: number;
@@ -2559,6 +2560,7 @@ export type ProviderUpsertInput = {
   costMultiplier: number;
   priority: number | null;
   claudeModels: ClaudeModels | null;
+  modelMapping: Partial<{ [key in string]: string }> | null;
   limit5hUsd: number | null;
   limitDailyUsd: number | null;
   dailyResetMode: DailyResetMode | null;
