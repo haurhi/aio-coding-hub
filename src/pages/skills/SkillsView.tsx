@@ -546,7 +546,7 @@ export function SkillsView({
             <div className="text-sm font-semibold">通用技能</div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {installed.length > 0 ? (
-                <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
                     checked={allInstalledSelected}
@@ -556,7 +556,7 @@ export function SkillsView({
                       toggleMutation.isPending ||
                       returnToLocalMutation.isPending
                     }
-                    className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent dark:border-slate-600"
+                    className="h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
                     aria-label="全选通用技能"
                   />
                   <span>全选</span>
@@ -597,7 +597,7 @@ export function SkillsView({
               >
                 {loading ? "刷新中…" : "刷新"}
               </Button>
-              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+              <span className="rounded-full bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground dark:bg-secondary dark:text-secondary-foreground">
                 {installed.length}
               </span>
             </div>
@@ -605,7 +605,7 @@ export function SkillsView({
 
           <div className="mt-4 min-h-0 flex-1 space-y-2 lg:overflow-y-auto lg:pr-1 scrollbar-overlay">
             {loading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Spinner size="sm" />
                 加载中…
               </div>
@@ -618,7 +618,7 @@ export function SkillsView({
                 return (
                   <div
                     key={skill.id}
-                    className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800"
+                    className="rounded-xl border border-border bg-white p-3 dark:border-border dark:bg-secondary"
                   >
                     <div className="flex items-start gap-3">
                       <input
@@ -630,13 +630,13 @@ export function SkillsView({
                           togglingSkillId === skill.id ||
                           returningLocalSkillId === skill.id
                         }
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent dark:border-slate-600"
+                        className="mt-0.5 h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
                         aria-label={`选择通用技能 ${skill.name}`}
                       />
 
                       <div className="min-w-0 flex-1">
                         {repoPrefix ? (
-                          <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">
+                          <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                             {repoPrefix}
                           </div>
                         ) : null}
@@ -654,14 +654,14 @@ export function SkillsView({
                               href={repoUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="shrink-0 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                              className="shrink-0 text-muted-foreground hover:text-muted-foreground dark:text-muted-foreground dark:hover:text-muted-foreground"
                               title={sourceHint(skill)}
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
                             </a>
                           ) : null}
                           <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
-                            <span className="text-xs text-slate-600 dark:text-slate-400">启用</span>
+                            <span className="text-xs text-muted-foreground">启用</span>
                             <Switch
                               checked={skill.enabled}
                               disabled={
@@ -724,17 +724,17 @@ export function SkillsView({
                           </div>
                         </div>
                         {skill.description ? (
-                          <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                          <div className="mt-1.5 text-xs text-muted-foreground">
                             {skill.description}
                           </div>
                         ) : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span
                             className={cn(
                               "rounded-full px-2 py-1 font-medium",
                               skill.enabled
                                 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                                : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400"
+                                : "bg-secondary text-muted-foreground dark:bg-secondary dark:text-muted-foreground"
                             )}
                           >
                             {skill.enabled ? "已启用" : "未启用"}
@@ -755,13 +755,13 @@ export function SkillsView({
             <div className="text-sm font-semibold">本机已安装</div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {canOperateLocal && localSkills.length > 0 ? (
-                <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
                     checked={allLocalSelected}
                     onChange={toggleAllLocalSelection}
                     disabled={deletingLocal || importingLocal}
-                    className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent dark:border-slate-600"
+                    className="h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
                     aria-label="全选本机技能"
                   />
                   <span>全选</span>
@@ -789,7 +789,7 @@ export function SkillsView({
               >
                 {localLoading ? "刷新中…" : "刷新"}
               </Button>
-              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+              <span className="rounded-full bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground dark:bg-secondary dark:text-secondary-foreground">
                 {canOperateLocal ? (localLoading ? "扫描中…" : `${localSkills.length}`) : "—"}
               </span>
             </div>
@@ -802,7 +802,7 @@ export function SkillsView({
                 variant="dashed"
               />
             ) : localLoading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Spinner size="sm" />
                 扫描中…
               </div>
@@ -817,7 +817,7 @@ export function SkillsView({
                 return (
                   <div
                     key={skill.path}
-                    className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800"
+                    className="rounded-xl border border-border bg-secondary p-3 dark:border-border dark:bg-secondary"
                   >
                     <div className="flex items-start gap-3">
                       <input
@@ -825,13 +825,13 @@ export function SkillsView({
                         checked={selectedLocalDirNames.has(skill.dir_name)}
                         onChange={() => toggleLocalSelection(skill.dir_name)}
                         disabled={deletingLocal || importingLocal}
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent dark:border-slate-600"
+                        className="mt-0.5 h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
                         aria-label={`选择本机技能 ${label}`}
                       />
 
                       <div className="min-w-0 flex-1">
                         {repoPrefix ? (
-                          <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">
+                          <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                             {repoPrefix}
                           </div>
                         ) : null}
@@ -844,7 +844,7 @@ export function SkillsView({
                               href={repoUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="shrink-0 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                              className="shrink-0 text-muted-foreground hover:text-muted-foreground dark:text-muted-foreground dark:hover:text-muted-foreground"
                               title={sourceHint(skill)}
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
@@ -880,11 +880,11 @@ export function SkillsView({
                           </div>
                         </div>
                         {skill.description ? (
-                          <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                          <div className="mt-1.5 text-xs text-muted-foreground">
                             {skill.description}
                           </div>
                         ) : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span className="min-w-0 truncate font-mono">{skill.path}</span>
                         </div>
                       </div>
@@ -909,7 +909,7 @@ export function SkillsView({
         confirmVariant="danger"
         disabled={selectedInstalledSkills.length === 0}
       >
-        <div className="max-h-40 overflow-auto text-sm text-slate-600 dark:text-slate-400">
+        <div className="max-h-40 overflow-auto text-sm text-muted-foreground">
           <ul className="space-y-1">
             {selectedInstalledSkills.slice(0, 10).map((skill) => (
               <li key={skill.id} className="truncate">
@@ -917,7 +917,9 @@ export function SkillsView({
               </li>
             ))}
             {selectedInstalledSkills.length > 10 ? (
-              <li className="text-slate-400">...还有 {selectedInstalledSkills.length - 10} 个</li>
+              <li className="text-muted-foreground">
+                ...还有 {selectedInstalledSkills.length - 10} 个
+              </li>
             ) : null}
           </ul>
         </div>
@@ -938,20 +940,18 @@ export function SkillsView({
         confirmVariant="danger"
         disabled={localDeleteTargets.length === 0}
       >
-        <div className="max-h-48 space-y-2 overflow-auto text-xs text-slate-600 dark:text-slate-400">
+        <div className="max-h-48 space-y-2 overflow-auto text-xs text-muted-foreground">
           {localDeleteTargets.slice(0, 10).map((skill) => (
             <div
               key={skill.path}
-              className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800"
+              className="rounded-xl border border-border bg-secondary p-3 dark:border-border dark:bg-secondary"
             >
-              <div className="font-medium text-slate-800 dark:text-slate-200">
-                {skill.name || skill.dir_name}
-              </div>
+              <div className="font-medium text-foreground">{skill.name || skill.dir_name}</div>
               <div className="mt-1 break-all font-mono">{skill.path}</div>
             </div>
           ))}
           {localDeleteTargets.length > 10 ? (
-            <div className="text-slate-400">...还有 {localDeleteTargets.length - 10} 个</div>
+            <div className="text-muted-foreground">...还有 {localDeleteTargets.length - 10} 个</div>
           ) : null}
         </div>
       </ConfirmDialog>

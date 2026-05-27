@@ -80,7 +80,7 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
               className={`inline-flex h-9 items-center rounded-full border px-3.5 text-xs font-medium transition-colors ${
                 selectedTags.size === 0
                   ? "border-accent bg-accent text-white shadow-sm"
-                  : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-400 dark:hover:bg-slate-700"
+                  : "border-border bg-white text-muted-foreground hover:border-border hover:bg-secondary dark:border-border dark:bg-secondary dark:text-secondary-foreground dark:hover:border-border dark:hover:bg-secondary"
               }`}
             >
               全部({providers.length})
@@ -107,7 +107,7 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
                       className={`inline-flex h-9 items-center rounded-full border px-3.5 text-xs font-medium transition-colors ${
                         isSelected
                           ? "border-accent bg-accent text-white shadow-sm"
-                          : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-400 dark:hover:bg-slate-700"
+                          : "border-border bg-white text-muted-foreground hover:border-border hover:bg-secondary dark:border-border dark:bg-secondary dark:text-secondary-foreground dark:hover:border-border dark:hover:bg-secondary"
                       }`}
                     >
                       {tag}({count})
@@ -139,7 +139,7 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
             ) : null}
 
             <div className="relative w-full sm:w-72">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={providerSearch}
                 onChange={(e) => setProviderSearch(e.currentTarget.value)}
@@ -173,9 +173,9 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
         </div>
 
         <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="lg:min-h-0 lg:overflow-auto lg:pr-1">
+          <div className="lg:min-h-0 lg:overflow-auto lg:pr-1 scrollbar-overlay">
             {providersLoading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Spinner size="sm" />
                 加载中…
               </div>
@@ -248,7 +248,7 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
                 </span>
               </div>
 
-              <div className="mt-3 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pr-1">
+              <div className="mt-3 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pr-1 scrollbar-overlay">
                 {enabledProviders.length === 0 ? (
                   <div className="text-sm text-muted-foreground">当前没有已启用的 Provider。</div>
                 ) : (

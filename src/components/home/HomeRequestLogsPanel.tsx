@@ -293,8 +293,8 @@ const RequestLogCard = memo(function RequestLogCard({
           isSelected
             ? "bg-indigo-50/50 border-indigo-200/80 shadow-[0_0_0_1px_rgba(99,102,241,0.08),0_2px_8px_rgba(99,102,241,0.1)] dark:bg-indigo-950/30 dark:border-indigo-600/40 dark:shadow-[0_0_0_1px_rgba(99,102,241,0.15),0_2px_8px_rgba(99,102,241,0.12)]"
             : auditMeta.muted
-              ? "bg-slate-50/85 border-slate-200/70 hover:bg-slate-100/85 hover:border-slate-300/70 dark:bg-slate-800/70 dark:border-slate-700/80 dark:hover:bg-slate-800/90 dark:hover:border-slate-600/80"
-              : "bg-white/80 border-slate-200/60 hover:bg-slate-50/80 hover:border-slate-300/60 hover:shadow-[0_2px_8px_rgba(15,23,42,0.06)] dark:bg-slate-800/80 dark:border-slate-700/60 dark:hover:bg-slate-750/80 dark:hover:border-slate-600/60 dark:hover:shadow-[0_2px_8px_rgba(0,0,0,0.2)]"
+              ? "bg-secondary/85 border-border/70 hover:bg-secondary/85 hover:border-border/70 dark:bg-secondary/70 dark:border-border/80 dark:hover:bg-secondary/90 dark:hover:border-border/80"
+              : "bg-white/80 border-border/60 hover:bg-secondary/80 hover:border-border/60 hover:shadow-[0_2px_8px_rgba(15,23,42,0.06)] dark:bg-secondary/80 dark:border-border dark:hover:bg-muted/80 dark:hover:border-border dark:hover:shadow-[0_2px_8px_rgba(0,0,0,0.2)]"
         )}
       >
         {/* Selection indicator */}
@@ -303,7 +303,7 @@ const RequestLogCard = memo(function RequestLogCard({
             "absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full transition-all duration-200",
             isSelected
               ? "bg-gradient-to-b from-indigo-500 to-indigo-400 opacity-100 shadow-[2px_0_8px_rgba(99,102,241,0.2)]"
-              : "bg-slate-300 opacity-0 group-hover/item:opacity-50 dark:bg-slate-500"
+              : "bg-muted opacity-0 group-hover/item:opacity-50 dark:bg-muted"
           )}
         />
 
@@ -363,10 +363,10 @@ const RequestLogCard = memo(function RequestLogCard({
 
               {compactMode && (
                 <span
-                  className="inline-flex min-w-0 items-center gap-1 rounded-md bg-slate-100/75 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-700/55 dark:text-slate-200"
+                  className="inline-flex min-w-0 items-center gap-1 rounded-md bg-secondary/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground dark:bg-secondary/55 dark:text-foreground"
                   title={providerTitle}
                 >
-                  <Server className="h-3 w-3 shrink-0 text-slate-400 dark:text-slate-500" />
+                  <Server className="h-3 w-3 shrink-0 text-muted-foreground" />
                   <span className={compactTextClass}>{providerText}</span>
                 </span>
               )}
@@ -397,7 +397,7 @@ const RequestLogCard = memo(function RequestLogCard({
 
             <span
               className={cn(
-                "flex shrink-0 items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap",
+                "flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap",
                 compactMode ? "self-start" : "ml-auto w-[150px] justify-end"
               )}
             >
@@ -407,17 +407,15 @@ const RequestLogCard = memo(function RequestLogCard({
           </div>
 
           {!compactMode && auditMeta.summary ? (
-            <div className="mb-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-              {auditMeta.summary}
-            </div>
+            <div className="mb-1.5 text-[11px] text-muted-foreground">{auditMeta.summary}</div>
           ) : null}
 
           {!compactMode && (
             <div className="flex items-start gap-3 text-[11px]">
               <div className="flex flex-col gap-y-0.5 w-[110px] shrink-0" title={providerTitle}>
                 <div className="flex items-center gap-1 h-4">
-                  <Server className="h-3 w-3 text-slate-400/80 dark:text-slate-500/80 shrink-0" />
-                  <span className="truncate font-semibold text-slate-600 dark:text-slate-300">
+                  <Server className="h-3 w-3 text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0" />
+                  <span className="truncate font-semibold text-muted-foreground dark:text-secondary-foreground">
                     {providerText}
                   </span>
                 </div>
@@ -430,13 +428,13 @@ const RequestLogCard = memo(function RequestLogCard({
                           contentClassName="max-w-[400px] break-words"
                           placement="top"
                         >
-                          <span className="text-[11px] text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-help">
+                          <span className="text-[11px] text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400 cursor-help">
                             {routeMeta.label}
                           </span>
                         </Tooltip>
                       ) : (
                         <span
-                          className="text-[11px] text-slate-400 dark:text-slate-500 cursor-help"
+                          className="text-[11px] text-muted-foreground cursor-help"
                           title={routeMeta.tooltipText}
                         >
                           {routeMeta.label}
@@ -445,7 +443,7 @@ const RequestLogCard = memo(function RequestLogCard({
                     ) : null}
 
                     {showCostMultiplier ? (
-                      <span className="inline-flex items-center text-[11px] font-medium text-slate-500 dark:text-slate-400 shrink-0">
+                      <span className="inline-flex items-center text-[11px] font-medium text-muted-foreground shrink-0">
                         {costMultiplierText}
                       </span>
                     ) : null}
@@ -453,35 +451,41 @@ const RequestLogCard = memo(function RequestLogCard({
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 gap-x-3 gap-y-0.5 flex-1 text-slate-500 dark:text-slate-400">
+              <div className="grid grid-cols-4 gap-x-3 gap-y-0.5 flex-1 text-muted-foreground">
                 <div className="flex items-center gap-1 h-4" title="Input Tokens">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">输入</span>
-                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    输入
+                  </span>
+                  <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                     {formatInteger(effectiveInputTokens)}
                   </span>
                 </div>
                 <div className="flex items-center gap-1 h-4" title="Cache Write">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
                     缓存创建
                   </span>
                   {cacheWrite.tokens != null ? (
                     <>
-                      <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                      <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                         {formatInteger(cacheWrite.tokens)}
                       </span>
                       {cacheWrite.ttl && cacheWrite.tokens > 0 && (
-                        <span className="text-slate-400/70 dark:text-slate-500/70 text-[10px]">
+                        <span className="text-muted-foreground/70 dark:text-muted-foreground/70 text-[10px]">
                           ({cacheWrite.ttl})
                         </span>
                       )}
                     </>
                   ) : (
-                    <span className="text-slate-300/60 dark:text-slate-600/60">—</span>
+                    <span className="text-muted-foreground/60 dark:text-muted-foreground/60">
+                      —
+                    </span>
                   )}
                 </div>
                 <div className="flex items-center gap-1 h-4" title="TTFB">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">首字</span>
-                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    首字
+                  </span>
+                  <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                     {ttfbMs != null ? formatDurationMs(ttfbMs) : "—"}
                   </span>
                 </div>
@@ -489,34 +493,42 @@ const RequestLogCard = memo(function RequestLogCard({
                   className="flex items-center gap-1 h-4"
                   title={costUsdText === "—" ? undefined : costUsdText}
                 >
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">花费</span>
-                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    花费
+                  </span>
+                  <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                     {costUsdText}
                   </span>
                   {isPriorityServiceTier && <FastModeBadge showCustomTooltip={showCustomTooltip} />}
                 </div>
 
                 <div className="flex items-center gap-1 h-4" title="Output Tokens">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">输出</span>
-                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    输出
+                  </span>
+                  <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                     {formatInteger(log.output_tokens)}
                   </span>
                 </div>
                 <div className="flex items-center gap-1 h-4" title="Cache Read">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
                     缓存读取
                   </span>
                   {log.cache_read_input_tokens != null ? (
-                    <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                    <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                       {formatInteger(log.cache_read_input_tokens)}
                     </span>
                   ) : (
-                    <span className="text-slate-300/60 dark:text-slate-600/60">—</span>
+                    <span className="text-muted-foreground/60 dark:text-muted-foreground/60">
+                      —
+                    </span>
                   )}
                 </div>
                 <div className="flex items-center gap-1 h-4" title="Duration">
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">耗时</span>
-                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    耗时
+                  </span>
+                  <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                     {formatDurationMs(displayDurationMs)}
                   </span>
                 </div>
@@ -528,13 +540,17 @@ const RequestLogCard = memo(function RequestLogCard({
                       : undefined
                   }
                 >
-                  <span className="text-slate-400/80 dark:text-slate-500/80 shrink-0">速率</span>
+                  <span className="text-muted-foreground/80 dark:text-muted-foreground/80 shrink-0">
+                    速率
+                  </span>
                   {outputTokensPerSecond != null ? (
-                    <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
+                    <span className="font-mono tabular-nums text-secondary-foreground dark:text-foreground truncate">
                       {formatTokensPerSecondShort(outputTokensPerSecond)}
                     </span>
                   ) : (
-                    <span className="text-slate-300/60 dark:text-slate-600/60">—</span>
+                    <span className="text-muted-foreground/60 dark:text-muted-foreground/60">
+                      —
+                    </span>
                   )}
                 </div>
               </div>
@@ -736,14 +752,14 @@ export function HomeRequestLogsPanel({
 
         <div className="flex items-center gap-2">
           {showSummaryText ? (
-            <div className="text-xs text-slate-500 dark:text-slate-400">{summaryText}</div>
+            <div className="text-xs text-muted-foreground">{summaryText}</div>
           ) : null}
           {showOpenLogsPageButton && (
             <Button
               onClick={() => navigate("/logs")}
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 px-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+              className="h-8 gap-1 px-2 text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
               disabled={requestLogsAvailable === false}
               title="打开代理记录页"
             >
@@ -756,7 +772,7 @@ export function HomeRequestLogsPanel({
               onClick={onRefreshRequestLogs}
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 px-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+              className="h-8 gap-1 px-2 text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
               disabled={
                 requestLogsAvailable === false || requestLogsLoading || requestLogsRefreshing
               }
@@ -772,7 +788,7 @@ export function HomeRequestLogsPanel({
           ) : null}
           {showCompactModeToggle ? (
             <div className="flex items-center gap-1.5 pl-1">
-              <span className="text-xs text-slate-500 dark:text-slate-400">简洁模式</span>
+              <span className="text-xs text-muted-foreground">简洁模式</span>
               <Switch
                 checked={effectiveCompactMode}
                 onCheckedChange={handleCompactModeChange}
@@ -906,10 +922,10 @@ const RequestLogsList = memo(function RequestLogsList({
       </div>
 
       {requestLogsAvailable === false ? (
-        <div className="p-4 text-sm text-slate-600 dark:text-slate-400">数据不可用</div>
+        <div className="p-4 text-sm text-muted-foreground">数据不可用</div>
       ) : renderedRequestLogs.length === 0 ? (
         requestLogsLoading ? (
-          <div className="flex items-center justify-center gap-2 p-4 text-sm text-slate-600 dark:text-slate-400">
+          <div className="flex items-center justify-center gap-2 p-4 text-sm text-muted-foreground">
             <Spinner size="sm" />
             加载中…
           </div>

@@ -31,7 +31,6 @@ import type { HomeOAuthQuotaRow } from "./homeOAuthQuotaTypes";
 import { HomeRequestLogsPanel } from "./HomeRequestLogsPanel";
 import { HomeTodayProviderUsageOverview } from "./HomeTodayProviderUsageOverview";
 import { HomeUsageSection } from "./HomeUsageSection";
-import { HomeWorkStatusCard } from "./HomeWorkStatusCard";
 import type { HomeCliWorkspaceConfig } from "./homeWorkspaceConfigTypes";
 
 export type HomeOverviewUsageView = "summary" | "usageChart";
@@ -252,7 +251,7 @@ function didKeysChange(current: string[], previous: string[]) {
 
 function OverviewPanelFallback() {
   return (
-    <div className="flex h-full items-center justify-center text-sm text-slate-600 dark:text-slate-400">
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       <div className="flex items-center gap-3">
         <Spinner />
         <span>加载面板中…</span>
@@ -278,13 +277,6 @@ export type HomeOverviewPanelProps = {
   activeModeByCli: Record<CliKey, number | null>;
   activeModeToggling: Record<CliKey, boolean>;
   onSetCliActiveMode: (cliKey: CliKey, modeId: number | null) => void;
-
-  cliProxyLoading: boolean;
-  cliProxyAvailable: boolean | null;
-  cliProxyEnabled: Record<CliKey, boolean>;
-  cliProxyAppliedToCurrentGateway: Record<CliKey, boolean | null>;
-  cliProxyToggling: Record<CliKey, boolean>;
-  onSetCliProxyEnabled: (cliKey: CliKey, enabled: boolean) => void;
 
   activeSessions: GatewayActiveSession[];
   activeSessionsLoading: boolean;
@@ -381,12 +373,6 @@ export function HomeOverviewPanel({
   activeModeByCli,
   activeModeToggling,
   onSetCliActiveMode,
-  cliProxyLoading,
-  cliProxyAvailable,
-  cliProxyEnabled,
-  cliProxyAppliedToCurrentGateway,
-  cliProxyToggling,
-  onSetCliProxyEnabled,
   activeSessions,
   activeSessionsLoading,
   activeSessionsAvailable,
@@ -604,7 +590,7 @@ export function HomeOverviewPanel({
 
   const overviewInfoPanel = (
     <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="shrink-0">
+      <div className="shrink-0 overflow-x-auto scrollbar-overlay">
         <TabList
           ariaLabel="概览状态切换"
           items={legacySessionsTabs}
@@ -615,7 +601,7 @@ export function HomeOverviewPanel({
           }
           onChange={setSessionsTab}
           size="sm"
-          className="w-full overflow-x-auto"
+          className="w-max min-w-full"
           buttonClassName="whitespace-nowrap flex-1"
         />
       </div>
@@ -653,7 +639,7 @@ export function HomeOverviewPanel({
         ) : displayedCircuits.length === 0 ? (
           <EmptyState title="当前没有熔断中的 Provider" />
         ) : (
-          <div className="h-full overflow-y-auto pr-1">
+          <div className="h-full overflow-y-auto pr-1 scrollbar-overlay">
             <div className="space-y-3">
               {displayedCircuits.map((row) => {
                 const remaining =
@@ -665,7 +651,7 @@ export function HomeOverviewPanel({
                 return (
                   <div
                     key={`${row.cli_key}:${row.provider_id}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/50"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/70 px-3 py-2 dark:border-border dark:bg-secondary/50"
                   >
                     <div className="min-w-0 flex flex-1 items-center gap-2.5">
                       <CliBrandIcon
@@ -673,13 +659,13 @@ export function HomeOverviewPanel({
                         className="h-4 w-4 shrink-0 rounded-[4px] object-contain"
                       />
                       <div
-                        className="truncate text-sm font-medium text-slate-700 dark:text-slate-300"
+                        className="truncate text-sm font-medium text-foreground"
                         title={row.provider_name}
                       >
                         {row.provider_name || "未知"}
                       </div>
                     </div>
-                    <div className="shrink-0 font-mono text-xs text-slate-500 dark:text-slate-400">
+                    <div className="shrink-0 font-mono text-xs text-muted-foreground">
                       {remaining}
                     </div>
                     <Button
@@ -705,26 +691,7 @@ export function HomeOverviewPanel({
 
   const logsPrimaryInfoPanel = (
     <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="shrink-0 pb-3">
-        <HomeWorkStatusCard
-          layout="vertical"
-          chrome="plain"
-          cliProxyLoading={cliProxyLoading}
-          cliProxyAvailable={cliProxyAvailable}
-          cliProxyEnabled={cliProxyEnabled}
-          cliProxyAppliedToCurrentGateway={cliProxyAppliedToCurrentGateway}
-          cliProxyToggling={cliProxyToggling}
-          onSetCliProxyEnabled={onSetCliProxyEnabled}
-          sortModes={sortModes}
-          sortModesLoading={sortModesLoading}
-          sortModesAvailable={sortModesAvailable}
-          activeModeByCli={activeModeByCli}
-          activeModeToggling={activeModeToggling}
-          onSetCliActiveMode={onSetCliActiveMode}
-        />
-      </div>
-
-      <div className="mt-3 shrink-0">
+      <div className="shrink-0 overflow-x-auto scrollbar-overlay">
         <TabList
           ariaLabel="新布局信息切换"
           items={logsPrimaryTabs}
@@ -735,7 +702,7 @@ export function HomeOverviewPanel({
           }
           onChange={(next) => setSessionsTab(next as HomeOverviewTabKey)}
           size="sm"
-          className="w-full overflow-x-auto"
+          className="w-max min-w-full"
           buttonClassName="whitespace-nowrap flex-1"
         />
       </div>
@@ -745,7 +712,7 @@ export function HomeOverviewPanel({
           displayedCircuits.length === 0 ? (
             <EmptyState title="当前没有熔断中的 Provider" />
           ) : (
-            <div className="h-full overflow-y-auto pr-1">
+            <div className="h-full overflow-y-auto pr-1 scrollbar-overlay">
               <div className="space-y-3">
                 {displayedCircuits.map((row) => {
                   const remaining =
@@ -757,7 +724,7 @@ export function HomeOverviewPanel({
                   return (
                     <div
                       key={`${row.cli_key}:${row.provider_id}`}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/50"
+                      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/70 px-3 py-2 dark:border-border dark:bg-secondary/50"
                     >
                       <div className="min-w-0 flex flex-1 items-center gap-2.5">
                         <CliBrandIcon
@@ -765,13 +732,13 @@ export function HomeOverviewPanel({
                           className="h-4 w-4 shrink-0 rounded-[4px] object-contain"
                         />
                         <div
-                          className="truncate text-sm font-medium text-slate-700 dark:text-slate-300"
+                          className="truncate text-sm font-medium text-foreground"
                           title={row.provider_name}
                         >
                           {row.provider_name || "未知"}
                         </div>
                       </div>
-                      <div className="shrink-0 font-mono text-xs text-slate-500 dark:text-slate-400">
+                      <div className="shrink-0 font-mono text-xs text-muted-foreground">
                         {remaining}
                       </div>
                       <Button
@@ -808,7 +775,7 @@ export function HomeOverviewPanel({
 
   return (
     <div className="flex flex-col h-full gap-4">
-      {!logsPrimaryLayout ? (
+      {!logsPrimaryLayout && showUsageRow ? (
         <div className="shrink-0">
           {showHomeHeatmap && showHomeUsage ? (
             <div className="space-y-4">
@@ -823,55 +790,17 @@ export function HomeOverviewPanel({
                   onRefreshUsageHeatmap={onRefreshUsageHeatmap}
                 />
               </div>
-
-              <div className="flex">
-                <HomeWorkStatusCard
-                  layout="horizontal"
-                  cliProxyLoading={cliProxyLoading}
-                  cliProxyAvailable={cliProxyAvailable}
-                  cliProxyEnabled={cliProxyEnabled}
-                  cliProxyAppliedToCurrentGateway={cliProxyAppliedToCurrentGateway}
-                  cliProxyToggling={cliProxyToggling}
-                  onSetCliProxyEnabled={onSetCliProxyEnabled}
-                />
-              </div>
-            </div>
-          ) : showUsageRow ? (
-            <div className="grid gap-4 lg:grid-cols-12 lg:items-stretch">
-              <div className="flex lg:col-span-4">
-                <HomeWorkStatusCard
-                  layout="vertical"
-                  cliProxyLoading={cliProxyLoading}
-                  cliProxyAvailable={cliProxyAvailable}
-                  cliProxyEnabled={cliProxyEnabled}
-                  cliProxyAppliedToCurrentGateway={cliProxyAppliedToCurrentGateway}
-                  cliProxyToggling={cliProxyToggling}
-                  onSetCliProxyEnabled={onSetCliProxyEnabled}
-                />
-              </div>
-
-              <div className="flex lg:col-span-8">
-                <HomeUsageSection
-                  devPreviewEnabled={devPreviewEnabled}
-                  showHeatmap={showHomeHeatmap}
-                  showUsageChart={showHomeUsage}
-                  usageWindowDays={usageWindowDays}
-                  usageHeatmapRows={usageHeatmapRows}
-                  usageHeatmapLoading={usageHeatmapLoading}
-                  onRefreshUsageHeatmap={onRefreshUsageHeatmap}
-                />
-              </div>
             </div>
           ) : (
             <div className="flex">
-              <HomeWorkStatusCard
-                layout="horizontal"
-                cliProxyLoading={cliProxyLoading}
-                cliProxyAvailable={cliProxyAvailable}
-                cliProxyEnabled={cliProxyEnabled}
-                cliProxyAppliedToCurrentGateway={cliProxyAppliedToCurrentGateway}
-                cliProxyToggling={cliProxyToggling}
-                onSetCliProxyEnabled={onSetCliProxyEnabled}
+              <HomeUsageSection
+                devPreviewEnabled={devPreviewEnabled}
+                showHeatmap={showHomeHeatmap}
+                showUsageChart={showHomeUsage}
+                usageWindowDays={usageWindowDays}
+                usageHeatmapRows={usageHeatmapRows}
+                usageHeatmapLoading={usageHeatmapLoading}
+                onRefreshUsageHeatmap={onRefreshUsageHeatmap}
               />
             </div>
           )}
@@ -884,11 +813,13 @@ export function HomeOverviewPanel({
           <div className="flex min-h-0 flex-col gap-4 lg:col-span-8">
             <div className="shrink-0">
               {personalizedUsageView === "summary" ? (
-                <HomeTodayProviderUsageOverview
-                  devPreviewEnabled={devPreviewEnabled}
-                  activeSessions={displayedActiveSessions}
-                  traces={traces}
-                />
+                <div className="space-y-4">
+                  <HomeTodayProviderUsageOverview
+                    devPreviewEnabled={devPreviewEnabled}
+                    activeSessions={displayedActiveSessions}
+                    traces={traces}
+                  />
+                </div>
               ) : (
                 <HomeUsageSection
                   devPreviewEnabled={devPreviewEnabled}

@@ -16,7 +16,20 @@ export default {
     },
     extend: {
       fontFamily: {
+        sans: [
+          "Plus Jakarta Sans",
+          "DM Sans",
+          "ui-sans-serif",
+          "system-ui",
+          "-apple-system",
+          "Segoe UI",
+          "Roboto",
+          "Helvetica Neue",
+          "Arial",
+          "sans-serif",
+        ],
         mono: [
+          "JetBrains Mono",
           "ui-monospace",
           "SF Mono",
           "Menlo",
@@ -61,7 +74,7 @@ export default {
         accent: {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))",
-          secondary: "#4D7CFF",
+          secondary: "#0EA5E9",
         },
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
@@ -70,13 +83,31 @@ export default {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
-        brand: {
-          DEFAULT: "#0052FF",
-          secondary: "#4D7CFF",
+        surface: {
+          canvas: "hsl(var(--surface-canvas))",
+          panel: "hsl(var(--surface-panel))",
+          raised: "hsl(var(--surface-raised))",
+          inset: "hsl(var(--surface-inset))",
+          muted: "hsl(var(--surface-muted))",
         },
-        success: { DEFAULT: "#16A34A" },
-        warning: { DEFAULT: "#F97316" },
-        danger: { DEFAULT: "#DC2626" },
+        line: {
+          subtle: "hsl(var(--border-subtle))",
+          DEFAULT: "hsl(var(--border-default))",
+          strong: "hsl(var(--border-strong))",
+        },
+        state: {
+          hover: "hsl(var(--state-hover))",
+          selected: "hsl(var(--state-selected))",
+          "selected-foreground": "hsl(var(--state-selected-foreground))",
+          "selected-border": "hsl(var(--state-selected-border))",
+        },
+        brand: {
+          DEFAULT: "#2563EB",
+          secondary: "#0EA5E9",
+        },
+        success: { DEFAULT: "#34D399" },
+        warning: { DEFAULT: "#FB923C" },
+        danger: { DEFAULT: "#F87171" },
         info: { DEFAULT: "#0EA5E9" },
         chart: {
           1: "hsl(var(--chart-1))",
@@ -94,6 +125,8 @@ export default {
           "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
+          panel: "hsl(var(--sidebar-panel))",
+          muted: "hsl(var(--sidebar-muted))",
         },
         // Legacy bridge (deprecated — migrate to shadcn tokens above)
         bg: {
@@ -112,12 +145,15 @@ export default {
         },
       },
       borderRadius: {
+        "3xl": "calc(var(--radius) + 8px)",
+        "2xl": "calc(var(--radius) + 4px)",
+        xl: "calc(var(--radius) + 2px)",
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        card: "0 1px 3px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.06)",
+        card: "none",
       },
       keyframes: {
         "accordion-down": {
