@@ -223,7 +223,7 @@ This is a Tauri desktop app targeting 1080p+ screens:
 - Compact toolbar gaps: `gap-2`; form rows usually use `gap-2` or `gap-3`
 - Page section gaps: `gap-4` for dense panels, `gap-6` for major route regions
 - Card padding: `p-3 sm:p-4` (sm) or `p-4 sm:p-5 md:p-6` (md)
-- Sidebar: always visible, 232px wide (`w-[232px]`)
+- Sidebar: always visible, 248px wide (`w-[248px]`)
 - Avoid marketing-page density in product surfaces: no oversized hero type,
   decorative panels, or large empty bands unless the route explicitly needs an
   empty state.

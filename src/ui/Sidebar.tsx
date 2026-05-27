@@ -145,7 +145,7 @@ export function Sidebar({ className }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "sticky top-0 h-screen w-[232px] shrink-0",
+        "sticky top-0 h-screen w-[248px] shrink-0",
         "border-r border-sidebar-border bg-sidebar",
         className
       )}
