@@ -156,15 +156,12 @@ export function Sidebar({ className }: SidebarProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               {/* Premium abstract AIO high-tech SVG Logo */}
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm shadow-primary/10">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm shadow-primary/10">
                 <img src="/logo.jpg" alt="AIO Logo" className="h-full w-full object-cover" />
               </div>
               <div className="flex flex-col">
-                <span className="text-[14px] font-extrabold tracking-tight text-sidebar-foreground">
+                <span className="text-[16px] font-extrabold tracking-tight text-sidebar-foreground">
                   AIO Coding Hub
-                </span>
-                <span className="text-[9px] font-bold tracking-wider text-muted-foreground/60 uppercase -mt-0.5">
-                  Desktop Gateway
                 </span>
               </div>
             </div>
