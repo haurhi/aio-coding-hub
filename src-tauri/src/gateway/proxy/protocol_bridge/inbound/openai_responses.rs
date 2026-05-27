@@ -334,6 +334,63 @@ fn sse_frame(event_type: &str, payload: Value) -> Bytes {
     Bytes::from(format!("event: {event_type}\ndata: {data}\n\n"))
 }
 
+fn usage_value(usage: &IRUsage) -> Option<Value> {
+    let has_usage = usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.cache_creation_input_tokens.is_some()
+        || usage.cache_creation_5m_input_tokens.is_some()
+        || usage.cache_creation_1h_input_tokens.is_some()
+        || usage.cache_read_input_tokens.is_some();
+    if !has_usage {
+        return None;
+    }
+
+    let mut value = json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.input_tokens.saturating_add(usage.output_tokens)
+    });
+    if let Some(tokens) = usage.cache_read_input_tokens {
+        value["input_tokens_details"] = json!({"cached_tokens": tokens});
+        value["cache_read_input_tokens"] = json!(tokens);
+    }
+    if let Some(tokens) = usage.cache_creation_input_tokens {
+        value["cache_creation_input_tokens"] = json!(tokens);
+    }
+    if let Some(tokens) = usage.cache_creation_5m_input_tokens {
+        value["cache_creation_5m_input_tokens"] = json!(tokens);
+    }
+    if let Some(tokens) = usage.cache_creation_1h_input_tokens {
+        value["cache_creation_1h_input_tokens"] = json!(tokens);
+    }
+    Some(value)
+}
+
+fn completed_response_payload(
+    ctx: &BridgeContext,
+    stop_reason: &IRStopReason,
+    usage: &IRUsage,
+) -> Value {
+    let status = match stop_reason {
+        IRStopReason::MaxTokens => "incomplete",
+        _ => "completed",
+    };
+    let mut payload = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "",
+            "object": "response",
+            "status": status,
+            "model": ctx.requested_model.as_deref().unwrap_or(""),
+            "output": []
+        }
+    });
+    if let Some(usage) = usage_value(usage) {
+        payload["response"]["usage"] = usage;
+    }
+    payload
+}
+
 fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>, BridgeError> {
     let frames = match chunk {
         IRStreamChunk::MessageStart { id, model, .. } => {
@@ -503,20 +560,11 @@ fn render_chunk(chunk: &IRStreamChunk, ctx: &BridgeContext) -> Result<Vec<Bytes>
             }
             frames
         }
-        IRStreamChunk::MessageDelta { .. } => Vec::new(),
-        IRStreamChunk::MessageStop => vec![sse_frame(
+        IRStreamChunk::MessageDelta { stop_reason, usage } => vec![sse_frame(
             "response.completed",
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "",
-                    "object": "response",
-                    "status": "completed",
-                    "model": ctx.requested_model.as_deref().unwrap_or(""),
-                    "output": []
-                }
-            }),
+            completed_response_payload(ctx, stop_reason, usage),
         )],
+        IRStreamChunk::MessageStop => Vec::new(),
         IRStreamChunk::Ping => Vec::new(),
     };
 

@@ -1833,6 +1833,9 @@ mod tests {
         assert_eq!(detail.status, Some(200));
         assert_eq!(detail.error_code, None);
         assert_eq!(detail.final_provider_id, provider_id);
+        assert_eq!(detail.input_tokens, Some(1));
+        assert_eq!(detail.output_tokens, Some(3));
+        assert_eq!(detail.total_tokens, Some(4));
 
         sse_task.abort();
     }

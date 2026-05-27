@@ -243,6 +243,12 @@ mod tests {
         assert_eq!(done_item["role"], "assistant");
         assert_eq!(done_item["content"][0]["type"], "output_text");
         assert_eq!(done_item["content"][0]["text"], "hello");
+
+        let usage = crate::usage::parse_usage_from_json_or_sse_bytes("codex", sse_text.as_bytes())
+            .expect("translated responses SSE should retain usage for request logging");
+        assert_eq!(usage.metrics.input_tokens, Some(3));
+        assert_eq!(usage.metrics.output_tokens, Some(1));
+        assert_eq!(usage.metrics.total_tokens, Some(4));
     }
 
     #[test]
