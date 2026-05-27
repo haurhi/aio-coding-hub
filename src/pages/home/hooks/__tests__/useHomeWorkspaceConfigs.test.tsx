@@ -168,7 +168,7 @@ describe("pages/home/hooks/useHomeWorkspaceConfigs", () => {
     expect(result.current).toEqual([
       {
         cliKey: "claude",
-        cliLabel: "Claude Code",
+        cliLabel: "Claude",
         workspaceId: 2,
         workspaceName: "Claude Workspace",
         loading: true,

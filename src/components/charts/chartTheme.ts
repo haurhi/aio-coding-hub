@@ -68,7 +68,7 @@ export const AXIS_STYLE = getAxisStyle(false);
  */
 export function getGridLineStyle(isDark: boolean) {
   return {
-    stroke: isDark ? "rgba(100, 150, 255, 0.15)" : "rgba(0, 82, 255, 0.10)",
+    stroke: isDark ? "rgba(148, 163, 184, 0.08)" : "rgba(15, 23, 42, 0.05)",
     strokeDasharray: "3 3",
   };
 }

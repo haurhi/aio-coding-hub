@@ -116,6 +116,32 @@ export default {
           4: "hsl(var(--chart-4))",
           5: "hsl(var(--chart-5))",
         },
+        heatmap: {
+          0: "var(--heatmap-l0)",
+          1: "var(--heatmap-l1)",
+          2: "var(--heatmap-l2)",
+          3: "var(--heatmap-l3)",
+          4: "var(--heatmap-l4)",
+        },
+        page: {
+          accent: "hsl(var(--page-accent-color))",
+          secondary: "hsl(var(--page-secondary-color))",
+        },
+        "theme-option": {
+          light: "hsl(var(--theme-option-light))",
+          dark: "hsl(var(--theme-option-dark))",
+          system: "hsl(var(--theme-option-system))",
+        },
+        glass: {
+          DEFAULT: "hsl(var(--glass-surface))",
+          border: "hsl(var(--glass-border))",
+        },
+        trace: {
+          "live-from": "hsl(var(--trace-live-from))",
+          "live-to": "hsl(var(--trace-live-to))",
+          "metric-surface": "hsl(var(--trace-metric-surface))",
+          "metric-border": "hsl(var(--trace-metric-border))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -127,6 +153,11 @@ export default {
           ring: "hsl(var(--sidebar-ring))",
           panel: "hsl(var(--sidebar-panel))",
           muted: "hsl(var(--sidebar-muted))",
+          control: "hsl(var(--sidebar-control))",
+          "control-border": "hsl(var(--sidebar-control-border))",
+          "control-muted": "hsl(var(--sidebar-control-muted))",
+          "control-inset": "hsl(var(--sidebar-control-inset))",
+          "option-active": "hsl(var(--sidebar-option-active))",
         },
         // Legacy bridge (deprecated — migrate to shadcn tokens above)
         bg: {
@@ -144,6 +175,9 @@ export default {
           light: "var(--color-border-light)",
         },
       },
+      spacing: {
+        "4.5": "1.125rem",
+      },
       borderRadius: {
         "3xl": "calc(var(--radius) + 8px)",
         "2xl": "calc(var(--radius) + 4px)",
@@ -154,6 +188,28 @@ export default {
       },
       boxShadow: {
         card: "none",
+        "heatmap-strong": "var(--heatmap-l4-glow)",
+        "page-accent-soft": "var(--shadow-page-accent-soft)",
+        "sidebar-control": "var(--shadow-sidebar-control)",
+        "sidebar-control-hover": "var(--shadow-sidebar-control-hover)",
+        "sidebar-option": "var(--shadow-sidebar-option)",
+        "trace-metric": "var(--shadow-trace-metric)",
+        "trace-card": "var(--shadow-trace-card)",
+        "trace-card-hover": "var(--shadow-trace-card-hover)",
+        "trace-panel-hover": "var(--shadow-trace-panel-hover)",
+        "trace-panel-live-hover": "var(--shadow-trace-panel-live-hover)",
+        "pill-subtle": "var(--shadow-pill-subtle)",
+        "status-dot": "0 0 8px var(--tw-shadow-color)",
+        "status-dot-sm": "0 0 5px var(--tw-shadow-color)",
+        "request-log-selected": "var(--shadow-request-log-selected)",
+        "request-log-hover": "var(--shadow-request-log-hover)",
+        "request-log-hover-dark": "var(--shadow-request-log-hover-dark)",
+      },
+      dropShadow: {
+        "page-accent": "var(--drop-shadow-page-accent)",
+      },
+      transitionDuration: {
+        400: "400ms",
       },
       keyframes: {
         "accordion-down": {

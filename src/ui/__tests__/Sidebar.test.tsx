@@ -109,8 +109,8 @@ describe("ui/Sidebar", () => {
     const gatewayStatus = screen.getByLabelText("网关状态：检查中，端口 —");
 
     expect(gatewayStatus).toBeInTheDocument();
-    expect(within(gatewayStatus).queryByText("检查中")).not.toBeInTheDocument();
-    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(within(gatewayStatus).getByText("网关检查中")).toBeInTheDocument();
+    expect(screen.getByText("Port: —")).toBeInTheDocument();
     expect(screen.queryByText("NEW")).not.toBeInTheDocument();
   });
 
@@ -314,8 +314,8 @@ describe("ui/Sidebar", () => {
     const gatewayStatus = screen.getByLabelText("网关状态：已停止，端口 37123");
     expect(gatewayStatus).toBeInTheDocument();
     expect(gatewayStatus).toHaveAttribute("aria-label", expect.stringContaining("已停止"));
-    expect(within(gatewayStatus).queryByText("已停止")).not.toBeInTheDocument();
-    expect(within(gatewayStatus).getByText("37123")).toHaveClass("ml-auto", "text-right");
+    expect(within(gatewayStatus).getByText("网关已关闭")).toBeInTheDocument();
+    expect(screen.getByText("Port: 37123")).toBeInTheDocument();
   });
 
   it("renders gateway status and Claude/Codex/Gemini proxy switches in the bottom panel", () => {
@@ -334,9 +334,8 @@ describe("ui/Sidebar", () => {
     const gatewayStatus = screen.getByLabelText("网关状态：运行中，端口 37124");
     expect(gatewayStatus).toBeInTheDocument();
     expect(gatewayStatus).toHaveAttribute("aria-label", expect.stringContaining("运行中"));
-    expect(within(gatewayStatus).getByText("网关状态")).toBeInTheDocument();
-    expect(within(gatewayStatus).queryByText("运行中")).not.toBeInTheDocument();
-    expect(within(gatewayStatus).getByText("37124")).toHaveClass("ml-auto", "text-right");
+    expect(within(gatewayStatus).getByText("网关已开启")).toBeInTheDocument();
+    expect(screen.getByText("Port: 37124")).toBeInTheDocument();
 
     expect(screen.getByRole("switch", { name: "Claude 代理开关" })).toHaveAttribute(
       "data-state",

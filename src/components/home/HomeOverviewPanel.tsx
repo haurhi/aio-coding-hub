@@ -316,7 +316,7 @@ export type HomeOverviewPanelProps = {
 const PREVIEW_WORKSPACE_CONFIGS: HomeCliWorkspaceConfig[] = [
   {
     cliKey: "claude",
-    cliLabel: "Claude Code",
+    cliLabel: "Claude",
     workspaceId: 1001,
     workspaceName: "工作区 Alpha",
     loading: false,

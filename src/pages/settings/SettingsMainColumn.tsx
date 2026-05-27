@@ -417,16 +417,16 @@ export function SettingsMainColumn({
             </h3>
             <div className="space-y-1">
               <SettingsRow label="主题">
-                <div className="flex items-center gap-1 rounded-xl border border-line-subtle bg-surface-muted p-0.5">
+                <div className="flex items-center gap-1 rounded-xl border border-line bg-surface-inset p-1">
                   {(["light", "dark", "system"] as const).map((value) => (
                     <button
                       key={value}
                       type="button"
                       className={cn(
-                        "flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition",
+                        "flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold border border-transparent transition-all",
                         theme === value
-                          ? "bg-surface-panel text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
+                          ? "bg-primary text-primary-foreground shadow-sm shadow-primary/15 border-primary cursor-default"
+                          : "text-muted-foreground hover:text-foreground hover:bg-state-hover/50 dark:hover:bg-state-hover/20 cursor-pointer"
                       )}
                       onClick={() => setTheme(value)}
                     >
@@ -436,16 +436,16 @@ export function SettingsMainColumn({
                 </div>
               </SettingsRow>
               <SettingsRow label="首页用量范围">
-                <div className="flex flex-wrap items-center gap-1 rounded-xl border border-line-subtle bg-surface-muted p-0.5">
+                <div className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-surface-inset p-1">
                   {HOME_USAGE_PERIOD_OPTIONS.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       className={cn(
-                        "flex items-center justify-center rounded-lg px-2.5 py-1.5 text-xs transition",
+                        "flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold border border-transparent transition-all",
                         homeUsagePeriod === option.value
-                          ? "bg-surface-panel text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
+                          ? "bg-primary text-primary-foreground shadow-sm shadow-primary/15 border-primary cursor-default"
+                          : "text-muted-foreground hover:text-foreground hover:bg-state-hover/50 dark:hover:bg-state-hover/20 cursor-pointer"
                       )}
                       onClick={() => {
                         setHomeUsagePeriod(option.value);
