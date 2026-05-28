@@ -328,6 +328,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         retry_index,
         max_attempts_per_provider,
     );
+    let mut response_status = status;
 
     let mut abort_body_bytes: Option<Bytes> = None;
     let mut abort_response_headers: Option<axum::http::HeaderMap> = None;
@@ -413,6 +414,18 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                         category = ErrorCategory::NonRetryableClientError;
                         decision = FailoverDecision::Abort;
                     }
+                }
+                if let Some(rule_id) =
+                    upstream_client_error_rules::match_wrapped_non_retryable_client_error(
+                        ctx.cli_key.as_str(),
+                        status,
+                        body_for_scan.as_ref(),
+                    )
+                {
+                    matched_rule_id = Some(rule_id);
+                    category = ErrorCategory::NonRetryableClientError;
+                    decision = FailoverDecision::Abort;
+                    response_status = reqwest::StatusCode::BAD_REQUEST;
                 }
                 // Preserve consumed body/headers so downstream (e.g. Abort
                 // pass-through) can still use them after resp.take().
@@ -661,7 +674,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                         created_at,
                     })
                     .with_completion(RequestCompletion::failure_with_ttfb(
-                        status.as_u16(),
+                        response_status.as_u16(),
                         Some(category.as_str()),
                         error_code,
                         duration_ms,
@@ -672,7 +685,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                 abort_guard.disarm();
 
                 return LoopControl::Return(build_response(
-                    status,
+                    response_status,
                     &response_headers,
                     trace_id.as_str(),
                     Body::from(body_bytes),
@@ -701,7 +714,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                     created_at,
                 })
                 .with_completion(RequestCompletion::failure_with_ttfb(
-                    status.as_u16(),
+                    response_status.as_u16(),
                     Some(category.as_str()),
                     error_code,
                     duration_ms,
@@ -742,7 +755,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
             };
 
             LoopControl::Return(build_response(
-                status,
+                response_status,
                 &response_headers,
                 trace_id.as_str(),
                 body,

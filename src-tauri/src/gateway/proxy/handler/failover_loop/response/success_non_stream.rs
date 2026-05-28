@@ -914,6 +914,22 @@ where
         let quota_exhausted =
             upstream_client_error_rules::match_quota_exhausted(body_bytes.as_ref());
         let oauth_quota_exhausted = quota_exhausted && provider_ctx_owned.auth_mode == "oauth";
+        let matched_non_retryable_rule =
+            upstream_client_error_rules::match_non_retryable_client_error(
+                common.cli_key.as_str(),
+                reqwest::StatusCode::BAD_REQUEST,
+                body_bytes.as_ref(),
+            );
+        let category = if matched_non_retryable_rule.is_some() {
+            ErrorCategory::NonRetryableClientError
+        } else {
+            ErrorCategory::ProviderError
+        };
+        let response_status = if matched_non_retryable_rule.is_some() {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
         let decision = if quota_exhausted {
             FailoverDecision::SwitchProvider
         } else {
@@ -923,15 +939,17 @@ where
             if last.outcome == "success" {
                 last.outcome = format!("body_error: code={error_code}");
             }
-            last.error_category = Some(ErrorCategory::ProviderError.as_str());
+            last.error_category = Some(category.as_str());
             last.error_code = Some(error_code);
             last.decision = Some(decision.as_str());
-            last.reason = Some(if quota_exhausted {
-                "successful HTTP status with quota exhausted error body".to_string()
-            } else {
-                "successful HTTP status with error body".to_string()
+            last.reason = Some(match (quota_exhausted, matched_non_retryable_rule) {
+                (true, _) => "successful HTTP status with quota exhausted error body".to_string(),
+                (false, Some(rule_id)) => {
+                    format!("successful HTTP status with non-retryable error body rule={rule_id}")
+                }
+                (false, None) => "successful HTTP status with error body".to_string(),
             });
-            last.reason_code = Some(ErrorCategory::ProviderError.reason_code());
+            last.reason_code = Some(category.reason_code());
             last.attempt_duration_ms = Some(duration_ms);
         }
 
@@ -945,7 +963,7 @@ where
                     "failed to save OAuth exhausted quota snapshot: {err}"
                 );
             }
-        } else {
+        } else if !matches!(category, ErrorCategory::NonRetryableClientError) {
             let change = provider_router::record_failure_and_emit_transition(
                 provider_router::RecordCircuitArgs::from_state(
                     state,
@@ -1004,8 +1022,8 @@ where
                 created_at,
             })
             .with_completion(RequestCompletion::failure_with_ttfb(
-                StatusCode::BAD_GATEWAY.as_u16(),
-                Some(ErrorCategory::ProviderError.as_str()),
+                response_status.as_u16(),
+                Some(category.as_str()),
                 error_code,
                 duration_ms,
             )),
@@ -1014,7 +1032,7 @@ where
 
         abort_guard.disarm();
         return LoopControl::Return(build_response(
-            StatusCode::BAD_GATEWAY,
+            response_status,
             &response_headers,
             common.trace_id.as_str(),
             Body::from(body_bytes),

@@ -252,6 +252,11 @@ const NON_RETRYABLE_RULES: &[Rule] = &[
         all_of: &["maximum", "bytes"],
     },
     Rule {
+        id: "unsupported_image_content",
+        any_of: &["image_url", "input_image", "image"],
+        all_of: &["supported by certain models"],
+    },
+    Rule {
         id: "thinking_error_reasoning_effort",
         any_of: &["unsupported value"],
         all_of: &["supported values", "model"],
@@ -294,11 +299,40 @@ pub(super) fn match_non_retryable_client_error(
     None
 }
 
+/// Some API aggregators return HTTP 5xx while embedding the real upstream 400 in the body.
+/// Treat recognized deterministic client-input errors as non-retryable so they don't poison
+/// provider circuit breaker state.
+pub(super) fn match_wrapped_non_retryable_client_error(
+    cli_key: &str,
+    status: reqwest::StatusCode,
+    body: &[u8],
+) -> Option<&'static str> {
+    if !status.is_server_error() || body.is_empty() {
+        return None;
+    }
+    if !mentions_wrapped_400(body) {
+        return None;
+    }
+    match_non_retryable_client_error(cli_key, reqwest::StatusCode::BAD_REQUEST, body)
+}
+
+fn mentions_wrapped_400(body: &[u8]) -> bool {
+    let scan = if body.len() > MAX_SCAN_BYTES {
+        &body[..MAX_SCAN_BYTES]
+    } else {
+        body
+    };
+    let haystack_lower = String::from_utf8_lossy(scan).to_ascii_lowercase();
+    haystack_lower.contains("status code: 400")
+        || haystack_lower.contains("status: 400")
+        || haystack_lower.contains("400 bad request")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         match_429_concurrency_limit, match_non_retryable_client_error, match_quota_exhausted,
-        should_abort_unmatched_client_error,
+        match_wrapped_non_retryable_client_error, should_abort_unmatched_client_error,
     };
 
     #[test]
@@ -369,6 +403,28 @@ mod tests {
             b"{\"error\":\"rate limit\",\"message\":\"too many requests per minute\"}"
         ));
         assert!(!match_quota_exhausted(b"concurrency limit exceeded"));
+    }
+
+    #[test]
+    fn matches_unsupported_image_content() {
+        let body = br#"{"error":{"message":"Invalid content type. image_url is only supported by certain models","type":"one_api_error","code":"10012"}}"#;
+        assert_eq!(
+            match_non_retryable_client_error("claude", reqwest::StatusCode::BAD_REQUEST, body),
+            Some("unsupported_image_content")
+        );
+    }
+
+    #[test]
+    fn matches_wrapped_400_unsupported_image_content_from_server_error() {
+        let body = br#"{"error":{"message":"Xunfei claude request failed with Sid: test code: 10012, msg: EngineInternalError:error, status code: 400, status: 400 Bad Request, message: Invalid content type. image_url is only supported by certain models","type":"one_api_error","code":"10012"}}"#;
+        assert_eq!(
+            match_wrapped_non_retryable_client_error(
+                "claude",
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                body
+            ),
+            Some("unsupported_image_content")
+        );
     }
 
     #[test]
