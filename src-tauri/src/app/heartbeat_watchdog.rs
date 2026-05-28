@@ -494,6 +494,7 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> Result<(), AppError> {
                 format!("failed to build window: {e}"),
             )
         })?;
+    crate::app::window_chrome::apply_main_window_chrome(&new_window);
 
     // Make the window visible and focused.
     let _ = new_window.show();

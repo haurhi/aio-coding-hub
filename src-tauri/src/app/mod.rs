@@ -25,3 +25,4 @@ pub(crate) mod startup_settings;
 pub(crate) mod startup_state;
 pub(crate) mod startup_tasks;
 pub(crate) mod startup_wsl;
+pub(crate) mod window_chrome;
