@@ -166,7 +166,6 @@ export function SessionsPage() {
     <div className="flex flex-col gap-6 h-full overflow-hidden">
       <PageHeader
         title="Session 会话"
-        subtitle="从本地会话文件读取（项目 → 会话 → 消息）"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {showEnvSelector ? (

@@ -45,7 +45,7 @@ export function LimitsSection(props: { form: UseProviderEditorFormReturn }) {
 
       <div className="space-y-6 border-t border-border px-5 py-5 dark:border-border">
         <div>
-          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             时间维度限制
           </h4>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -93,7 +93,7 @@ export function LimitsSection(props: { form: UseProviderEditorFormReturn }) {
         </div>
 
         <div>
-          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             每日重置设置
           </h4>
           <div className="rounded-xl border border-border bg-white p-4 shadow-sm dark:border-border dark:bg-secondary">
@@ -144,7 +144,7 @@ export function LimitsSection(props: { form: UseProviderEditorFormReturn }) {
         </div>
 
         <div>
-          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             其他限制
           </h4>
           <div className="grid gap-4 sm:grid-cols-2">

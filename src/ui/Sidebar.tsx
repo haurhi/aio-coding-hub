@@ -36,6 +36,7 @@ type NavItem = {
   to: string;
   label: string;
   icon: LucideIcon;
+  theme: string;
 };
 
 type NavSection = {
@@ -49,30 +50,30 @@ const NAV_SECTIONS: NavSection[] = [
     id: "main",
     label: "MAIN",
     items: [
-      { to: "/", label: "首页", icon: Activity },
-      { to: "/providers", label: "供应商", icon: Boxes },
-      { to: "/sessions", label: "Session 会话", icon: MessageSquare },
+      { to: "/", label: "首页", icon: Activity, theme: "blue" },
+      { to: "/providers", label: "供应商", icon: Boxes, theme: "cyan" },
+      { to: "/sessions", label: "Session 会话", icon: MessageSquare, theme: "violet" },
     ],
   },
   {
     id: "tools",
     label: "TOOLS",
     items: [
-      { to: "/workspaces", label: "工作区", icon: Layers },
-      { to: "/prompts", label: "提示词", icon: Pencil },
-      { to: "/mcp", label: "MCP", icon: Command },
-      { to: "/skills", label: "Skill", icon: Cpu },
-      { to: "/usage", label: "用量", icon: TrendingDown },
-      { to: "/logs", label: "请求日志", icon: FileText },
-      { to: "/cli-manager", label: "CLI 管理", icon: Wrench },
+      { to: "/workspaces", label: "工作区", icon: Layers, theme: "emerald" },
+      { to: "/prompts", label: "提示词", icon: Pencil, theme: "amber" },
+      { to: "/mcp", label: "MCP", icon: Command, theme: "indigo" },
+      { to: "/skills", label: "Skill", icon: Cpu, theme: "pink" },
+      { to: "/usage", label: "用量", icon: TrendingDown, theme: "orange" },
+      { to: "/logs", label: "请求日志", icon: FileText, theme: "slate" },
+      { to: "/cli-manager", label: "CLI 管理", icon: Wrench, theme: "sky" },
     ],
   },
   {
     id: "setting",
     label: "SETTING",
     items: [
-      { to: "/console", label: "控制台", icon: Terminal },
-      { to: "/settings", label: "设置", icon: Settings2 },
+      { to: "/console", label: "控制台", icon: Terminal, theme: "rose" },
+      { to: "/settings", label: "设置", icon: Settings2, theme: "slate" },
     ],
   },
 ];
@@ -110,13 +111,6 @@ export function Sidebar({ className }: SidebarProps) {
   const cliProxyState = useCliProxyControls();
   const { pendingCliProxyEnablePrompt } = cliProxyState;
   const gatewayAriaLabel = `网关状态：${statusText}，端口 ${portText}`;
-  const gatewayDotClass = isGatewayRunning
-    ? "bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/70"
-    : isGatewayStopped
-      ? "bg-rose-500 shadow-[0_0_6px] shadow-rose-500/70"
-      : gatewayAvailable === "checking"
-        ? "bg-amber-400 shadow-[0_0_6px] shadow-amber-400/70"
-        : "bg-muted-foreground/50";
   const repoLinkLabel = hasUpdate
     ? isPortable && !devPreview.enabled
       ? "AIO Coding Hub GitHub：发现新版本，打开下载页"
@@ -145,7 +139,7 @@ export function Sidebar({ className }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "sticky top-0 h-screen w-[232px] shrink-0",
+        "sticky top-0 h-screen w-[248px] shrink-0",
         "border-r border-sidebar-border bg-sidebar",
         className
       )}
@@ -215,11 +209,11 @@ export function Sidebar({ className }: SidebarProps) {
                       to={item.to}
                       className={({ isActive }) =>
                         cn(
-                          "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                          "group nav-link-item relative flex items-center gap-3 rounded-lg px-3 py-2 font-display text-sm font-semibold border border-transparent",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
                           isActive
-                            ? "border border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/10"
-                            : "border border-transparent text-sidebar-foreground hover:bg-sidebar-accent"
+                            ? "sidebar-active-item"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent"
                         )
                       }
                       end={item.to === "/"}
@@ -229,7 +223,9 @@ export function Sidebar({ className }: SidebarProps) {
                           <item.icon
                             className={cn(
                               "h-4 w-4 shrink-0 transition-opacity",
-                              isActive ? "opacity-100" : "opacity-70 group-hover:opacity-100"
+                              isActive
+                                ? "opacity-100 text-primary-foreground"
+                                : "opacity-70 group-hover:opacity-100"
                             )}
                           />
                           <span className="truncate">{item.label}</span>
@@ -243,96 +239,168 @@ export function Sidebar({ className }: SidebarProps) {
           })}
         </nav>
 
-        <div className="space-y-2.5 px-4 py-4 border-t border-sidebar-border/80 dark:border-sidebar-border">
+        <div className="px-4 pb-4 pt-1 bg-transparent">
+          {/* Flat Unified Premium Control Center Card */}
           <div
-            className="flex items-center justify-between gap-2 rounded-xl border border-sidebar-border/80 bg-sidebar-muted/50 p-1 text-xs shadow-inner"
-            aria-label="主题切换"
-          >
-            {THEME_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={cn(
-                  "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 transition",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
-                  theme === option.value
-                    ? "bg-sidebar-panel text-primary shadow-sm ring-1 ring-sidebar-border/30 dark:ring-sidebar-border/50"
-                    : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                )}
-                aria-pressed={theme === option.value}
-                aria-label={`切换到 ${option.label} 主题`}
-                title={`切换到 ${option.label} 主题`}
-                onClick={() => setTheme(option.value)}
-              >
-                <option.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              </button>
-            ))}
-          </div>
-
-          <div className="space-y-1.5 rounded-xl border border-sidebar-border bg-sidebar-panel p-2.5 text-xs shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
-            <div
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sidebar-foreground/75 font-semibold"
-              aria-label={gatewayAriaLabel}
-              title={gatewayAriaLabel}
-            >
-              <span className="min-w-0 truncate font-semibold">网关状态</span>
-              <span
-                className={cn("h-[5px] w-[5px] shrink-0 rounded-full", gatewayDotClass)}
-                aria-hidden="true"
-              />
-              <span className="ml-auto shrink-0 text-right font-mono tabular-nums text-sidebar-foreground/80">
-                {portText}
-              </span>
-            </div>
-
-            {cliProxyState.cliProxyLoading ? (
-              <div className="rounded-lg px-2 py-1.5 text-muted-foreground font-medium">
-                代理状态加载中…
-              </div>
-            ) : cliProxyState.cliProxyAvailable === false ? (
-              <div className="rounded-lg px-2 py-1.5 text-muted-foreground font-medium">
-                代理状态不可用
-              </div>
-            ) : (
-              CLIS.map((cli) => {
-                const cliKey = cli.key;
-                const drifted =
-                  cliProxyState.cliProxyEnabled[cliKey] &&
-                  cliProxyState.cliProxyAppliedToCurrentGateway[cliKey] === false;
-
-                return (
-                  <div
-                    key={cliKey}
-                    className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
-                  >
-                    <span className="min-w-0 flex-1 truncate font-semibold text-sidebar-foreground/90">
-                      {SIDEBAR_CLI_LABELS[cliKey]}
-                    </span>
-                    {drifted ? (
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        className="h-6 px-2 py-0 text-[11px]"
-                        disabled={cliProxyState.cliProxyToggling[cliKey]}
-                        onClick={() => cliProxyState.requestCliProxyEnabledSwitch(cliKey, true)}
-                        aria-label={`修复 ${SIDEBAR_CLI_LABELS[cliKey]} 代理`}
-                      >
-                        修复
-                      </Button>
-                    ) : null}
-                    <Switch
-                      checked={cliProxyState.cliProxyEnabled[cliKey]}
-                      disabled={cliProxyState.cliProxyToggling[cliKey]}
-                      onCheckedChange={(next) =>
-                        cliProxyState.requestCliProxyEnabledSwitch(cliKey, next)
-                      }
-                      size="sm"
-                      aria-label={`${SIDEBAR_CLI_LABELS[cliKey]} 代理开关`}
-                    />
-                  </div>
-                );
-              })
+            className={cn(
+              "rounded-2xl border p-3.5 space-y-3.5 transition-all duration-300 backdrop-blur-md",
+              "border-sidebar-control-border bg-sidebar-control shadow-sidebar-control hover:shadow-sidebar-control-hover"
             )}
+          >
+            {/* Flat unified vertical control list */}
+            <div className="space-y-3">
+              {/* Row 1: Gateway Status */}
+              <div
+                className="flex items-center justify-between gap-2 px-1 py-0.5"
+                aria-label={gatewayAriaLabel}
+                title={gatewayAriaLabel}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      isGatewayRunning
+                        ? "bg-emerald-500 shadow-status-dot shadow-emerald-500/80"
+                        : isGatewayStopped
+                          ? "bg-rose-500 shadow-status-dot shadow-rose-500/80"
+                          : gatewayAvailable === "checking"
+                            ? "bg-amber-400 shadow-status-dot shadow-amber-400/80"
+                            : "bg-muted-foreground/50"
+                    )}
+                  />
+                  <span className="font-semibold text-[11px] text-sidebar-foreground/90 truncate tracking-wide">
+                    {isGatewayRunning
+                      ? "网关已开启"
+                      : isGatewayStopped
+                        ? "网关已关闭"
+                        : gatewayAvailable === "checking"
+                          ? "网关检查中"
+                          : gatewayAvailable === "unavailable"
+                            ? "网关不可用"
+                            : `网关${statusText}`}
+                  </span>
+                </div>
+                <span className="font-mono text-[9px] tabular-nums tracking-wider text-muted-foreground/80 bg-sidebar-control-muted px-2 py-0.5 rounded-full border border-sidebar-control-border">
+                  Port: {portText}
+                </span>
+              </div>
+
+              {/* CLI Proxy List - Seamless Row Items */}
+              {cliProxyState.cliProxyLoading ? (
+                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic animate-pulse">
+                  代理状态加载中…
+                </div>
+              ) : cliProxyState.cliProxyAvailable === false ? (
+                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic">
+                  代理状态不可用
+                </div>
+              ) : (
+                CLIS.map((cli) => {
+                  const cliKey = cli.key;
+                  const isEnabled = cliProxyState.cliProxyEnabled[cliKey];
+                  const drifted =
+                    isEnabled && cliProxyState.cliProxyAppliedToCurrentGateway[cliKey] === false;
+
+                  return (
+                    <div
+                      key={cliKey}
+                      className="flex items-center justify-between gap-2 px-1 py-0.5 text-[11px] text-sidebar-foreground/80 transition-all duration-200"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {/* Active status indicator dot for individual CLI */}
+                        <span
+                          className={cn(
+                            "h-[5px] w-[5px] shrink-0 rounded-full transition-all duration-300",
+                            isEnabled
+                              ? "bg-emerald-500 shadow-status-dot-sm shadow-emerald-500/70"
+                              : "bg-muted-foreground/20"
+                          )}
+                        />
+                        <span className="min-w-0 truncate font-semibold tracking-wide">
+                          {SIDEBAR_CLI_LABELS[cliKey]}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {drifted ? (
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            className="h-4.5 px-1.5 py-0 text-[9px] shadow-sm font-semibold active:scale-95 transition-all"
+                            disabled={cliProxyState.cliProxyToggling[cliKey]}
+                            onClick={() => cliProxyState.requestCliProxyEnabledSwitch(cliKey, true)}
+                            aria-label={`修复 ${SIDEBAR_CLI_LABELS[cliKey]} 代理`}
+                          >
+                            修复
+                          </Button>
+                        ) : null}
+                        <Switch
+                          checked={isEnabled}
+                          disabled={cliProxyState.cliProxyToggling[cliKey]}
+                          onCheckedChange={(next) =>
+                            cliProxyState.requestCliProxyEnabledSwitch(cliKey, next)
+                          }
+                          size="sm"
+                          aria-label={`${SIDEBAR_CLI_LABELS[cliKey]} 代理开关`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+
+              {/* Row 5: Seamless Integrated Theme Switcher */}
+              <div className="flex items-center justify-between gap-2 px-1 py-0.5 border-t border-sidebar-control-border pt-2.5 mt-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  {(() => {
+                    const ActiveIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
+                    return (
+                      <ActiveIcon
+                        className="h-4 w-4 text-muted-foreground/70 shrink-0"
+                        aria-hidden="true"
+                      />
+                    );
+                  })()}
+                  <span className="font-semibold text-[11px] text-sidebar-foreground/80 truncate tracking-wide">
+                    主题
+                  </span>
+                </div>
+
+                <div
+                  className="flex items-center gap-0.5 rounded-lg bg-sidebar-control-inset p-0.5 border border-sidebar-control-border"
+                  aria-label="主题切换"
+                >
+                  {THEME_OPTIONS.map((option) => {
+                    const isActive = theme === option.value;
+                    const activeColorClass =
+                      option.value === "light"
+                        ? "bg-sidebar-option-active text-theme-option-light shadow-sidebar-option border border-sidebar-control-border"
+                        : option.value === "dark"
+                          ? "bg-sidebar-option-active text-theme-option-dark shadow-sidebar-option border border-sidebar-control-border"
+                          : "bg-sidebar-option-active text-theme-option-system shadow-sidebar-option border border-sidebar-control-border";
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={cn(
+                          "p-1 rounded-md transition-all duration-200 active:scale-95",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20",
+                          isActive
+                            ? activeColorClass
+                            : "text-muted-foreground hover:text-sidebar-foreground"
+                        )}
+                        aria-pressed={isActive}
+                        aria-label={`切换到 ${option.label} 主题`}
+                        title={`切换到 ${option.label} 主题`}
+                        onClick={() => setTheme(option.value)}
+                      >
+                        <option.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -275,7 +275,7 @@ export function WslSettingsCard({ available, saving, settings }: WslSettingsCard
     <Card className="md:col-span-2">
       <div className="mb-4 border-b border-border pb-4 flex items-start justify-between gap-3">
         <div>
-          <div className="text-lg font-semibold text-foreground flex items-center gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <Boxes className="h-5 w-5 text-blue-500" />
             WSL 配置
           </div>
@@ -342,7 +342,7 @@ export function WslSettingsCard({ available, saving, settings }: WslSettingsCard
 
           {statusRows && statusRows.length > 0 ? (
             <div className="mt-3">
-              <div className="text-sm font-medium text-secondary-foreground mb-2">配置状态</div>
+              <div className="mb-2 text-sm font-semibold text-foreground">配置状态</div>
               <div className="rounded-lg border border-border overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>

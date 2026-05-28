@@ -9,7 +9,7 @@ export type CliItem = {
 };
 
 export const CLIS: CliItem[] = [
-  { key: "claude", name: "Claude Code", desc: "Claude CLI / Claude Code" },
+  { key: "claude", name: "Claude", desc: "Claude CLI" },
   { key: "codex", name: "Codex", desc: "OpenAI Codex CLI" },
   { key: "gemini", name: "Gemini", desc: "Google Gemini CLI" },
 ];
@@ -27,7 +27,7 @@ export const CLI_FILTER_ITEMS: CliFilterItem[] = [
 ];
 
 const CLI_SHORT_LABELS: Record<CliKey, string> = {
-  claude: "Claude Code",
+  claude: "Claude",
   codex: "Codex",
   gemini: "Gemini",
 };

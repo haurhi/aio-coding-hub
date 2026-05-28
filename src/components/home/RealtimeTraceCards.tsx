@@ -19,7 +19,7 @@ import {
   formatUsd,
   sanitizeTtfbMs,
 } from "../../utils/formatters";
-import { Clock, Server, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Clock, Server, CheckCircle2, XCircle } from "lucide-react";
 import {
   computeEffectiveInputTokens,
   computeStatusBadge,
@@ -60,13 +60,16 @@ const STALE_TRACE_TIMEOUT_MS = 5 * 60 * 1000;
  * to avoid staggered collapse animations that feel chaotic.
  */
 const BATCH_EXIT_WINDOW_MS = 500;
-const LIVE_METRIC_CARD_BASE = "h-full min-w-0 rounded-xl border px-2.5 py-1.5 transition-all duration-300 hover:scale-[1.01] hover:shadow-[0_4px_12px_rgba(59,130,246,0.04)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3)]";
+const LIVE_METRIC_CARD_BASE =
+  "h-full min-w-0 rounded-lg border px-2.5 py-1.5 transition-all duration-300 hover:scale-[1.01] hover:shadow-trace-card-hover";
 const LIVE_METRIC_CARD_SURFACE =
-  "border-slate-200 bg-slate-100/50 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_1px_2px_rgba(0,0,0,0.01)] dark:border-[#2b3547] dark:bg-[#1f2633]/60 dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.03)]";
-const LIVE_METRIC_LABEL = "leading-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400";
-const LIVE_METRIC_VALUE = "mt-1.5 truncate leading-none font-bold font-mono tracking-tight text-slate-700 dark:text-slate-200";
+  "border-trace-metric-border bg-trace-metric-surface shadow-trace-card";
+const LIVE_METRIC_LABEL =
+  "leading-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground";
+const LIVE_METRIC_VALUE =
+  "mt-1.5 truncate leading-none font-bold font-mono tracking-tight text-foreground";
 const LIVE_METRIC_STAGE_VALUE =
-  "mt-1.5 truncate font-extrabold leading-none text-blue-600 dark:text-sky-400 drop-shadow-[0_0_8px_rgba(56,189,248,0.2)]";
+  "mt-1.5 truncate font-extrabold leading-none text-page-accent drop-shadow-page-accent";
 
 function shouldKeepRealtimeTraceVisible(trace: TraceSession, nowMs: number): boolean {
   if (!trace.summary) {
@@ -328,23 +331,10 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
               className={cn(
                 "group/item relative rounded-lg border transition-all duration-300 ease-out",
                 isInProgress
-                  ? "border-blue-200/50 bg-gradient-to-br from-white/95 to-slate-50/95 shadow-[0_8px_30px_rgba(219,234,254,0.15),inset_0_1px_1px_rgba(255,255,255,0.7)] dark:border-slate-800/60 dark:bg-gradient-to-br dark:from-[#1b212c]/90 dark:to-[#10141d]/90 dark:shadow-[0_8px_30px_rgba(0,0,0,0.4),inset_0_1px_1px_rgba(255,255,255,0.03)] hover:border-blue-400/50 dark:hover:border-blue-900/40 hover:shadow-[0_8px_30px_rgba(59,130,246,0.15)] dark:hover:shadow-[0_8px_30px_rgba(30,58,138,0.3)] hover:scale-[1.005]"
-                  : "bg-gradient-to-br from-white/95 to-slate-50/95 border-slate-200/50 shadow-sm dark:bg-gradient-to-br dark:from-[#1b212c]/90 dark:to-[#10141d]/90 dark:border-slate-800/60 hover:shadow-[0_8px_20px_-4px_rgba(148,163,184,0.15)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)] hover:border-slate-300/60 dark:hover:border-slate-700/60 hover:from-white dark:hover:from-[#1f2633]/90 dark:hover:to-[#121721]/90 hover:scale-[1.002]"
+                  ? "border-border/80 bg-gradient-to-br from-trace-live-from to-trace-live-to shadow-sm hover:scale-[1.005] hover:shadow-trace-panel-live-hover hover:border-border/60"
+                  : "bg-secondary/35 border-border/40 shadow-sm dark:bg-secondary/45 dark:border-border/40 hover:shadow-trace-panel-hover hover:border-border/60 dark:hover:border-border/80 hover:bg-secondary/65 dark:hover:bg-secondary/80 hover:scale-[1.002]"
               )}
             >
-              <div
-                className={cn(
-                  "absolute left-0 top-2 bottom-2 w-[3.5px] rounded-r-full transition-all duration-500 origin-center",
-                  isInProgress
-                    ? "bg-gradient-to-b from-blue-500 via-sky-400 to-blue-600 shadow-[0_0_10px_rgba(59,130,246,0.6)]"
-                    : statusBadge.isError
-                      ? "bg-gradient-to-b from-rose-500 to-pink-500 shadow-[0_0_8px_rgba(244,63,94,0.4)]"
-                      : hasFailover
-                        ? "bg-gradient-to-b from-amber-500 to-yellow-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]"
-                        : "bg-slate-300 dark:bg-slate-700 opacity-40"
-                )}
-              />
-
               <div className="px-3 py-2.5">
                 <div className="mb-1.5 flex min-w-0 items-center gap-2">
                   <span
@@ -355,7 +345,28 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                     title={statusBadge.title}
                   >
                     {isInProgress ? (
-                      <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                      <div className="h-3 w-3 shrink-0 animate-spin will-change-transform">
+                        <svg
+                          className="h-full w-full text-current"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                          />
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          />
+                        </svg>
+                      </div>
                     ) : statusBadge.isError ? (
                       <XCircle className="h-3 w-3 shrink-0" />
                     ) : (
@@ -365,7 +376,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                   </span>
 
                   <span
-                    className="inline-flex min-w-0 items-center gap-1 rounded-md bg-slate-100/80 px-2 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200/50 dark:bg-slate-800/80 dark:text-slate-300 dark:border-slate-700/50 shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
+                    className="inline-flex min-w-0 items-center gap-1 rounded-md bg-muted/65 px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border/40 dark:bg-muted/40 dark:border-border/20 shadow-pill-subtle"
                     title={`${cliLabel} / ${modelText}`}
                   >
                     <CliBrandIcon
@@ -383,26 +394,32 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                     />
                   )}
 
-                  {hasSessionReuse && <SessionReuseBadge showCustomTooltip={showCustomTooltip} />}
-
                   {isFree && <FreeBadge />}
 
                   {summaryErrorCode && (
-                    <span className="shrink-0 rounded-md bg-amber-50/80 px-2 py-0.5 text-[11px] font-semibold text-amber-600 ring-1 ring-inset ring-amber-500/10 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-400/20 shadow-[0_1px_2px_rgba(0,0,0,0.02)] border border-amber-500/10 dark:border-amber-400/10">
+                    <span className="shrink-0 rounded-md bg-amber-50/80 px-2 py-0.5 text-[11px] font-semibold text-amber-600 ring-1 ring-inset ring-amber-500/10 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-400/20 shadow-pill-subtle border border-amber-500/10 dark:border-amber-400/10">
                       {getErrorCodeLabel(summaryErrorCode)}
                     </span>
                   )}
 
                   {!isInProgress ? (
-                    <span className="ml-auto flex w-[150px] shrink-0 items-center justify-end gap-1.5 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                      <Clock className="h-3 w-3 shrink-0" />
-                      {formatUnixSeconds(Math.floor(trace.first_seen_ms / 1000))}
+                    <span className="ml-auto flex w-[150px] shrink-0 items-center justify-end gap-1.5 text-xs text-muted-foreground whitespace-nowrap">
+                      {hasSessionReuse && (
+                        <SessionReuseBadge showCustomTooltip={showCustomTooltip} />
+                      )}
+                      <span className="flex items-center gap-1 w-[64px] justify-end shrink-0 select-none">
+                        <Clock className="h-3 w-3 shrink-0" />
+                        <span>{formatUnixSeconds(Math.floor(trace.first_seen_ms / 1000))}</span>
+                      </span>
                     </span>
                   ) : (
-                    <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-mono font-semibold tabular-nums text-slate-500 dark:text-slate-400">
-                        <Clock className="h-3 w-3 shrink-0 text-blue-500/80 dark:text-blue-400/80" />
-                        {formatDurationMs(runningMs)}
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                      {hasSessionReuse && (
+                        <SessionReuseBadge showCustomTooltip={showCustomTooltip} />
+                      )}
+                      <span className="flex items-center gap-1 w-[64px] justify-end shrink-0 text-xs font-mono font-semibold tabular-nums text-muted-foreground select-none">
+                        <Clock className="h-3 w-3 shrink-0 text-page-accent/80" />
+                        <span>{formatDurationMs(runningMs)}</span>
                       </span>
                     </span>
                   )}
@@ -414,7 +431,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                       className={cn(
                         LIVE_METRIC_CARD_BASE,
                         LIVE_METRIC_CARD_SURFACE,
-                        "sm:col-span-3"
+                        "sm:col-span-3 border-page-accent/20 shadow-trace-metric"
                       )}
                     >
                       <div className={LIVE_METRIC_LABEL}>当前阶段</div>
@@ -504,9 +521,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                             )}
                           </>
                         ) : (
-                          <span className="text-slate-300 dark:text-slate-700">
-                            —
-                          </span>
+                          <span className="text-slate-300 dark:text-slate-700">—</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 h-4" title="TTFB">
@@ -543,9 +558,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                             {formatInteger(displayCacheReadTokens)}
                           </span>
                         ) : (
-                          <span className="text-slate-300 dark:text-slate-700">
-                            —
-                          </span>
+                          <span className="text-slate-300 dark:text-slate-700">—</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 h-4" title="Duration">
@@ -572,9 +585,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                             {formatTokensPerSecondShort(displayOutputTokensPerSecond)}
                           </span>
                         ) : (
-                          <span className="text-slate-300 dark:text-slate-700">
-                            —
-                          </span>
+                          <span className="text-slate-300 dark:text-slate-700">—</span>
                         )}
                       </div>
                     </div>

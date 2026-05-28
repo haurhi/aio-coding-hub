@@ -371,10 +371,10 @@ export function FolderBadge({
 }) {
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-1 rounded-md bg-slate-100/80 px-2 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200/50 dark:bg-slate-800/80 dark:text-slate-300 dark:border-slate-700/50 shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
+      className="inline-flex min-w-0 items-center gap-1 rounded-md bg-muted/65 px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border/45 dark:bg-muted/40 dark:border-border/30 shadow-[0_1px_2px_rgba(0,0,0,0.01)]"
       title={folderPath}
     >
-      <FolderOpen className="h-3 w-3 shrink-0 text-slate-400 dark:text-slate-500" />
+      <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground/60" />
       <span className={allowWrap ? "whitespace-normal break-all" : "truncate"}>{folderName}</span>
     </span>
   );

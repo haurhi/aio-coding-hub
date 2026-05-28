@@ -129,7 +129,7 @@ export function NetworkSettingsCard({
 
       <div className="relative z-10">
         <div className="mb-4 border-b border-border pb-4">
-          <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <Network className="h-5 w-5 text-blue-500" />
             网络设置
           </h2>

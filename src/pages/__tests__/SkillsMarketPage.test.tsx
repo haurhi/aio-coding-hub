@@ -207,7 +207,7 @@ describe("pages/SkillsMarketPage", () => {
     await waitFor(() => expect(discover.mutateAsync).toHaveBeenCalledWith(true));
     expect(logToConsole).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "安装到 Claude Code" }));
+    fireEvent.click(screen.getByRole("button", { name: "安装到 Claude" }));
     await waitFor(() => {
       expect(install.mutateAsync).toHaveBeenCalledWith({
         gitUrl: "https://github.com/acme/repo-one",
@@ -215,7 +215,7 @@ describe("pages/SkillsMarketPage", () => {
         sourceSubdir: "skills/alpha",
       });
     });
-    expect(toast).toHaveBeenCalledWith("已安装到 Claude Code");
+    expect(toast).toHaveBeenCalledWith("已安装到 Claude");
   });
 
   it("falls back to the global CLI priority when localStorage is missing", () => {
@@ -358,7 +358,7 @@ describe("pages/SkillsMarketPage", () => {
       branch: "main",
       sourceSubdir: "skills/alpha",
     });
-    expect(toast).toHaveBeenCalledWith("已安装 1 个技能到 Claude Code");
+    expect(toast).toHaveBeenCalledWith("已安装 1 个技能到 Claude");
 
     fireEvent.click(screen.getByRole("switch"));
     const repoTwoSection = screen.getAllByText("acme/repo-two")[0]?.closest("section");
@@ -450,7 +450,7 @@ describe("pages/SkillsMarketPage", () => {
     expect(repoTwoSection).not.toBeNull();
     fireEvent.click(within(repoTwoSection as HTMLElement).getByRole("button", { name: "展开" }));
     expect(
-      within(repoTwoSection as HTMLElement).getByRole("button", { name: "安装到 Claude Code" })
+      within(repoTwoSection as HTMLElement).getByRole("button", { name: "安装到 Claude" })
     ).toBeInTheDocument();
     expect(
       within(repoTwoSection as HTMLElement).queryByRole("button", { name: "去通用技能" })

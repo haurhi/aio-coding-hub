@@ -141,7 +141,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof HomeOverviewPanel>
       workspaceConfigs={[
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "默认",
           loading: false,
@@ -250,7 +250,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -279,9 +279,9 @@ describe("components/home/HomeOverviewPanel", () => {
     });
 
     fireEvent.click(screen.getByRole("tab", { name: "配置信息" }));
-    expect(await screen.findByRole("button", { name: "Claude Code" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Claude" })).toBeInTheDocument();
     expect(screen.getByText("工作区 A")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Claude Code 路由策略" })).toHaveValue("1");
+    expect(screen.getByRole("combobox", { name: "Claude 路由策略" })).toHaveValue("1");
     expect(screen.getByRole("option", { name: "工作策略" })).toBeInTheDocument();
     expect(screen.getByText("默认提示词")).toBeInTheDocument();
     expect(screen.getByText("filesystem")).toBeInTheDocument();
@@ -307,9 +307,7 @@ describe("components/home/HomeOverviewPanel", () => {
     fireEvent.click(screen.getByRole("tab", { name: "配置信息" }));
     expect(await screen.findByText("工作区：")).toBeInTheDocument();
     expect(screen.queryByText("路由策略：")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("combobox", { name: "Claude Code 路由策略" })
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Claude 路由策略" })).not.toBeInTheDocument();
   });
 
   it("uses CLI priority order for workspace config button order and default selection", async () => {
@@ -318,7 +316,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -346,9 +344,9 @@ describe("components/home/HomeOverviewPanel", () => {
     fireEvent.click(screen.getByRole("tab", { name: "配置信息" }));
     expect(
       screen
-        .getAllByRole("button", { name: /Claude Code|Codex|Gemini/ })
+        .getAllByRole("button", { name: /Claude|Codex|Gemini/ })
         .map((button) => button.textContent)
-    ).toEqual(["Gemini", "Codex", "Claude Code"]);
+    ).toEqual(["Gemini", "Codex", "Claude"]);
     expect(await screen.findByText("工作区 C")).toBeInTheDocument();
     expect(screen.getByText("Gemini Prompt")).toBeInTheDocument();
   });
@@ -357,7 +355,7 @@ describe("components/home/HomeOverviewPanel", () => {
     renderPanel({ workspaceConfigs: [], devPreviewEnabled: true });
 
     fireEvent.click(screen.getByRole("tab", { name: "配置信息" }));
-    expect(await screen.findByRole("button", { name: "Claude Code" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Claude" })).toBeInTheDocument();
     expect(screen.getByText("工作区 Alpha")).toBeInTheDocument();
     expect(screen.getByText("PR Review")).toBeInTheDocument();
     expect(screen.getByText("filesystem")).toBeInTheDocument();
@@ -369,7 +367,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -557,7 +555,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -590,7 +588,7 @@ describe("components/home/HomeOverviewPanel", () => {
         workspaceConfigs={[
           {
             cliKey: "claude",
-            cliLabel: "Claude Code",
+            cliLabel: "Claude",
             workspaceId: 1,
             workspaceName: "工作区 A",
             loading: false,
@@ -638,7 +636,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -683,7 +681,7 @@ describe("components/home/HomeOverviewPanel", () => {
             workspaceConfigs={[
               {
                 cliKey: "claude",
-                cliLabel: "Claude Code",
+                cliLabel: "Claude",
                 workspaceId: 1,
                 workspaceName: "默认",
                 loading: false,
@@ -926,7 +924,7 @@ describe("components/home/HomeOverviewPanel", () => {
       workspaceConfigs: [
         {
           cliKey: "claude",
-          cliLabel: "Claude Code",
+          cliLabel: "Claude",
           workspaceId: 1,
           workspaceName: "工作区 A",
           loading: false,
@@ -959,7 +957,7 @@ describe("components/home/HomeOverviewPanel", () => {
         workspaceConfigs={[
           {
             cliKey: "claude",
-            cliLabel: "Claude Code",
+            cliLabel: "Claude",
             workspaceId: 1,
             workspaceName: "工作区 A",
             loading: false,

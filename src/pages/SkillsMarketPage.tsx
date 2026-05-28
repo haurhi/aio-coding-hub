@@ -5,6 +5,7 @@ import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Dialog } from "../ui/Dialog";
 import { EmptyState } from "../ui/EmptyState";
+import { PageHeader } from "../ui/PageHeader";
 import { Spinner } from "../ui/Spinner";
 import { Switch } from "../ui/Switch";
 import { TabList } from "../ui/TabList";
@@ -65,31 +66,32 @@ export function SkillsMarketPage() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Skill 市场</h1>
-          <Button onClick={() => navigate("/skills")} variant="secondary">
-            返回 Skill
-          </Button>
-          <Button onClick={() => setRepoDialogOpen(true)} variant="secondary">
-            管理仓库
-          </Button>
-          <Button
-            onClick={() => void refreshAvailable(true)}
-            variant="primary"
-            disabled={discovering}
-          >
-            {discovering ? "刷新中…" : "刷新发现"}
-          </Button>
-        </div>
-
-        <TabList
-          ariaLabel="CLI 选择"
-          items={orderedCliTabs.map((cli) => ({ key: cli.key, label: cli.name }))}
-          value={effectiveCli}
-          onChange={setActiveCli}
-        />
-      </div>
+      <PageHeader
+        title="Skill 市场"
+        actions={
+          <>
+            <Button onClick={() => navigate("/skills")} variant="secondary">
+              返回 Skill
+            </Button>
+            <Button onClick={() => setRepoDialogOpen(true)} variant="secondary">
+              管理仓库
+            </Button>
+            <Button
+              onClick={() => void refreshAvailable(true)}
+              variant="primary"
+              disabled={discovering}
+            >
+              {discovering ? "刷新中…" : "刷新发现"}
+            </Button>
+            <TabList
+              ariaLabel="CLI 选择"
+              items={orderedCliTabs.map((cli) => ({ key: cli.key, label: cli.name }))}
+              value={effectiveCli}
+              onChange={setActiveCli}
+            />
+          </>
+        }
+      />
 
       <Card
         padding="md"

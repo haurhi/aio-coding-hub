@@ -157,7 +157,7 @@ export function WorkspacesPage() {
       <div className="grid gap-4 lg:flex-1 lg:min-h-0 lg:grid-cols-[360px_1fr] lg:items-stretch lg:overflow-hidden">
         <Card padding="sm" className="flex flex-col lg:min-h-0">
           <div className="flex items-center justify-between gap-3 w-full pb-3 border-b border-line-subtle">
-            <div className="flex items-center gap-2 text-sm font-bold text-foreground">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Layers className="h-4 w-4 shrink-0 text-accent" />
               <span>工作区</span>
               <span className="text-xs font-medium text-muted-foreground">({items.length} 个)</span>
@@ -225,7 +225,7 @@ export function WorkspacesPage() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                          <div className="truncate text-sm font-bold text-foreground">
+                          <div className="truncate text-sm font-semibold text-foreground">
                             {workspace.name}
                           </div>
                         </div>

@@ -136,7 +136,7 @@ export function CliManagerGeneralTab({
     <div className="space-y-6">
       <Card className="overflow-hidden">
         <div className="border-b border-border p-6">
-          <h2 className="text-xl font-bold text-foreground">通用配置</h2>
+          <h2 className="text-base font-semibold text-foreground">通用配置</h2>
           <p className="mt-1 text-sm text-muted-foreground">网关整流、通知、超时与熔断策略。</p>
         </div>
 

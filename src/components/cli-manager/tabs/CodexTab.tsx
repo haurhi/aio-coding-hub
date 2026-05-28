@@ -602,7 +602,7 @@ export function CliManagerCodexTab({
                   <Terminal className="h-8 w-8" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-foreground">Codex</h2>
+                  <h2 className="text-base font-semibold text-foreground">Codex</h2>
                   <div className="flex items-center gap-2 mt-1">
                     {codexAvailable === "available" && codexInfo?.found ? (
                       <>
