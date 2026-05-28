@@ -146,7 +146,7 @@ export function Sidebar({ className }: SidebarProps) {
     >
       <div className="flex h-full flex-col">
         {/* macOS traffic lights safe area (titleBarStyle: overlay) + drag region */}
-        <div data-tauri-drag-region className="px-5 pb-5 pt-9">
+        <div data-tauri-drag-region className="px-5 pb-3.5 pt-7">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               {/* Premium abstract AIO high-tech SVG Logo */}
@@ -190,12 +190,15 @@ export function Sidebar({ className }: SidebarProps) {
           </div>
         </div>
 
-        <nav aria-label="Main navigation" className="flex-1 space-y-5 px-3">
+        <nav
+          aria-label="Main navigation"
+          className="flex-1 overflow-y-auto min-h-0 space-y-3 px-3 scrollbar-thin scrollbar-overlay"
+        >
           {NAV_SECTIONS.map((section) => {
             const headingId = `sidebar-section-${section.id}`;
 
             return (
-              <section key={section.id} aria-labelledby={headingId} className="space-y-2">
+              <section key={section.id} aria-labelledby={headingId} className="space-y-1">
                 <h2
                   id={headingId}
                   className="px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70"
@@ -209,7 +212,7 @@ export function Sidebar({ className }: SidebarProps) {
                       to={item.to}
                       className={({ isActive }) =>
                         cn(
-                          "group nav-link-item relative flex items-center gap-3 rounded-lg px-3 py-2 font-display text-sm font-semibold border border-transparent",
+                          "group nav-link-item relative flex items-center gap-3 rounded-lg px-3 py-1.5 font-display text-[13px] font-semibold border border-transparent",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
                           isActive
                             ? "sidebar-active-item"
@@ -239,16 +242,16 @@ export function Sidebar({ className }: SidebarProps) {
           })}
         </nav>
 
-        <div className="px-4 pb-4 pt-1 bg-transparent">
+        <div className="px-4 pb-3.5 pt-1.5 bg-transparent shrink-0">
           {/* Flat Unified Premium Control Center Card */}
           <div
             className={cn(
-              "rounded-2xl border p-3.5 space-y-3.5 transition-all duration-300 backdrop-blur-md",
+              "rounded-xl border p-3 space-y-2.5 transition-all duration-300 backdrop-blur-md",
               "border-sidebar-control-border bg-sidebar-control shadow-sidebar-control hover:shadow-sidebar-control-hover"
             )}
           >
             {/* Flat unified vertical control list */}
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {/* Row 1: Gateway Status */}
               <div
                 className="flex items-center justify-between gap-2 px-1 py-0.5"
@@ -285,71 +288,79 @@ export function Sidebar({ className }: SidebarProps) {
                 </span>
               </div>
 
-              {/* CLI Proxy List - Seamless Row Items */}
+              {/* CLI Proxy List - Compact Horizontal Dashboard Cards */}
               {cliProxyState.cliProxyLoading ? (
-                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic animate-pulse">
+                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic animate-pulse text-center">
                   代理状态加载中…
                 </div>
               ) : cliProxyState.cliProxyAvailable === false ? (
-                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic">
+                <div className="px-1 py-1 text-muted-foreground/70 text-[10px] font-medium italic text-center">
                   代理状态不可用
                 </div>
               ) : (
-                CLIS.map((cli) => {
-                  const cliKey = cli.key;
-                  const isEnabled = cliProxyState.cliProxyEnabled[cliKey];
-                  const drifted =
-                    isEnabled && cliProxyState.cliProxyAppliedToCurrentGateway[cliKey] === false;
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CLIS.map((cli) => {
+                    const cliKey = cli.key;
+                    const isEnabled = cliProxyState.cliProxyEnabled[cliKey];
+                    const drifted =
+                      isEnabled && cliProxyState.cliProxyAppliedToCurrentGateway[cliKey] === false;
 
-                  return (
-                    <div
-                      key={cliKey}
-                      className="flex items-center justify-between gap-2 px-1 py-0.5 text-[11px] text-sidebar-foreground/80 transition-all duration-200"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        {/* Active status indicator dot for individual CLI */}
-                        <span
-                          className={cn(
-                            "h-[5px] w-[5px] shrink-0 rounded-full transition-all duration-300",
-                            isEnabled
-                              ? "bg-emerald-500 shadow-status-dot-sm shadow-emerald-500/70"
-                              : "bg-muted-foreground/20"
-                          )}
-                        />
-                        <span className="min-w-0 truncate font-semibold tracking-wide">
+                    return (
+                      <div
+                        key={cliKey}
+                        className={cn(
+                          "flex flex-col items-center justify-between rounded-lg p-1.5 border transition-all duration-200",
+                          isEnabled
+                            ? "bg-emerald-500/5 border-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "bg-sidebar-control-muted/30 border-sidebar-control-border/40 text-sidebar-foreground/70"
+                        )}
+                      >
+                        <span className="text-[10px] font-bold tracking-tight truncate max-w-full">
                           {SIDEBAR_CLI_LABELS[cliKey]}
                         </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {drifted ? (
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            className="h-4.5 px-1.5 py-0 text-[9px] shadow-sm font-semibold active:scale-95 transition-all"
+                        <div className="flex items-center gap-1 mt-1">
+                          {drifted ? (
+                            <button
+                              type="button"
+                              disabled={cliProxyState.cliProxyToggling[cliKey]}
+                              onClick={() =>
+                                cliProxyState.requestCliProxyEnabledSwitch(cliKey, true)
+                              }
+                              className="text-[9px] text-rose-500 font-bold hover:underline"
+                              aria-label={`修复 ${SIDEBAR_CLI_LABELS[cliKey]} 代理`}
+                              title={`修复 ${SIDEBAR_CLI_LABELS[cliKey]} 代理`}
+                            >
+                              修复
+                            </button>
+                          ) : (
+                            <span
+                              className={cn(
+                                "h-1 w-1 shrink-0 rounded-full transition-all duration-300",
+                                isEnabled
+                                  ? "bg-emerald-500 shadow-status-dot shadow-emerald-500/70"
+                                  : "bg-muted-foreground/20"
+                              )}
+                            />
+                          )}
+                          <Switch
+                            checked={isEnabled}
                             disabled={cliProxyState.cliProxyToggling[cliKey]}
-                            onClick={() => cliProxyState.requestCliProxyEnabledSwitch(cliKey, true)}
-                            aria-label={`修复 ${SIDEBAR_CLI_LABELS[cliKey]} 代理`}
-                          >
-                            修复
-                          </Button>
-                        ) : null}
-                        <Switch
-                          checked={isEnabled}
-                          disabled={cliProxyState.cliProxyToggling[cliKey]}
-                          onCheckedChange={(next) =>
-                            cliProxyState.requestCliProxyEnabledSwitch(cliKey, next)
-                          }
-                          size="sm"
-                          aria-label={`${SIDEBAR_CLI_LABELS[cliKey]} 代理开关`}
-                        />
+                            onCheckedChange={(next) =>
+                              cliProxyState.requestCliProxyEnabledSwitch(cliKey, next)
+                            }
+                            size="sm"
+                            className="scale-75 origin-right"
+                            aria-label={`${SIDEBAR_CLI_LABELS[cliKey]} 代理开关`}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                </div>
               )}
 
               {/* Row 5: Seamless Integrated Theme Switcher */}
-              <div className="flex items-center justify-between gap-2 px-1 py-0.5 border-t border-sidebar-control-border pt-2.5 mt-1">
+              <div className="flex items-center justify-between gap-2 px-1 py-0.5 border-t border-sidebar-control-border/60 pt-2.5 mt-1">
                 <div className="flex items-center gap-2 min-w-0">
                   {(() => {
                     const ActiveIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
