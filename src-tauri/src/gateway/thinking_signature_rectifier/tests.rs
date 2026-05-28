@@ -69,6 +69,28 @@ fn detect_trigger_deepseek_passback_is_chat_completion_bridge_scoped() {
 }
 
 #[test]
+fn detect_trigger_deepseek_passback_allows_direct_deepseek_anthropic() {
+    let error = "The `content[].thinking` in the thinking mode must be passed back to the API.";
+
+    assert_eq!(
+        detect_trigger_for_request(error, None, Some("https://api.deepseek.com/anthropic")),
+        Some(TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK)
+    );
+    assert_eq!(
+        detect_trigger_for_request(error, None, Some("https://example.com/anthropic")),
+        None
+    );
+    assert_eq!(
+        detect_trigger_for_request(
+            error,
+            Some(crate::providers::CX2CC_BRIDGE_TYPE),
+            Some("https://api.deepseek.com/anthropic")
+        ),
+        None
+    );
+}
+
+#[test]
 fn detect_trigger_invalid_request_with_thinking_context() {
     assert_eq!(
         detect_trigger("非法请求: thinking block signature mismatch"),
@@ -205,6 +227,65 @@ fn rectify_removes_top_level_thinking_when_assistant_history_lacks_thinking_bloc
         message["messages"][0]["content"][0]["text"].as_str(),
         Some("previous answer")
     );
+}
+
+#[test]
+fn rectify_merges_adjacent_assistant_chunks_for_direct_deepseek_passback() {
+    let mut message = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "open page" } ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "thinking", "thinking": "I should inspect the page", "signature": "sig-1" }
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "I will open the page." }
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "tool_use", "id": "toolu_1", "name": "browser_navigate", "input": { "url": "https://example.com" } }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "tool_result", "tool_use_id": "toolu_1", "content": "ok" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_request(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        None,
+        Some("https://api.deepseek.com/anthropic"),
+    );
+
+    assert!(result.applied);
+    assert_eq!(result.merged_adjacent_assistant_messages, 2);
+
+    let messages = message["messages"]
+        .as_array()
+        .expect("messages remain array");
+    assert_eq!(messages.len(), 3);
+    let merged_content = messages[1]["content"]
+        .as_array()
+        .expect("assistant content remains array");
+    let types: Vec<_> = merged_content
+        .iter()
+        .map(|v| v["type"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(types, vec!["thinking", "text", "tool_use"]);
+    assert_eq!(merged_content[0]["signature"].as_str(), Some("sig-1"));
 }
 
 #[test]

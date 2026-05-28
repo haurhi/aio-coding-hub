@@ -15,6 +15,7 @@ pub(super) struct ThinkingSignatureRectifierResult {
     pub(super) removed_redacted_thinking_blocks: usize,
     pub(super) removed_signature_fields: usize,
     pub(super) removed_top_level_thinking: bool,
+    pub(super) merged_adjacent_assistant_messages: usize,
 }
 
 pub(super) fn detect_trigger(error_message: &str) -> Option<ThinkingSignatureRectifierTrigger> {
@@ -82,22 +83,139 @@ pub(super) fn detect_trigger(error_message: &str) -> Option<ThinkingSignatureRec
     None
 }
 
+#[cfg(test)]
 pub(super) fn detect_trigger_for_protocol_bridge(
     error_message: &str,
     protocol_bridge_type: Option<&str>,
 ) -> Option<ThinkingSignatureRectifierTrigger> {
+    detect_trigger_for_request(error_message, protocol_bridge_type, None)
+}
+
+pub(super) fn detect_trigger_for_request(
+    error_message: &str,
+    protocol_bridge_type: Option<&str>,
+    provider_base_url: Option<&str>,
+) -> Option<ThinkingSignatureRectifierTrigger> {
     let trigger = detect_trigger(error_message)?;
-    if trigger == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
-        && protocol_bridge_type != Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
-    {
-        return None;
+    if trigger != TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK {
+        return Some(trigger);
     }
-    Some(trigger)
+
+    if protocol_bridge_type == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE) {
+        return Some(trigger);
+    }
+
+    if protocol_bridge_type.is_none() && is_direct_deepseek_anthropic_provider(provider_base_url) {
+        return Some(trigger);
+    }
+
+    None
+}
+
+fn is_direct_deepseek_anthropic_provider(provider_base_url: Option<&str>) -> bool {
+    let Some(base_url) = provider_base_url else {
+        return false;
+    };
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower.contains("api.deepseek.com") && lower.contains("/anthropic")
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ThinkingSignatureRectifierOptions {
+    pub(super) strip_thinking_blocks_and_signatures: bool,
     pub(super) remove_top_level_thinking_when_any_assistant_lacks_thinking: bool,
+    pub(super) merge_adjacent_assistant_messages: bool,
+}
+
+impl ThinkingSignatureRectifierOptions {
+    #[cfg(test)]
+    fn strip_thinking_blocks_and_signatures() -> Self {
+        Self {
+            strip_thinking_blocks_and_signatures: true,
+            remove_top_level_thinking_when_any_assistant_lacks_thinking: false,
+            merge_adjacent_assistant_messages: false,
+        }
+    }
+}
+
+fn is_direct_deepseek_passback_request(
+    trigger: ThinkingSignatureRectifierTrigger,
+    protocol_bridge_type: Option<&str>,
+    provider_base_url: Option<&str>,
+) -> bool {
+    trigger == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
+        && protocol_bridge_type.is_none()
+        && is_direct_deepseek_anthropic_provider(provider_base_url)
+}
+
+fn options_for_trigger(
+    trigger: ThinkingSignatureRectifierTrigger,
+    protocol_bridge_type: Option<&str>,
+    provider_base_url: Option<&str>,
+) -> ThinkingSignatureRectifierOptions {
+    if is_direct_deepseek_passback_request(trigger, protocol_bridge_type, provider_base_url) {
+        return ThinkingSignatureRectifierOptions {
+            strip_thinking_blocks_and_signatures: false,
+            remove_top_level_thinking_when_any_assistant_lacks_thinking: false,
+            merge_adjacent_assistant_messages: true,
+        };
+    }
+
+    ThinkingSignatureRectifierOptions {
+        strip_thinking_blocks_and_signatures: true,
+        remove_top_level_thinking_when_any_assistant_lacks_thinking: trigger
+            == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
+            && protocol_bridge_type == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE),
+        merge_adjacent_assistant_messages: false,
+    }
+}
+
+fn merge_adjacent_assistant_messages(messages: &mut Vec<serde_json::Value>) -> usize {
+    let original = std::mem::take(messages);
+    let mut merged_count = 0usize;
+    let mut next_messages: Vec<serde_json::Value> = Vec::with_capacity(original.len());
+
+    for msg in original {
+        let is_assistant = msg
+            .as_object()
+            .and_then(|obj| obj.get("role"))
+            .and_then(|v| v.as_str())
+            == Some("assistant");
+
+        if is_assistant {
+            if let Some(prev) = next_messages.last_mut() {
+                let prev_is_assistant = prev
+                    .as_object()
+                    .and_then(|obj| obj.get("role"))
+                    .and_then(|v| v.as_str())
+                    == Some("assistant");
+
+                if prev_is_assistant {
+                    let maybe_prev_content = prev
+                        .as_object_mut()
+                        .and_then(|obj| obj.get_mut("content"))
+                        .and_then(|v| v.as_array_mut());
+                    let maybe_current_content = msg
+                        .as_object()
+                        .and_then(|obj| obj.get("content"))
+                        .and_then(|v| v.as_array());
+
+                    if let (Some(prev_content), Some(current_content)) =
+                        (maybe_prev_content, maybe_current_content)
+                    {
+                        prev_content.extend(current_content.iter().cloned());
+                        merged_count += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        next_messages.push(msg);
+    }
+
+    *messages = next_messages;
+    merged_count
 }
 
 #[cfg(test)]
@@ -106,20 +224,26 @@ pub(super) fn rectify_anthropic_request_message(
 ) -> ThinkingSignatureRectifierResult {
     rectify_anthropic_request_message_with_options(
         message,
-        ThinkingSignatureRectifierOptions::default(),
+        ThinkingSignatureRectifierOptions::strip_thinking_blocks_and_signatures(),
     )
 }
 
+#[cfg(test)]
 pub(super) fn rectify_anthropic_request_message_for_trigger(
     message: &mut serde_json::Value,
     trigger: ThinkingSignatureRectifierTrigger,
     protocol_bridge_type: Option<&str>,
 ) -> ThinkingSignatureRectifierResult {
-    let options = ThinkingSignatureRectifierOptions {
-        remove_top_level_thinking_when_any_assistant_lacks_thinking: trigger
-            == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
-            && protocol_bridge_type == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE),
-    };
+    rectify_anthropic_request_message_for_request(message, trigger, protocol_bridge_type, None)
+}
+
+pub(super) fn rectify_anthropic_request_message_for_request(
+    message: &mut serde_json::Value,
+    trigger: ThinkingSignatureRectifierTrigger,
+    protocol_bridge_type: Option<&str>,
+    provider_base_url: Option<&str>,
+) -> ThinkingSignatureRectifierResult {
+    let options = options_for_trigger(trigger, protocol_bridge_type, provider_base_url);
     rectify_anthropic_request_message_with_options(message, options)
 }
 
@@ -131,6 +255,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
     let mut removed_redacted_thinking_blocks = 0usize;
     let mut removed_signature_fields = 0usize;
     let mut removed_top_level_thinking = false;
+    let mut merged_adjacent_assistant_messages = 0usize;
     let mut applied = false;
 
     let Some(message_obj) = message.as_object_mut() else {
@@ -140,6 +265,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
             removed_redacted_thinking_blocks,
             removed_signature_fields,
             removed_top_level_thinking,
+            merged_adjacent_assistant_messages,
         };
     };
 
@@ -163,54 +289,63 @@ pub(super) fn rectify_anthropic_request_message_with_options(
                 removed_redacted_thinking_blocks,
                 removed_signature_fields,
                 removed_top_level_thinking,
+                merged_adjacent_assistant_messages,
             };
         };
 
-        for msg in messages.iter_mut() {
-            let Some(msg_obj) = msg.as_object_mut() else {
-                continue;
-            };
+        if options.merge_adjacent_assistant_messages {
+            merged_adjacent_assistant_messages = merge_adjacent_assistant_messages(messages);
+            applied = applied || merged_adjacent_assistant_messages > 0;
+        }
 
-            let Some(content) = msg_obj.get_mut("content").and_then(|v| v.as_array_mut()) else {
-                continue;
-            };
-
-            let original = std::mem::take(content);
-            let mut new_content: Vec<serde_json::Value> = Vec::with_capacity(original.len());
-            let mut content_modified = false;
-
-            for mut block in original {
-                let Some(block_obj) = block.as_object_mut() else {
-                    new_content.push(block);
+        if options.strip_thinking_blocks_and_signatures {
+            for msg in messages.iter_mut() {
+                let Some(msg_obj) = msg.as_object_mut() else {
                     continue;
                 };
 
-                match block_obj.get("type").and_then(|v| v.as_str()) {
-                    Some("thinking") => {
-                        removed_thinking_blocks += 1;
-                        content_modified = true;
+                let Some(content) = msg_obj.get_mut("content").and_then(|v| v.as_array_mut())
+                else {
+                    continue;
+                };
+
+                let original = std::mem::take(content);
+                let mut new_content: Vec<serde_json::Value> = Vec::with_capacity(original.len());
+                let mut content_modified = false;
+
+                for mut block in original {
+                    let Some(block_obj) = block.as_object_mut() else {
+                        new_content.push(block);
                         continue;
+                    };
+
+                    match block_obj.get("type").and_then(|v| v.as_str()) {
+                        Some("thinking") => {
+                            removed_thinking_blocks += 1;
+                            content_modified = true;
+                            continue;
+                        }
+                        Some("redacted_thinking") => {
+                            removed_redacted_thinking_blocks += 1;
+                            content_modified = true;
+                            continue;
+                        }
+                        _ => {}
                     }
-                    Some("redacted_thinking") => {
-                        removed_redacted_thinking_blocks += 1;
+
+                    if block_obj.remove("signature").is_some() {
+                        removed_signature_fields += 1;
                         content_modified = true;
-                        continue;
                     }
-                    _ => {}
+
+                    new_content.push(block);
                 }
 
-                if block_obj.remove("signature").is_some() {
-                    removed_signature_fields += 1;
-                    content_modified = true;
+                if content_modified {
+                    applied = true;
                 }
-
-                new_content.push(block);
+                *content = new_content;
             }
-
-            if content_modified {
-                applied = true;
-            }
-            *content = new_content;
         }
 
         // Fallback: if top-level thinking is enabled, but the final assistant message doesn't start
@@ -289,6 +424,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
         removed_redacted_thinking_blocks,
         removed_signature_fields,
         removed_top_level_thinking,
+        merged_adjacent_assistant_messages,
     }
 }
 

@@ -146,9 +146,10 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         let upstream_body_text = String::from_utf8_lossy(body_for_scan.as_ref()).to_string();
         let signature_trigger = enable_thinking_signature_rectifier
             .then(|| {
-                thinking_signature_rectifier::detect_trigger_for_protocol_bridge(
+                thinking_signature_rectifier::detect_trigger_for_request(
                     &upstream_body_text,
                     protocol_bridge_type,
+                    Some(provider_base_url_base.as_str()),
                 )
             })
             .flatten();
@@ -186,10 +187,11 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                         })
                         .unwrap_or(serde_json::Value::Null);
                 let rectified =
-                    thinking_signature_rectifier::rectify_anthropic_request_message_for_trigger(
+                    thinking_signature_rectifier::rectify_anthropic_request_message_for_request(
                         &mut message_value,
                         trigger,
                         protocol_bridge_type,
+                        Some(provider_base_url_base.as_str()),
                     );
 
                 response_fixer::push_special_setting(
@@ -207,6 +209,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                         "removedRedactedThinkingBlocks": rectified.removed_redacted_thinking_blocks,
                         "removedSignatureFields": rectified.removed_signature_fields,
                         "removedTopLevelThinking": rectified.removed_top_level_thinking,
+                        "mergedAdjacentAssistantMessages": rectified.merged_adjacent_assistant_messages,
                     }),
                 );
 
