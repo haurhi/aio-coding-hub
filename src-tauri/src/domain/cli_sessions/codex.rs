@@ -591,7 +591,7 @@ pub fn projects_list(app: &tauri::AppHandle) -> AppResult<Vec<CliSessionsProject
     }
 
     let mut out: Vec<CliSessionsProjectSummary> = map.into_values().collect();
-    out.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    out.sort_by_key(|item| std::cmp::Reverse(item.last_modified));
     Ok(out)
 }
 
@@ -668,7 +668,7 @@ pub fn sessions_list(
         });
     }
 
-    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    out.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
     Ok(out)
 }
 
@@ -885,7 +885,7 @@ pub fn wsl_projects_list(distro: &str) -> AppResult<Vec<CliSessionsProjectSummar
     }
 
     let mut out: Vec<CliSessionsProjectSummary> = map.into_values().collect();
-    out.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    out.sort_by_key(|item| std::cmp::Reverse(item.last_modified));
     Ok(out)
 }
 
@@ -962,7 +962,7 @@ pub fn wsl_sessions_list(
         });
     }
 
-    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    out.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
     Ok(out)
 }
 

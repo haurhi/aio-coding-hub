@@ -316,17 +316,18 @@ fn build_response(ir: &InternalResponse, ctx: &BridgeContext) -> Result<Value, B
         }));
     }
 
-    Ok(json!({
+    let mut response = json!({
         "id": ir.id,
         "object": "response",
         "status": status,
         "model": model,
-        "output": output,
-        "usage": {
-            "input_tokens": ir.usage.input_tokens,
-            "output_tokens": ir.usage.output_tokens
-        }
-    }))
+        "output": output
+    });
+    if let Some(usage) = usage_value(&ir.usage) {
+        response["usage"] = usage;
+    }
+
+    Ok(response)
 }
 
 fn sse_frame(event_type: &str, payload: Value) -> Bytes {

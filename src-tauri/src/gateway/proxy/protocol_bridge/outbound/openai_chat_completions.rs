@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 
 pub(crate) struct OpenAIChatCompletionsOutbound;
 
+const PENDING_FINISH_REASON_KEY: &str = "openai_chat_completions_pending_finish_reason";
+
 impl Outbound for OpenAIChatCompletionsOutbound {
     fn protocol(&self) -> &'static str {
         "openai_chat_completions"
@@ -33,11 +35,11 @@ impl Outbound for OpenAIChatCompletionsOutbound {
 
     fn sse_event_to_ir(
         &self,
-        _event_type: &str,
+        event_type: &str,
         data: &Value,
         state: &mut StreamState,
     ) -> Result<Vec<IRStreamChunk>, BridgeError> {
-        sse_event_to_ir(data, state)
+        sse_event_to_ir(event_type, data, state)
     }
 }
 
@@ -57,6 +59,9 @@ fn ir_to_request(ir: &InternalRequest) -> Result<Value, BridgeError> {
         "messages": messages,
         "stream": ir.stream
     });
+    if ir.stream {
+        body["stream_options"] = json!({"include_usage": true});
+    }
 
     if let Some(max_tokens) = ir.max_tokens {
         body["max_tokens"] = json!(max_tokens);
@@ -228,6 +233,59 @@ fn parse_usage(usage: Option<&Value>) -> IRUsage {
         return IRUsage::default();
     };
 
+    let cache_read_input_tokens = usage
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            usage
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| usage.get("cache_read_input_tokens").and_then(Value::as_u64));
+
+    let cache_creation_5m_input_tokens = usage
+        .get("cache_creation_5m_input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            usage
+                .pointer("/cache_creation/ephemeral_5m_input_tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            usage
+                .get("claude_cache_creation_5_m_tokens")
+                .and_then(Value::as_u64)
+        });
+
+    let cache_creation_1h_input_tokens = usage
+        .get("cache_creation_1h_input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            usage
+                .pointer("/cache_creation/ephemeral_1h_input_tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            usage
+                .get("claude_cache_creation_1_h_tokens")
+                .and_then(Value::as_u64)
+        });
+
+    let cache_creation_input_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            match (
+                cache_creation_5m_input_tokens,
+                cache_creation_1h_input_tokens,
+            ) {
+                (Some(a), Some(b)) => Some(a.saturating_add(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        });
+
     IRUsage {
         input_tokens: usage
             .get("prompt_tokens")
@@ -239,7 +297,10 @@ fn parse_usage(usage: Option<&Value>) -> IRUsage {
             .or_else(|| usage.get("output_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        ..IRUsage::default()
+        cache_creation_input_tokens,
+        cache_creation_5m_input_tokens,
+        cache_creation_1h_input_tokens,
+        cache_read_input_tokens,
     }
 }
 
@@ -254,6 +315,7 @@ fn stop_reason_from_finish_reason(finish_reason: Option<&str>) -> IRStopReason {
 }
 
 fn sse_event_to_ir(
+    event_type: &str,
     data: &Value,
     state: &mut StreamState,
 ) -> Result<Vec<IRStreamChunk>, BridgeError> {
@@ -262,6 +324,13 @@ fn sse_event_to_ir(
     }
 
     let mut chunks = Vec::new();
+
+    if event_type == "done" {
+        if let Some(stop_reason) = pending_stop_reason(state) {
+            complete_stream(state, &mut chunks, stop_reason, IRUsage::default());
+        }
+        return Ok(chunks);
+    }
 
     if !stream_started(state) {
         chunks.push(IRStreamChunk::MessageStart {
@@ -278,6 +347,17 @@ fn sse_event_to_ir(
             initial_usage: None,
         });
         mark_stream_started(state);
+    }
+
+    if is_usage_only_chunk(data) {
+        let stop_reason = pending_stop_reason(state).unwrap_or(IRStopReason::EndTurn);
+        complete_stream(
+            state,
+            &mut chunks,
+            stop_reason,
+            parse_usage(data.get("usage")),
+        );
+        return Ok(chunks);
     }
 
     let Some(choice) = data
@@ -312,15 +392,49 @@ fn sse_event_to_ir(
 
     if let Some(finish_reason) = choice.get("finish_reason").and_then(Value::as_str) {
         close_active_block(state, &mut chunks);
-        chunks.push(IRStreamChunk::MessageDelta {
-            stop_reason: stop_reason_from_finish_reason(Some(finish_reason)),
-            usage: parse_usage(data.get("usage")),
-        });
-        chunks.push(IRStreamChunk::MessageStop);
-        state.stream_completed = true;
+        let stop_reason = stop_reason_from_finish_reason(Some(finish_reason));
+        if data.get("usage").is_some_and(|usage| !usage.is_null()) {
+            complete_stream(
+                state,
+                &mut chunks,
+                stop_reason,
+                parse_usage(data.get("usage")),
+            );
+        } else {
+            state.extra.insert(
+                PENDING_FINISH_REASON_KEY.to_string(),
+                Value::String(finish_reason.to_string()),
+            );
+        }
     }
 
     Ok(chunks)
+}
+
+fn is_usage_only_chunk(data: &Value) -> bool {
+    data.get("choices")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+        && data.get("usage").is_some_and(|usage| !usage.is_null())
+}
+
+fn pending_stop_reason(state: &mut StreamState) -> Option<IRStopReason> {
+    state
+        .extra
+        .remove(PENDING_FINISH_REASON_KEY)
+        .and_then(|value| value.as_str().map(|reason| reason.to_string()))
+        .map(|reason| stop_reason_from_finish_reason(Some(&reason)))
+}
+
+fn complete_stream(
+    state: &mut StreamState,
+    chunks: &mut Vec<IRStreamChunk>,
+    stop_reason: IRStopReason,
+    usage: IRUsage,
+) {
+    chunks.push(IRStreamChunk::MessageDelta { stop_reason, usage });
+    chunks.push(IRStreamChunk::MessageStop);
+    state.stream_completed = true;
 }
 
 fn handle_tool_call_delta(call: &Value, state: &mut StreamState, chunks: &mut Vec<IRStreamChunk>) {

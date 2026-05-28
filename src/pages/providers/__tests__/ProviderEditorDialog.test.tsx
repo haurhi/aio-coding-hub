@@ -373,6 +373,63 @@ describe("pages/providers/ProviderEditorDialog", () => {
     );
   });
 
+  it("saves claude chat-completions bridge from the auth mode tabs", async () => {
+    vi.mocked(providerUpsert).mockResolvedValue(
+      makeProvider({
+        id: 14,
+        cli_key: "claude",
+        name: "OpenCode Go MiMo",
+        base_urls: ["https://opencode.ai/zen/go/v1"],
+        bridge_type: "claude_chat_completions",
+        claude_models: { sonnet_model: "mimo-v2.5-pro" },
+        api_key_configured: true,
+      })
+    );
+
+    render(
+      <ProviderEditorDialog
+        mode="create"
+        open={true}
+        cliKey="claude"
+        onSaved={vi.fn()}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(dialog.getByRole("tab", { name: "Chat 转译" }));
+    fireEvent.change(dialog.getByPlaceholderText("default"), {
+      target: { value: "OpenCode Go MiMo" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("sk-…"), { target: { value: "sk-opencode" } });
+    fireEvent.change(dialog.getByPlaceholderText(/中转 endpoint/), {
+      target: { value: "https://opencode.ai/zen/go/v1" },
+    });
+    fireEvent.click(dialog.getByText("Claude 模型映射"));
+    fireEvent.change(dialog.getByPlaceholderText("例如: glm-4-plus-sonnet"), {
+      target: { value: "mimo-v2.5-pro" },
+    });
+
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(providerUpsert)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliKey: "claude",
+          name: "OpenCode Go MiMo",
+          authMode: "api_key",
+          apiKey: "sk-opencode",
+          baseUrls: ["https://opencode.ai/zen/go/v1"],
+          bridgeType: "claude_chat_completions",
+          sourceProviderId: null,
+          claudeModels: expect.objectContaining({
+            sonnet_model: "mimo-v2.5-pro",
+          }),
+        })
+      )
+    );
+  });
+
   it("passes stream idle timeout override when saving", async () => {
     vi.mocked(providerUpsert).mockResolvedValue(
       makeProvider({

@@ -191,6 +191,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const supportsOAuth = cliKey === "codex" || cliKey === "gemini";
   const supportsCx2cc = cliKey === "claude";
   const supportsCc2cx = cliKey === "codex";
+  const supportsClaudeChatCompletions = cliKey === "claude";
 
   const buildPayloadContext = useCallback(
     (): ProviderEditorPayloadContext => ({
@@ -331,6 +332,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     supportsOAuth,
     supportsCx2cc,
     supportsCc2cx,
+    supportsClaudeChatCompletions,
     register,
     setValue,
     watch,

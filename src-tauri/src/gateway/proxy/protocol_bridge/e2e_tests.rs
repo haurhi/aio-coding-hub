@@ -77,6 +77,67 @@ mod tests {
     }
 
     #[test]
+    fn available_bridge_types_includes_claude_chat_completions() {
+        let types = registry::available_bridge_types();
+        assert!(types.contains(&"claude_chat_completions"));
+    }
+
+    #[test]
+    fn claude_chat_completions_translates_anthropic_request_to_chat_completions() {
+        let bridge = get_bridge("claude_chat_completions").unwrap();
+        let ctx = BridgeContext {
+            claude_models: crate::domain::providers::ClaudeModels {
+                sonnet_model: Some("mimo-v2.5-pro".into()),
+                ..Default::default()
+            },
+            requested_model: Some("claude-sonnet-4-20250514".into()),
+            ..cx2cc_ctx()
+        };
+
+        let anthropic_req = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 128,
+            "system": "You are concise.",
+            "stream": true,
+            "messages": [
+                {"role": "user", "content": "Reply ok"}
+            ],
+            "tools": [
+                {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"]
+                    }
+                }
+            ],
+            "tool_choice": {"type": "auto"}
+        });
+
+        let translated = bridge.translate_request(anthropic_req, &ctx).unwrap();
+
+        assert_eq!(translated.target_path, "/chat/completions");
+        assert_eq!(translated.body["model"], "mimo-v2.5-pro");
+        assert_eq!(translated.body["stream"], true);
+        assert_eq!(translated.body["stream_options"]["include_usage"], true);
+        assert_eq!(translated.body["max_tokens"], 128);
+        assert_eq!(translated.body["messages"][0]["role"], "system");
+        assert_eq!(
+            translated.body["messages"][0]["content"],
+            "You are concise."
+        );
+        assert_eq!(translated.body["messages"][1]["role"], "user");
+        assert_eq!(translated.body["messages"][1]["content"], "Reply ok");
+        assert_eq!(translated.body["tools"][0]["type"], "function");
+        assert_eq!(translated.body["tools"][0]["function"]["name"], "read_file");
+        assert_eq!(translated.body["tool_choice"], "auto");
+        assert!(translated.body.get("thinking").is_none());
+        assert!(translated.body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
     fn cc2cx_translates_codex_responses_request_to_chat_completions() {
         let bridge = get_bridge("cc2cx").unwrap();
         let ctx = cc2cx_ctx();
@@ -126,6 +187,7 @@ mod tests {
         assert_eq!(translated.target_path, "/chat/completions");
         assert_eq!(translated.body["model"], "gpt-5.4");
         assert_eq!(translated.body["stream"], true);
+        assert_eq!(translated.body["stream_options"]["include_usage"], true);
         assert_eq!(translated.body["max_tokens"], 2048);
         assert_eq!(translated.body["temperature"], 0.2);
 
@@ -148,6 +210,234 @@ mod tests {
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert_eq!(translated.body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn cc2cx_preserves_chat_completions_cache_usage_in_response() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+
+        let chat_resp = json!({
+            "id": "chatcmpl_cache",
+            "model": "DeepSeek-V4-Pro",
+            "choices": [{
+                "message": {"role": "assistant", "content": "cached"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_tokens_details": {"cached_tokens": 80},
+                "cache_creation_5m_input_tokens": 6,
+                "cache_creation_1h_input_tokens": 4
+            }
+        });
+
+        let responses = bridge.translate_response(chat_resp, &ctx).unwrap();
+
+        assert_eq!(responses["usage"]["input_tokens"], 100);
+        assert_eq!(responses["usage"]["output_tokens"], 20);
+        assert_eq!(responses["usage"]["total_tokens"], 120);
+        assert_eq!(
+            responses["usage"]["input_tokens_details"]["cached_tokens"],
+            80
+        );
+        assert_eq!(responses["usage"]["cache_read_input_tokens"], 80);
+        assert_eq!(responses["usage"]["cache_creation_input_tokens"], 10);
+        assert_eq!(responses["usage"]["cache_creation_5m_input_tokens"], 6);
+        assert_eq!(responses["usage"]["cache_creation_1h_input_tokens"], 4);
+    }
+
+    #[test]
+    fn cc2cx_preserves_chat_completions_cache_usage_in_stream() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+        let mut translator = bridge.create_stream_translator();
+
+        let start = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_cache_stream",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let delta = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_cache_stream",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"content": "cached"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let done = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_cache_stream",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                        "prompt_tokens_details": {"cached_tokens": 80},
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 6,
+                            "ephemeral_1h_input_tokens": 4
+                        }
+                    }
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        let sse_text = start
+            .into_iter()
+            .chain(delta)
+            .chain(done)
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<String>();
+        let usage = crate::usage::parse_usage_from_json_or_sse_bytes("codex", sse_text.as_bytes())
+            .expect("translated responses SSE should retain cache usage");
+
+        assert_eq!(usage.metrics.input_tokens, Some(100));
+        assert_eq!(usage.metrics.output_tokens, Some(20));
+        assert_eq!(usage.metrics.total_tokens, Some(120));
+        assert_eq!(usage.metrics.cache_read_input_tokens, Some(80));
+        assert_eq!(usage.metrics.cache_creation_input_tokens, Some(10));
+        assert_eq!(usage.metrics.cache_creation_5m_input_tokens, Some(6));
+        assert_eq!(usage.metrics.cache_creation_1h_input_tokens, Some(4));
+    }
+
+    #[test]
+    fn cc2cx_preserves_chat_completions_usage_only_stream_chunk() {
+        let bridge = get_bridge("cc2cx").unwrap();
+        let ctx = cc2cx_ctx();
+        let mut translator = bridge.create_stream_translator();
+
+        let start = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_usage_only",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let delta = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_usage_only",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {"content": "cached"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let finish = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_usage_only",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": null
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let usage_only = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_usage_only",
+                    "model": "DeepSeek-V4-Pro",
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                        "prompt_tokens_details": {"cached_tokens": 80},
+                        "cache_creation_5m_input_tokens": 6,
+                        "cache_creation_1h_input_tokens": 4
+                    }
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        let sse_text = start
+            .into_iter()
+            .chain(delta)
+            .chain(finish)
+            .chain(usage_only)
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<String>();
+        let events = parse_sse_events(&sse_text);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "response.completed")
+                .count(),
+            1
+        );
+
+        let usage = crate::usage::parse_usage_from_json_or_sse_bytes("codex", sse_text.as_bytes())
+            .expect("usage-only chat completion chunk should reach usage tracker");
+
+        assert_eq!(usage.metrics.input_tokens, Some(100));
+        assert_eq!(usage.metrics.output_tokens, Some(20));
+        assert_eq!(usage.metrics.total_tokens, Some(120));
+        assert_eq!(usage.metrics.cache_read_input_tokens, Some(80));
+        assert_eq!(usage.metrics.cache_creation_input_tokens, Some(10));
+        assert_eq!(usage.metrics.cache_creation_5m_input_tokens, Some(6));
+        assert_eq!(usage.metrics.cache_creation_1h_input_tokens, Some(4));
+    }
+
+    #[test]
+    fn claude_chat_completions_preserves_chat_completions_cache_usage_in_response() {
+        let bridge = get_bridge("claude_chat_completions").unwrap();
+        let ctx = BridgeContext {
+            requested_model: Some("claude-sonnet-4-20250514".into()),
+            ..cx2cc_ctx()
+        };
+
+        let chat_resp = json!({
+            "id": "chatcmpl_claude_cache",
+            "model": "mimo-v2.5-pro",
+            "choices": [{
+                "message": {"role": "assistant", "content": "cached"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 80},
+                "cache_creation_5m_input_tokens": 6,
+                "cache_creation_1h_input_tokens": 4
+            }
+        });
+
+        let anthropic = bridge.translate_response(chat_resp, &ctx).unwrap();
+
+        assert_eq!(anthropic["usage"]["input_tokens"], 100);
+        assert_eq!(anthropic["usage"]["output_tokens"], 20);
+        assert_eq!(anthropic["usage"]["cache_read_input_tokens"], 80);
+        assert_eq!(anthropic["usage"]["cache_creation_input_tokens"], 10);
+        assert_eq!(anthropic["usage"]["cache_creation_5m_input_tokens"], 6);
+        assert_eq!(anthropic["usage"]["cache_creation_1h_input_tokens"], 4);
     }
 
     #[test]
@@ -308,11 +598,15 @@ mod tests {
                 &ctx,
             )
             .unwrap();
+        let tail = translator
+            .translate_event("done", &json!(null), &ctx)
+            .unwrap();
 
         let sse_text = first
             .into_iter()
             .chain(args)
             .chain(done)
+            .chain(tail)
             .map(|b| String::from_utf8(b.to_vec()).unwrap())
             .collect::<String>();
         let events = parse_sse_events(&sse_text);

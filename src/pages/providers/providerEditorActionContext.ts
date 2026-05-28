@@ -9,7 +9,12 @@ import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditor
 import type { ModelMappingRow } from "./modelMappingRows";
 import type { BaseUrlRow, ProviderBaseUrlMode } from "./types";
 
-export type ProviderEditorAuthMode = "api_key" | "oauth" | "cx2cc" | "cc2cx";
+export type ProviderEditorAuthMode =
+  | "api_key"
+  | "oauth"
+  | "cx2cc"
+  | "cc2cx"
+  | "claude_chat_completions";
 
 /** Provider identity and lifecycle */
 export type ProviderActionContext = {

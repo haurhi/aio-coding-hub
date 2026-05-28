@@ -263,6 +263,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         }
     }
 
+    let mut direct_bridge_applied = false;
     if provider.bridge_type.as_deref() == Some(crate::providers::CC2CX_BRIDGE_TYPE)
         && is_responses_request_path(&upstream_forwarded_path)
     {
@@ -272,6 +273,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
             input.requested_model.as_deref(),
             anthropic_stream_requested,
             &input.cx2cc_settings,
+            &crate::providers::ClaudeModels::default(),
             &provider.model_mapping,
         ) {
             Ok(translated) => {
@@ -280,6 +282,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
                 upstream_query = None;
                 upstream_body_bytes = translated.body_bytes;
                 strip_request_content_encoding = true;
+                direct_bridge_applied = true;
             }
             Err(err) => {
                 provider_checks::skip_with_reason(
@@ -292,6 +295,46 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
                         error_category: "translation",
                         error_code: GatewayErrorCode::InternalError.as_str(),
                         reason: format!("cc2cx translation failed: {err}"),
+                    },
+                );
+                return PreparationOutcome::Skipped;
+            }
+        }
+    }
+
+    if provider.bridge_type.as_deref()
+        == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
+        && is_anthropic_messages_request_path(&upstream_forwarded_path)
+    {
+        match translate_direct_bridge_request(
+            crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE,
+            &upstream_body_bytes,
+            input.requested_model.as_deref(),
+            anthropic_stream_requested,
+            &input.cx2cc_settings,
+            &provider.claude_models,
+            &provider.model_mapping,
+        ) {
+            Ok(translated) => {
+                protocol_bridge_type =
+                    Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE.to_string());
+                upstream_forwarded_path = translated.forwarded_path;
+                upstream_query = None;
+                upstream_body_bytes = translated.body_bytes;
+                strip_request_content_encoding = true;
+                direct_bridge_applied = true;
+            }
+            Err(err) => {
+                provider_checks::skip_with_reason(
+                    attempts,
+                    provider_id,
+                    &provider_name_base,
+                    &provider_base_url_display,
+                    input.started.elapsed().as_millis(),
+                    SkipReason {
+                        error_category: "translation",
+                        error_code: GatewayErrorCode::InternalError.as_str(),
+                        reason: format!("claude_chat_completions translation failed: {err}"),
                     },
                 );
                 return PreparationOutcome::Skipped;
@@ -318,7 +361,9 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
     };
 
     let mut claude_model_mapping = None;
-    if should_apply_claude_model_mapping(cx2cc_active, &upstream_forwarded_path) {
+    if !direct_bridge_applied
+        && should_apply_claude_model_mapping(cx2cc_active, &upstream_forwarded_path)
+    {
         claude_model_mapping = claude_model_mapping::apply_if_needed(
             ctx,
             provider,
@@ -418,6 +463,10 @@ fn is_responses_request_path(path: &str) -> bool {
     matches!(path.trim_end_matches('/'), "/v1/responses" | "/responses")
 }
 
+fn is_anthropic_messages_request_path(path: &str) -> bool {
+    matches!(path.trim_end_matches('/'), "/v1/messages" | "/messages")
+}
+
 struct DirectBridgeTranslation {
     forwarded_path: String,
     body_bytes: Bytes,
@@ -429,6 +478,7 @@ fn translate_direct_bridge_request(
     requested_model: Option<&str>,
     stream_requested: bool,
     cx2cc_settings: &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
+    claude_models: &crate::providers::ClaudeModels,
     model_mapping: &crate::providers::ProviderModelMapping,
 ) -> Result<DirectBridgeTranslation, String> {
     let body_val: serde_json::Value =
@@ -436,7 +486,7 @@ fn translate_direct_bridge_request(
     let bridge = crate::gateway::proxy::protocol_bridge::get_bridge(bridge_type)
         .ok_or_else(|| format!("{bridge_type} bridge not registered"))?;
     let bridge_ctx = crate::gateway::proxy::protocol_bridge::BridgeContext {
-        claude_models: crate::domain::providers::ClaudeModels::default(),
+        claude_models: claude_models.clone(),
         model_mapping: model_mapping.clone(),
         cx2cc_settings: cx2cc_settings.clone(),
         requested_model: requested_model.filter(|m| !m.is_empty()).map(String::from),
@@ -460,8 +510,9 @@ fn translate_direct_bridge_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_body_has_previous_response_id, is_responses_request_path,
-        provider_max_attempts_for_request, translate_direct_bridge_request,
+        codex_body_has_previous_response_id, is_anthropic_messages_request_path,
+        is_responses_request_path, provider_max_attempts_for_request,
+        translate_direct_bridge_request,
     };
     use axum::body::Bytes;
 
@@ -513,6 +564,14 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_messages_bridge_path_guard_only_matches_messages_endpoint() {
+        assert!(is_anthropic_messages_request_path("/v1/messages"));
+        assert!(is_anthropic_messages_request_path("/messages/"));
+        assert!(!is_anthropic_messages_request_path("/v1/models"));
+        assert!(!is_anthropic_messages_request_path("/chat/completions"));
+    }
+
+    #[test]
     fn translate_direct_bridge_request_maps_responses_to_chat_completions() {
         let body = Bytes::from(
             serde_json::to_vec(&serde_json::json!({
@@ -532,6 +591,7 @@ mod tests {
             Some("DeepSeek-V4-Pro"),
             true,
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &crate::providers::ClaudeModels::default(),
             &crate::providers::ProviderModelMapping::default(),
         )
         .expect("translate cc2cx request");
@@ -570,6 +630,7 @@ mod tests {
             Some("gpt-5.5"),
             true,
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &crate::providers::ClaudeModels::default(),
             &mapping,
         )
         .expect("translate cc2cx request with model mapping");
@@ -577,5 +638,49 @@ mod tests {
             serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
 
         assert_eq!(translated_body["model"], "DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn translate_direct_bridge_request_maps_anthropic_messages_to_chat_completions() {
+        let body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "claude-sonnet-4-20250514",
+                "system": "You are concise.",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "hi"}
+                ],
+                "stream": true
+            }))
+            .unwrap(),
+        );
+        let claude_models = crate::providers::ClaudeModels {
+            sonnet_model: Some("mimo-v2.5-pro".to_string()),
+            ..Default::default()
+        };
+
+        let translated = translate_direct_bridge_request(
+            crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE,
+            &body,
+            Some("claude-sonnet-4-20250514"),
+            true,
+            &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &claude_models,
+            &crate::providers::ProviderModelMapping::default(),
+        )
+        .expect("translate claude messages to chat completions");
+        let translated_body: serde_json::Value =
+            serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
+
+        assert_eq!(translated.forwarded_path, "/chat/completions");
+        assert_eq!(translated_body["model"], "mimo-v2.5-pro");
+        assert_eq!(translated_body["messages"][0]["role"], "system");
+        assert_eq!(
+            translated_body["messages"][0]["content"],
+            "You are concise."
+        );
+        assert_eq!(translated_body["messages"][1]["role"], "user");
+        assert_eq!(translated_body["messages"][1]["content"], "hi");
+        assert_eq!(translated_body["stream"], true);
     }
 }

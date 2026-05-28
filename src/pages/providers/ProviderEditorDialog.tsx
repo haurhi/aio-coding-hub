@@ -75,14 +75,17 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
           </FormField>
         ) : f.supportsCx2cc ? (
           <FormField label="认证方式" hint="选择后下方表单会相应变化">
-            <TabList<"api_key" | "oauth" | "cx2cc">
+            <TabList<"api_key" | "oauth" | "cx2cc" | "claude_chat_completions">
               ariaLabel="认证方式"
               items={[
                 { key: "api_key", label: "API 密钥" },
                 { key: "oauth", label: "OAuth" },
+                ...(f.supportsClaudeChatCompletions
+                  ? [{ key: "claude_chat_completions" as const, label: "Chat 转译" }]
+                  : []),
                 { key: "cx2cc", label: "CX2CC 转译" },
               ]}
-              value={f.authMode as "api_key" | "oauth" | "cx2cc"}
+              value={f.authMode as "api_key" | "oauth" | "cx2cc" | "claude_chat_completions"}
               onChange={(next) => {
                 f.setAuthMode(next);
                 f.setValue("auth_mode", next === "oauth" ? "oauth" : "api_key", {

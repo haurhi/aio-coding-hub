@@ -16,6 +16,10 @@ fn registry() -> &'static RwLock<HashMap<&'static str, BridgeFactory>> {
         let mut m = HashMap::new();
         m.insert("cx2cc", cx2cc_factory as BridgeFactory);
         m.insert("cc2cx", cc2cx_factory as BridgeFactory);
+        m.insert(
+            "claude_chat_completions",
+            claude_chat_completions_factory as BridgeFactory,
+        );
         RwLock::new(m)
     })
 }
@@ -70,6 +74,15 @@ fn cc2cx_factory() -> Bridge {
         inbound: Box::new(super::inbound::openai_responses::OpenAIResponsesInbound),
         outbound: Box::new(super::outbound::openai_chat_completions::OpenAIChatCompletionsOutbound),
         model_mapper: Box::new(ExactModelMapper),
+    }
+}
+
+fn claude_chat_completions_factory() -> Bridge {
+    Bridge {
+        bridge_type: "claude_chat_completions",
+        inbound: Box::new(super::inbound::anthropic::AnthropicMessagesInbound),
+        outbound: Box::new(super::outbound::openai_chat_completions::OpenAIChatCompletionsOutbound),
+        model_mapper: Box::new(super::cx2cc::CX2CCModelMapper),
     }
 }
 

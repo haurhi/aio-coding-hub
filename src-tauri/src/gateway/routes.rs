@@ -125,7 +125,9 @@ mod tests {
     use crate::gateway::codex_session_id::CodexSessionIdCache;
     use crate::gateway::proxy::{ProviderBaseUrlPingCache, RecentErrorCache};
     use crate::gateway::runtime::GatewayAppState;
-    use crate::{circuit_breaker, db, providers, request_logs, session_manager, settings};
+    use crate::{
+        circuit_breaker, db, providers, request_logs, session_manager, settings, usage_stats,
+    };
     use axum::body::HttpBody;
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Method, Request, StatusCode};
@@ -313,6 +315,34 @@ mod tests {
                     body
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), task)
+    }
+
+    async fn spawn_chunked_sse_upstream(
+        chunks: Vec<&'static str>,
+        delay_between_chunks: Duration,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind chunked sse upstream stub");
+        let addr = listener.local_addr().expect("chunked sse upstream addr");
+        let task = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0_u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let headers = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream; charset=utf-8\r\nconnection: close\r\n\r\n";
+                let _ = socket.write_all(headers.as_bytes()).await;
+                for (idx, chunk) in chunks.iter().enumerate() {
+                    let _ = socket.write_all(chunk.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    if idx + 1 < chunks.len() {
+                        tokio::time::sleep(delay_between_chunks).await;
+                    }
+                }
                 let _ = socket.shutdown().await;
             }
         });
@@ -1749,13 +1779,17 @@ mod tests {
                 .join("gateway-route-cc2cx-stream-done-item-test.sqlite"),
         )
         .expect("init test db");
-        let chat_sse = concat!(
-            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from chat\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":3,\"total_tokens\":4}}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let (sse_base_url, sse_task) = spawn_sse_upstream(chat_sse).await;
+        let (sse_base_url, sse_task) = spawn_chunked_sse_upstream(
+            vec![
+                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from chat\"}}]}\n\n",
+                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n",
+                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13,\"prompt_tokens_details\":{\"cached_tokens\":6},\"cache_creation_5m_input_tokens\":2,\"cache_creation_1h_input_tokens\":1}}\n\n",
+                "data: [DONE]\n\n",
+            ],
+            Duration::from_millis(10),
+        )
+        .await;
         let provider_id =
             insert_cc2cx_provider_with_priority(&db, "CC2CX Chat SSE Stub", sse_base_url, 0);
 
@@ -1833,9 +1867,66 @@ mod tests {
         assert_eq!(detail.status, Some(200));
         assert_eq!(detail.error_code, None);
         assert_eq!(detail.final_provider_id, provider_id);
-        assert_eq!(detail.input_tokens, Some(1));
+        assert_eq!(detail.input_tokens, Some(10));
         assert_eq!(detail.output_tokens, Some(3));
-        assert_eq!(detail.total_tokens, Some(4));
+        assert_eq!(detail.total_tokens, Some(13));
+        assert_eq!(detail.cache_read_input_tokens, Some(6));
+        assert_eq!(detail.cache_creation_input_tokens, Some(3));
+        assert_eq!(detail.cache_creation_5m_input_tokens, Some(2));
+        assert_eq!(detail.cache_creation_1h_input_tokens, Some(1));
+
+        let usage_params = usage_stats::UsageQueryParams {
+            period: "weekly".to_string(),
+            start_ts: None,
+            end_ts: None,
+            cli_key: Some("codex".to_string()),
+            provider_id: Some(provider_id),
+            folder_keys: None,
+            exclude_cx2cc_gateway_bridge: Some(false),
+        };
+        let summary = usage_stats::summary_v2(&db, &usage_params, |_| Vec::new())
+            .expect("usage summary includes cc2cx translated stream");
+        assert_eq!(summary.requests_total, 1);
+        assert_eq!(summary.requests_with_usage, 1);
+        assert_eq!(summary.requests_success, 1);
+        assert_eq!(summary.input_tokens, 4);
+        assert_eq!(summary.output_tokens, 3);
+        assert_eq!(summary.io_total_tokens, 7);
+        assert_eq!(summary.total_tokens, 16);
+        assert_eq!(summary.cache_read_input_tokens, 6);
+        assert_eq!(summary.cache_creation_input_tokens, 3);
+        assert_eq!(summary.cache_creation_5m_input_tokens, 2);
+        assert_eq!(summary.cache_creation_1h_input_tokens, 1);
+        assert!(summary
+            .avg_output_tokens_per_second
+            .is_some_and(|tokens_per_second| tokens_per_second > 0.0));
+
+        let leaderboard =
+            usage_stats::leaderboard_v2(&db, "provider", &usage_params, Some(10), |_| Vec::new())
+                .expect("usage provider leaderboard includes cc2cx translated stream");
+        assert_eq!(leaderboard.len(), 1);
+        assert_eq!(leaderboard[0].key, format!("codex:{provider_id}"));
+        assert_eq!(leaderboard[0].name, "codex/CC2CX Chat SSE Stub");
+        assert_eq!(leaderboard[0].requests_total, 1);
+        assert_eq!(leaderboard[0].requests_success, 1);
+        assert_eq!(leaderboard[0].input_tokens, 4);
+        assert_eq!(leaderboard[0].output_tokens, 3);
+        assert_eq!(leaderboard[0].io_total_tokens, 7);
+        assert_eq!(leaderboard[0].total_tokens, 16);
+        assert_eq!(leaderboard[0].cache_read_input_tokens, 6);
+        assert_eq!(leaderboard[0].cache_creation_input_tokens, 3);
+        assert!(leaderboard[0]
+            .avg_output_tokens_per_second
+            .is_some_and(|tokens_per_second| tokens_per_second > 0.0));
+
+        let cache_trend = usage_stats::provider_cache_rate_trend_v1(&db, &usage_params, Some(10))
+            .expect("cache trend includes cc2cx translated stream");
+        assert_eq!(cache_trend.len(), 1);
+        assert_eq!(cache_trend[0].key, format!("codex:{provider_id}"));
+        assert_eq!(cache_trend[0].name, "codex/CC2CX Chat SSE Stub");
+        assert_eq!(cache_trend[0].denom_tokens, 13);
+        assert_eq!(cache_trend[0].cache_read_input_tokens, 6);
+        assert_eq!(cache_trend[0].requests_success, 1);
 
         sse_task.abort();
     }

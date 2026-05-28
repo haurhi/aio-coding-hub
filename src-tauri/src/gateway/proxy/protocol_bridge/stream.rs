@@ -315,7 +315,7 @@ fn parse_sse_frame(frame: &str) -> Option<(String, Value)> {
         } else if let Some(rest) = line.strip_prefix("data:") {
             let payload = rest.trim_start();
             if payload == "[DONE]" {
-                return None;
+                return Some(("done".to_string(), Value::Null));
             }
             data_parts.push(payload);
         }
@@ -457,9 +457,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_sse_frame_done_returns_none() {
+    fn parse_sse_frame_done_returns_done_event() {
         let frame = "data: [DONE]\n\n";
-        assert!(parse_sse_frame(frame).is_none());
+        let (evt, data) = parse_sse_frame(frame).unwrap();
+        assert_eq!(evt, "done");
+        assert!(data.is_null());
     }
 
     #[test]
@@ -551,5 +553,39 @@ mod tests {
             Pin::new(&mut stream).poll_next(&mut cx),
             Poll::Ready(None)
         ));
+    }
+
+    #[test]
+    fn bridge_stream_emits_completion_on_chat_completions_done_after_pending_finish() {
+        let upstream = concat!(
+            "data: {\"id\":\"chatcmpl-done\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-done\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-done\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let mut stream = BridgeStream::for_bridge(
+            MockStream::new(vec![Ok(Bytes::from_static(upstream.as_bytes()))]),
+            Some("cc2cx"),
+            Some("gpt-route-cc2cx".into()),
+            crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+        );
+        let waker = std::task::Waker::from(Arc::new(NoopWaker));
+        let mut cx = Context::from_waker(&waker);
+        let mut output = String::new();
+
+        loop {
+            match Pin::new(&mut stream).poll_next(&mut cx) {
+                Poll::Ready(Some(Ok(frame))) => {
+                    output.push_str(std::str::from_utf8(frame.as_ref()).expect("utf-8 frame"));
+                }
+                Poll::Ready(Some(Err(err))) => panic!("unexpected stream error: {err}"),
+                Poll::Ready(None) => break,
+                Poll::Pending => panic!("mock stream should not pend"),
+            }
+        }
+
+        assert!(output.contains("event: response.output_text.delta"));
+        assert!(output.contains("\"delta\":\"hello\""));
+        assert!(output.contains("event: response.completed"));
     }
 }

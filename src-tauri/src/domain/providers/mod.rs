@@ -13,7 +13,8 @@ pub use types::{
 #[allow(unused_imports)]
 pub(crate) use types::{
     ClaudeTerminalLaunchContext, GatewayProvidersSelection, ProviderForGateway,
-    ProviderOAuthDetails, CC2CX_BRIDGE_TYPE, CX2CC_BRIDGE_TYPE,
+    ProviderOAuthDetails, CC2CX_BRIDGE_TYPE, CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE,
+    CX2CC_BRIDGE_TYPE,
 };
 
 pub use queries::{delete, get_api_key_plaintext, list_by_cli, names_by_id, reorder, upsert};

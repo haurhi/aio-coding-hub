@@ -396,6 +396,21 @@ describe("pages/providers/SortableProviderCard", () => {
     expect(screen.getByText("https://ark.cn-beijing.volces.com/api/coding/v3")).toBeInTheDocument();
   });
 
+  it("renders claude chat-completions bridge as its own provider mode", () => {
+    renderCard({
+      cli_key: "claude",
+      bridge_type: "claude_chat_completions",
+      base_urls: ["https://opencode.ai/zen/go/v1"],
+    });
+
+    const badge = screen.getByRole("button", { name: "Chat" });
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute("title")).toContain("Claude Messages");
+    expect(badge.getAttribute("title")).toContain("Chat Completions");
+    fireEvent.click(badge);
+    expect(screen.getByText("https://opencode.ai/zen/go/v1")).toBeInTheDocument();
+  });
+
   it("shows only one 免费 label for zero-cost cx2cc cards", () => {
     renderCard({
       bridge_type: "cx2cc",

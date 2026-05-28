@@ -132,6 +132,49 @@ describe("pages/providers/providerEditorSubmitModel", () => {
     );
   });
 
+  it("marks claude api-key providers as chat-completions bridge when selected", () => {
+    const result = buildProviderEditorUpsertInput(
+      makeContext({
+        cliKey: "claude",
+        authMode: "claude_chat_completions",
+        baseUrlRows: [
+          {
+            id: "1",
+            url: "https://opencode.ai/zen/go/v1",
+            ping: { status: "idle" },
+          },
+        ],
+        claudeModels: {
+          sonnet_model: "mimo-v2.5-pro",
+          haiku_model: "mimo-v2.5",
+        },
+        formValues: {
+          ...DEFAULT_FORM_VALUES,
+          name: "OpenCode Go MiMo",
+          api_key: "sk-opencode",
+        },
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.payload).toEqual(
+      expect.objectContaining({
+        cliKey: "claude",
+        authMode: "api_key",
+        apiKey: "sk-opencode",
+        baseUrls: ["https://opencode.ai/zen/go/v1"],
+        sourceProviderId: null,
+        bridgeType: "claude_chat_completions",
+        claudeModels: {
+          sonnet_model: "mimo-v2.5-pro",
+          haiku_model: "mimo-v2.5",
+        },
+      })
+    );
+  });
+
   it("includes normalized codex model mapping for cc2cx providers", () => {
     const result = buildProviderEditorUpsertInput(
       makeContext({

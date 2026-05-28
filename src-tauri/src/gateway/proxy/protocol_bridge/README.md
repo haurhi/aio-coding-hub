@@ -42,6 +42,7 @@ protocol_bridge/
 |---------------|-----------------|-------------------|-------------|
 | `cx2cc` | Anthropic Messages | OpenAI Responses | Use Codex-compatible providers from Claude Code |
 | `cc2cx` | OpenAI Responses | OpenAI Chat Completions | Use Chat Completions-compatible providers from Codex |
+| `claude_chat_completions` | Anthropic Messages | OpenAI Chat Completions | Use Chat Completions-compatible providers from Claude Code |
 
 ## Adding a New Protocol Pair
 

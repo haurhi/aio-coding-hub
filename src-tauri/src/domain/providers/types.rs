@@ -8,6 +8,7 @@ pub(super) const MAX_MODEL_NAME_LEN: usize = 200;
 pub(super) const MAX_MODEL_MAPPING_ENTRIES: usize = 128;
 pub(crate) const CX2CC_BRIDGE_TYPE: &str = "cx2cc";
 pub(crate) const CC2CX_BRIDGE_TYPE: &str = "cc2cx";
+pub(crate) const CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE: &str = "claude_chat_completions";
 pub type ProviderModelMapping = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
@@ -56,6 +57,10 @@ pub(crate) fn is_cx2cc_bridge(source_provider_id: Option<i64>, bridge_type: Opti
 
 pub(crate) fn is_cc2cx_bridge(bridge_type: Option<&str>) -> bool {
     bridge_type == Some(CC2CX_BRIDGE_TYPE)
+}
+
+pub(crate) fn is_claude_chat_completions_bridge(bridge_type: Option<&str>) -> bool {
+    bridge_type == Some(CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
 }
 
 fn take_first_chars(value: &str, max_chars: usize) -> String {

@@ -486,10 +486,12 @@ export interface ProviderTypeInfo {
   isCx2ccGateway: boolean;
   /** Whether this is a CC2CX bridge (Chat Completions provider exposed to Codex) */
   isCc2cx: boolean;
+  /** Whether this is a Claude Messages provider backed by OpenAI Chat Completions */
+  isClaudeChatCompletions: boolean;
   /** Whether this is OAuth mode */
   isOAuth: boolean;
-  /** Effective auth mode: api_key / oauth / cx2cc / cc2cx */
-  effectiveAuthMode: "api_key" | "oauth" | "cx2cc" | "cc2cx";
+  /** Effective auth mode: api_key / oauth / cx2cc / cc2cx / claude_chat_completions */
+  effectiveAuthMode: "api_key" | "oauth" | "cx2cc" | "cc2cx" | "claude_chat_completions";
 }
 
 export function getProviderTypeInfo(
@@ -503,6 +505,7 @@ export function getProviderTypeInfo(
       isCx2cc: false,
       isCx2ccGateway: false,
       isCc2cx: false,
+      isClaudeChatCompletions: false,
       isOAuth: false,
       effectiveAuthMode: "api_key",
     };
@@ -510,13 +513,23 @@ export function getProviderTypeInfo(
   const isCx2cc = provider.source_provider_id != null || provider.bridge_type === "cx2cc";
   const isCx2ccGateway = provider.bridge_type === "cx2cc" && provider.source_provider_id == null;
   const isCc2cx = provider.bridge_type === "cc2cx";
+  const isClaudeChatCompletions = provider.bridge_type === "claude_chat_completions";
   const isOAuth = provider.auth_mode === "oauth";
   const effectiveAuthMode: ProviderTypeInfo["effectiveAuthMode"] = isCx2cc
     ? "cx2cc"
     : isCc2cx
       ? "cc2cx"
-      : isOAuth
-        ? "oauth"
-        : "api_key";
-  return { isCx2cc, isCx2ccGateway, isCc2cx, isOAuth, effectiveAuthMode };
+      : isClaudeChatCompletions
+        ? "claude_chat_completions"
+        : isOAuth
+          ? "oauth"
+          : "api_key";
+  return {
+    isCx2cc,
+    isCx2ccGateway,
+    isCc2cx,
+    isClaudeChatCompletions,
+    isOAuth,
+    effectiveAuthMode,
+  };
 }

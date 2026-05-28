@@ -492,6 +492,40 @@ fn upsert_accepts_cc2cx_bridge_for_codex_api_key_provider() {
 }
 
 #[test]
+fn upsert_accepts_claude_chat_completions_bridge_for_claude_api_key_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_claude_chat_completions.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("opencode-mimo-chat");
+    params.base_urls = vec!["https://opencode.ai/zen/go/v1".to_string()];
+    params.bridge_type = Some("claude_chat_completions".to_string());
+    params.claude_models = Some(ClaudeModels {
+        main_model: Some("mimo-v2.5-pro".to_string()),
+        sonnet_model: Some("mimo-v2.5-pro".to_string()),
+        haiku_model: Some("mimo-v2.5".to_string()),
+        opus_model: Some("mimo-v2.5-pro".to_string()),
+        ..Default::default()
+    });
+
+    let saved = upsert(&db, params).expect("save claude chat completions bridge provider");
+
+    assert_eq!(saved.cli_key, "claude");
+    assert_eq!(
+        saved.bridge_type.as_deref(),
+        Some("claude_chat_completions")
+    );
+    assert_eq!(
+        saved.base_urls,
+        vec!["https://opencode.ai/zen/go/v1".to_string()]
+    );
+    assert_eq!(
+        saved.claude_models.sonnet_model.as_deref(),
+        Some("mimo-v2.5-pro")
+    );
+}
+
+#[test]
 fn upsert_rejects_cc2cx_bridge_for_non_codex_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("providers_cc2cx_claude.db");

@@ -110,8 +110,14 @@ export function buildProviderEditorUpsertInput(
         ? ctx.selectedCx2ccSourceProvider.cost_multiplier
         : parsed.data.cost_multiplier;
   const effectiveAuthMode: "api_key" | "oauth" = ctx.authMode === "oauth" ? "oauth" : "api_key";
-  const bridgeType: "cx2cc" | "cc2cx" | null =
-    ctx.authMode === "cx2cc" ? "cx2cc" : ctx.authMode === "cc2cx" ? "cc2cx" : null;
+  const bridgeType: "cx2cc" | "cc2cx" | "claude_chat_completions" | null =
+    ctx.authMode === "cx2cc"
+      ? "cx2cc"
+      : ctx.authMode === "cc2cx"
+        ? "cc2cx"
+        : ctx.authMode === "claude_chat_completions"
+          ? "claude_chat_completions"
+          : null;
   const modelMapping = normalizeModelMappingRows(ctx.modelMappingRows);
 
   const payload = {

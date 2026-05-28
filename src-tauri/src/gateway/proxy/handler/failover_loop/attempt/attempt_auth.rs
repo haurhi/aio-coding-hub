@@ -39,6 +39,10 @@ pub(super) fn inject_auth<R: tauri::Runtime>(
             .as_ref()
             .map(|(_, source_cli_key)| source_cli_key.as_str())
             .unwrap_or("codex")
+    } else if prepared.protocol_bridge_type.as_deref()
+        == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
+    {
+        "codex"
     } else {
         input.cli_key.as_str()
     };
@@ -156,10 +160,13 @@ fn inject_standard_auth<R: tauri::Runtime>(
     retry_index: u32,
     headers: &mut HeaderMap,
 ) {
-    let auth_cli_key = if prepared.cx2cc_active {
+    let use_codex_auth = prepared.cx2cc_active
+        || prepared.protocol_bridge_type.as_deref()
+            == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE);
+    let auth_cli_key = if use_codex_auth {
         "codex"
     } else {
-        &input.cli_key
+        input.cli_key.as_str()
     };
     inject_provider_auth(auth_cli_key, prepared.effective_credential.trim(), headers);
 
