@@ -209,6 +209,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                         "removedRedactedThinkingBlocks": rectified.removed_redacted_thinking_blocks,
                         "removedSignatureFields": rectified.removed_signature_fields,
                         "removedTopLevelThinking": rectified.removed_top_level_thinking,
+                        "disabledTopLevelThinking": rectified.disabled_top_level_thinking,
                         "mergedAdjacentAssistantMessages": rectified.merged_adjacent_assistant_messages,
                     }),
                 );

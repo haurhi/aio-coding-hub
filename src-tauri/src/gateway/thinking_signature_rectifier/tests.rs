@@ -315,8 +315,39 @@ fn rectify_disables_direct_deepseek_thinking_when_history_lacks_passback_blocks(
     );
 
     assert!(result.applied);
-    assert!(result.removed_top_level_thinking);
-    assert!(message.get("thinking").is_none());
+    assert!(result.disabled_top_level_thinking);
+    assert_eq!(message["thinking"]["type"].as_str(), Some("disabled"));
+    assert_eq!(result.merged_adjacent_assistant_messages, 0);
+}
+
+#[test]
+fn rectify_disables_direct_deepseek_default_thinking_when_history_lacks_passback_blocks() {
+    let mut message = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "previous answer without thinking passback" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "continue" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_request(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        None,
+        Some("https://api.deepseek.com/anthropic"),
+    );
+
+    assert!(result.applied);
+    assert!(result.disabled_top_level_thinking);
+    assert_eq!(message["thinking"]["type"].as_str(), Some("disabled"));
     assert_eq!(result.merged_adjacent_assistant_messages, 0);
 }
 
@@ -358,10 +389,10 @@ fn rectify_strips_historical_thinking_when_direct_deepseek_disables_thinking() {
     );
 
     assert!(result.applied);
-    assert!(result.removed_top_level_thinking);
+    assert!(result.disabled_top_level_thinking);
     assert_eq!(result.removed_thinking_blocks, 1);
     assert_eq!(result.removed_signature_fields, 1);
-    assert!(message.get("thinking").is_none());
+    assert_eq!(message["thinking"]["type"].as_str(), Some("disabled"));
 
     let first_content = message["messages"][0]["content"]
         .as_array()

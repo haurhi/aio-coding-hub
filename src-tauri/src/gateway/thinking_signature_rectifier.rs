@@ -15,6 +15,7 @@ pub(super) struct ThinkingSignatureRectifierResult {
     pub(super) removed_redacted_thinking_blocks: usize,
     pub(super) removed_signature_fields: usize,
     pub(super) removed_top_level_thinking: bool,
+    pub(super) disabled_top_level_thinking: bool,
     pub(super) merged_adjacent_assistant_messages: usize,
 }
 
@@ -124,6 +125,7 @@ fn is_direct_deepseek_anthropic_provider(provider_base_url: Option<&str>) -> boo
 pub(super) struct ThinkingSignatureRectifierOptions {
     pub(super) strip_thinking_blocks_and_signatures: bool,
     pub(super) remove_top_level_thinking_when_any_assistant_lacks_thinking: bool,
+    pub(super) disable_top_level_thinking_instead_of_remove: bool,
     pub(super) merge_adjacent_assistant_messages: bool,
 }
 
@@ -133,6 +135,7 @@ impl ThinkingSignatureRectifierOptions {
         Self {
             strip_thinking_blocks_and_signatures: true,
             remove_top_level_thinking_when_any_assistant_lacks_thinking: false,
+            disable_top_level_thinking_instead_of_remove: false,
             merge_adjacent_assistant_messages: false,
         }
     }
@@ -157,6 +160,7 @@ fn options_for_trigger(
         return ThinkingSignatureRectifierOptions {
             strip_thinking_blocks_and_signatures: false,
             remove_top_level_thinking_when_any_assistant_lacks_thinking: true,
+            disable_top_level_thinking_instead_of_remove: true,
             merge_adjacent_assistant_messages: true,
         };
     }
@@ -166,6 +170,7 @@ fn options_for_trigger(
         remove_top_level_thinking_when_any_assistant_lacks_thinking: trigger
             == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
             && protocol_bridge_type == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE),
+        disable_top_level_thinking_instead_of_remove: false,
         merge_adjacent_assistant_messages: false,
     }
 }
@@ -318,6 +323,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
     let mut removed_redacted_thinking_blocks = 0usize;
     let mut removed_signature_fields = 0usize;
     let mut removed_top_level_thinking = false;
+    let mut disabled_top_level_thinking = false;
     let mut merged_adjacent_assistant_messages = 0usize;
     let mut applied = false;
 
@@ -328,16 +334,19 @@ pub(super) fn rectify_anthropic_request_message_with_options(
             removed_redacted_thinking_blocks,
             removed_signature_fields,
             removed_top_level_thinking,
+            disabled_top_level_thinking,
             merged_adjacent_assistant_messages,
         };
     };
 
-    let thinking_enabled = message_obj
+    let thinking_type = message_obj
         .get("thinking")
         .and_then(|v| v.as_object())
         .and_then(|obj| obj.get("type"))
-        .and_then(|v| v.as_str())
-        == Some("enabled");
+        .and_then(|v| v.as_str());
+    let thinking_enabled = thinking_type == Some("enabled")
+        || (options.disable_top_level_thinking_instead_of_remove
+            && thinking_type != Some("disabled"));
 
     let mut should_remove_top_level_thinking = false;
 
@@ -352,6 +361,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
                 removed_redacted_thinking_blocks,
                 removed_signature_fields,
                 removed_top_level_thinking,
+                disabled_top_level_thinking,
                 merged_adjacent_assistant_messages,
             };
         };
@@ -441,9 +451,26 @@ pub(super) fn rectify_anthropic_request_message_with_options(
         }
     }
 
-    if should_remove_top_level_thinking && message_obj.remove("thinking").is_some() {
-        removed_top_level_thinking = true;
-        applied = true;
+    if should_remove_top_level_thinking {
+        if options.disable_top_level_thinking_instead_of_remove {
+            let already_disabled = message_obj
+                .get("thinking")
+                .and_then(|v| v.as_object())
+                .and_then(|obj| obj.get("type"))
+                .and_then(|v| v.as_str())
+                == Some("disabled");
+            if !already_disabled {
+                message_obj.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({ "type": "disabled" }),
+                );
+                disabled_top_level_thinking = true;
+                applied = true;
+            }
+        } else if message_obj.remove("thinking").is_some() {
+            removed_top_level_thinking = true;
+            applied = true;
+        }
     }
 
     ThinkingSignatureRectifierResult {
@@ -452,6 +479,7 @@ pub(super) fn rectify_anthropic_request_message_with_options(
         removed_redacted_thinking_blocks,
         removed_signature_fields,
         removed_top_level_thinking,
+        disabled_top_level_thinking,
         merged_adjacent_assistant_messages,
     }
 }
