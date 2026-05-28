@@ -683,4 +683,77 @@ mod tests {
         assert_eq!(translated_body["messages"][1]["content"], "hi");
         assert_eq!(translated_body["stream"], true);
     }
+
+    #[test]
+    fn translate_direct_bridge_request_flattens_array_tool_result_content_for_chat_completions() {
+        let body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "Read file"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "call_1",
+                                "name": "read_file",
+                                "input": {"path": "Cargo.toml"}
+                            }
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "call_1",
+                                "content": [
+                                    {"type": "text", "text": "[package]\n"},
+                                    {"type": "text", "text": "name = \"aio-coding-hub\""}
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "stream": false
+            }))
+            .unwrap(),
+        );
+        let claude_models = crate::providers::ClaudeModels {
+            sonnet_model: Some("mimo-v2.5-pro".to_string()),
+            ..Default::default()
+        };
+
+        let translated = translate_direct_bridge_request(
+            crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE,
+            &body,
+            Some("claude-sonnet-4-20250514"),
+            false,
+            &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
+            &claude_models,
+            &crate::providers::ProviderModelMapping::default(),
+        )
+        .expect("translate array-format tool result to chat completions");
+        let translated_body: serde_json::Value =
+            serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
+        let messages = translated_body["messages"].as_array().unwrap();
+
+        assert_eq!(translated.forwarded_path, "/chat/completions");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "Read file");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "");
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_1");
+        assert_eq!(
+            messages[2]["content"],
+            "[package]\nname = \"aio-coding-hub\""
+        );
+        assert!(messages
+            .iter()
+            .all(|message| message["content"].is_string() || message["content"].is_null()));
+    }
 }

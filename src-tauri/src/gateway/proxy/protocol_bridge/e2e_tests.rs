@@ -441,6 +441,97 @@ mod tests {
     }
 
     #[test]
+    fn claude_chat_completions_maps_reasoning_content_to_thinking_response() {
+        let bridge = get_bridge("claude_chat_completions").unwrap();
+        let ctx = BridgeContext {
+            requested_model: Some("claude-sonnet-4-20250514".into()),
+            ..cx2cc_ctx()
+        };
+
+        let chat_resp = json!({
+            "id": "chatcmpl_reasoning",
+            "model": "mimo-v2.5-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "Thinking from OpenCode"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+
+        let anthropic = bridge.translate_response(chat_resp, &ctx).unwrap();
+        let content = anthropic["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "Thinking from OpenCode");
+    }
+
+    #[test]
+    fn claude_chat_completions_maps_reasoning_content_stream_to_thinking_delta() {
+        let bridge = get_bridge("claude_chat_completions").unwrap();
+        let ctx = BridgeContext {
+            requested_model: Some("claude-sonnet-4-20250514".into()),
+            ..cx2cc_ctx()
+        };
+        let mut translator = bridge.create_stream_translator();
+
+        let first = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_reasoning_stream",
+                    "model": "mimo-v2.5-pro",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let delta = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_reasoning_stream",
+                    "model": "mimo-v2.5-pro",
+                    "choices": [{"index": 0, "delta": {"reasoning_content": "step one"}}]
+                }),
+                &ctx,
+            )
+            .unwrap();
+        let done = translator
+            .translate_event(
+                "unknown",
+                &json!({
+                    "id": "chatcmpl_reasoning_stream",
+                    "model": "mimo-v2.5-pro",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1}
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        let sse_text = first
+            .into_iter()
+            .chain(delta)
+            .chain(done)
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<String>();
+        let events = parse_sse_events(&sse_text);
+
+        assert!(events.iter().any(|(name, payload)| {
+            name == "content_block_start" && payload["content_block"]["type"] == "thinking"
+        }));
+        assert!(events.iter().any(|(name, payload)| {
+            name == "content_block_delta"
+                && payload["delta"]["type"] == "thinking_delta"
+                && payload["delta"]["thinking"] == "step one"
+        }));
+    }
+
+    #[test]
     fn cc2cx_translates_chat_completions_text_stream_to_responses_sse() {
         let bridge = get_bridge("cc2cx").unwrap();
         let ctx = cc2cx_ctx();

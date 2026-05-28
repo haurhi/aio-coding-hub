@@ -28,9 +28,9 @@ impl Outbound for OpenAIChatCompletionsOutbound {
     fn response_to_ir(
         &self,
         body: Value,
-        _ctx: &BridgeContext,
+        ctx: &BridgeContext,
     ) -> Result<InternalResponse, BridgeError> {
-        response_to_ir(body)
+        response_to_ir(body, ctx.cx2cc_settings.enable_reasoning_to_thinking)
     }
 
     fn sse_event_to_ir(
@@ -161,7 +161,10 @@ fn append_message(messages: &mut Vec<Value>, message: &IRMessage) {
     }
 }
 
-fn response_to_ir(body: Value) -> Result<InternalResponse, BridgeError> {
+fn response_to_ir(
+    body: Value,
+    enable_reasoning_to_thinking: bool,
+) -> Result<InternalResponse, BridgeError> {
     let id = body
         .get("id")
         .and_then(Value::as_str)
@@ -180,6 +183,21 @@ fn response_to_ir(body: Value) -> Result<InternalResponse, BridgeError> {
 
     let mut content = Vec::new();
     let message = choice.get("message").unwrap_or(&Value::Null);
+    if let Some(thinking) = enable_reasoning_to_thinking
+        .then(|| {
+            message
+                .get("reasoning_content")
+                .or_else(|| message.get("reasoning"))
+                .and_then(Value::as_str)
+        })
+        .flatten()
+    {
+        if !thinking.trim().is_empty() {
+            content.push(IRContentBlock::Thinking {
+                thinking: thinking.to_string(),
+            });
+        }
+    }
     if let Some(text) = message.get("content").and_then(Value::as_str) {
         if !text.is_empty() {
             content.push(IRContentBlock::Text {
@@ -369,6 +387,44 @@ fn sse_event_to_ir(
     };
 
     let delta = choice.get("delta").unwrap_or(&Value::Null);
+    if let Some(thinking) = state
+        .enable_reasoning_to_thinking
+        .then(|| {
+            delta
+                .get("reasoning_content")
+                .or_else(|| delta.get("reasoning"))
+                .and_then(Value::as_str)
+        })
+        .flatten()
+    {
+        if !thinking.trim().is_empty() {
+            if state.block_open && state.active_tool.is_some() {
+                close_active_block(state, &mut chunks);
+            }
+            if state.block_open {
+                close_active_block(state, &mut chunks);
+            }
+            let index = state.block_index;
+            state.block_index += 1;
+            chunks.push(IRStreamChunk::ContentBlockStart {
+                index,
+                block_type: IRBlockType::Thinking,
+            });
+            chunks.push(IRStreamChunk::ContentBlockDelta {
+                index,
+                delta: IRDelta::ThinkingDelta {
+                    thinking: thinking.to_string(),
+                },
+            });
+            chunks.push(IRStreamChunk::ContentBlockStop {
+                index,
+                block_type: Some(IRBlockType::Thinking),
+                final_text: None,
+                final_json: None,
+            });
+            state.saw_visible_text = true;
+        }
+    }
     if let Some(text) = delta.get("content").and_then(Value::as_str) {
         if !text.is_empty() {
             open_text_block_if_needed(state, &mut chunks);

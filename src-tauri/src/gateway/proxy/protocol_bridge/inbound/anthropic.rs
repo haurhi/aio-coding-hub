@@ -206,6 +206,17 @@ fn parse_single_block(block: &Value) -> Result<Option<IRContentBlock>, BridgeErr
                 .to_string();
             let content = match block.get("content") {
                 Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|item| {
+                        if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            item.get("text").and_then(|t| t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
                 Some(v) => serde_json::to_string(v).unwrap_or_default(),
                 None => String::new(),
             };
@@ -673,6 +684,36 @@ mod tests {
         assert!(
             matches!(&ir.messages[1].content[0], IRContentBlock::ToolResult { tool_use_id, content, .. }
             if tool_use_id == "call_1" && content == "Sunny")
+        );
+    }
+
+    #[test]
+    fn request_tool_result_extracts_text_from_array_content() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": [
+                                {"type": "text", "text": "line 1\n"},
+                                {"type": "text", "text": "line 2"},
+                                {"type": "image", "source": {"media_type": "image/png", "data": "abc"}}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let ir = parse_request(body, &default_settings()).unwrap();
+        assert!(
+            matches!(&ir.messages[0].content[0], IRContentBlock::ToolResult { tool_use_id, content, .. }
+            if tool_use_id == "call_1" && content == "line 1\nline 2")
         );
     }
 
