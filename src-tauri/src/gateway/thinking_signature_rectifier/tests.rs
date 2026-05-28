@@ -289,6 +289,92 @@ fn rectify_merges_adjacent_assistant_chunks_for_direct_deepseek_passback() {
 }
 
 #[test]
+fn rectify_disables_direct_deepseek_thinking_when_history_lacks_passback_blocks() {
+    let mut message = json!({
+        "model": "deepseek-v4-pro",
+        "thinking": { "type": "enabled", "budget_tokens": 1024 },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "previous answer without thinking passback" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "continue" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_request(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        None,
+        Some("https://api.deepseek.com/anthropic"),
+    );
+
+    assert!(result.applied);
+    assert!(result.removed_top_level_thinking);
+    assert!(message.get("thinking").is_none());
+    assert_eq!(result.merged_adjacent_assistant_messages, 0);
+}
+
+#[test]
+fn rectify_strips_historical_thinking_when_direct_deepseek_disables_thinking() {
+    let mut message = json!({
+        "model": "deepseek-v4-pro",
+        "thinking": { "type": "enabled", "budget_tokens": 1024 },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "thinking", "thinking": "private reasoning", "signature": "sig-thinking" },
+                    { "type": "text", "text": "previous answer", "signature": "sig-text" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "follow up" } ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "a later answer without thinking" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "continue" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_request(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        None,
+        Some("https://api.deepseek.com/anthropic"),
+    );
+
+    assert!(result.applied);
+    assert!(result.removed_top_level_thinking);
+    assert_eq!(result.removed_thinking_blocks, 1);
+    assert_eq!(result.removed_signature_fields, 1);
+    assert!(message.get("thinking").is_none());
+
+    let first_content = message["messages"][0]["content"]
+        .as_array()
+        .expect("content remains array");
+    let types: Vec<_> = first_content
+        .iter()
+        .map(|v| v["type"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(types, vec!["text"]);
+    assert!(first_content[0].get("signature").is_none());
+}
+
+#[test]
 fn rectify_keeps_top_level_thinking_for_direct_provider_without_tool_use() {
     let mut message = json!({
         "model": "claude-test",

@@ -156,7 +156,7 @@ fn options_for_trigger(
     if is_direct_deepseek_passback_request(trigger, protocol_bridge_type, provider_base_url) {
         return ThinkingSignatureRectifierOptions {
             strip_thinking_blocks_and_signatures: false,
-            remove_top_level_thinking_when_any_assistant_lacks_thinking: false,
+            remove_top_level_thinking_when_any_assistant_lacks_thinking: true,
             merge_adjacent_assistant_messages: true,
         };
     }
@@ -216,6 +216,69 @@ fn merge_adjacent_assistant_messages(messages: &mut Vec<serde_json::Value>) -> u
 
     *messages = next_messages;
     merged_count
+}
+
+fn strip_thinking_blocks_and_signatures(
+    messages: &mut [serde_json::Value],
+) -> (usize, usize, usize, bool) {
+    let mut removed_thinking_blocks = 0usize;
+    let mut removed_redacted_thinking_blocks = 0usize;
+    let mut removed_signature_fields = 0usize;
+    let mut applied = false;
+
+    for msg in messages.iter_mut() {
+        let Some(msg_obj) = msg.as_object_mut() else {
+            continue;
+        };
+
+        let Some(content) = msg_obj.get_mut("content").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+
+        let original = std::mem::take(content);
+        let mut new_content: Vec<serde_json::Value> = Vec::with_capacity(original.len());
+        let mut content_modified = false;
+
+        for mut block in original {
+            let Some(block_obj) = block.as_object_mut() else {
+                new_content.push(block);
+                continue;
+            };
+
+            match block_obj.get("type").and_then(|v| v.as_str()) {
+                Some("thinking") => {
+                    removed_thinking_blocks += 1;
+                    content_modified = true;
+                    continue;
+                }
+                Some("redacted_thinking") => {
+                    removed_redacted_thinking_blocks += 1;
+                    content_modified = true;
+                    continue;
+                }
+                _ => {}
+            }
+
+            if block_obj.remove("signature").is_some() {
+                removed_signature_fields += 1;
+                content_modified = true;
+            }
+
+            new_content.push(block);
+        }
+
+        if content_modified {
+            applied = true;
+        }
+        *content = new_content;
+    }
+
+    (
+        removed_thinking_blocks,
+        removed_redacted_thinking_blocks,
+        removed_signature_fields,
+        applied,
+    )
 }
 
 #[cfg(test)]
@@ -298,59 +361,11 @@ pub(super) fn rectify_anthropic_request_message_with_options(
             applied = applied || merged_adjacent_assistant_messages > 0;
         }
 
-        if options.strip_thinking_blocks_and_signatures {
-            for msg in messages.iter_mut() {
-                let Some(msg_obj) = msg.as_object_mut() else {
-                    continue;
-                };
-
-                let Some(content) = msg_obj.get_mut("content").and_then(|v| v.as_array_mut())
-                else {
-                    continue;
-                };
-
-                let original = std::mem::take(content);
-                let mut new_content: Vec<serde_json::Value> = Vec::with_capacity(original.len());
-                let mut content_modified = false;
-
-                for mut block in original {
-                    let Some(block_obj) = block.as_object_mut() else {
-                        new_content.push(block);
-                        continue;
-                    };
-
-                    match block_obj.get("type").and_then(|v| v.as_str()) {
-                        Some("thinking") => {
-                            removed_thinking_blocks += 1;
-                            content_modified = true;
-                            continue;
-                        }
-                        Some("redacted_thinking") => {
-                            removed_redacted_thinking_blocks += 1;
-                            content_modified = true;
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    if block_obj.remove("signature").is_some() {
-                        removed_signature_fields += 1;
-                        content_modified = true;
-                    }
-
-                    new_content.push(block);
-                }
-
-                if content_modified {
-                    applied = true;
-                }
-                *content = new_content;
-            }
-        }
-
         // Fallback: if top-level thinking is enabled, but the final assistant message doesn't start
         // with thinking/redacted_thinking AND contains tool_use, remove top-level thinking to avoid
-        // Anthropic 400 "Expected thinking..., but found tool_use".
+        // Anthropic 400 "Expected thinking..., but found tool_use". DeepSeek's passback error is
+        // stricter: if any historical assistant turn lacks a thinking block, disable thinking for
+        // the retry because the missing passback cannot be reconstructed.
         if thinking_enabled {
             if options.remove_top_level_thinking_when_any_assistant_lacks_thinking {
                 should_remove_top_level_thinking = messages
@@ -410,6 +425,19 @@ pub(super) fn rectify_anthropic_request_message_with_options(
                     }
                 }
             }
+        }
+
+        if options.strip_thinking_blocks_and_signatures || should_remove_top_level_thinking {
+            let (
+                stripped_thinking_blocks,
+                stripped_redacted_thinking_blocks,
+                stripped_signature_fields,
+                strip_applied,
+            ) = strip_thinking_blocks_and_signatures(messages);
+            removed_thinking_blocks += stripped_thinking_blocks;
+            removed_redacted_thinking_blocks += stripped_redacted_thinking_blocks;
+            removed_signature_fields += stripped_signature_fields;
+            applied = applied || strip_applied;
         }
     }
 
