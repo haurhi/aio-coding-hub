@@ -43,6 +43,32 @@ fn detect_trigger_missing_thinking_prefix() {
 }
 
 #[test]
+fn detect_trigger_deepseek_thinking_must_be_passed_back() {
+    let trigger = detect_trigger(
+        "The `content[].thinking` in the thinking mode must be passed back to the API.",
+    );
+    assert_eq!(trigger, Some(TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK));
+}
+
+#[test]
+fn detect_trigger_deepseek_passback_is_chat_completion_bridge_scoped() {
+    let error = "The `content[].thinking` in the thinking mode must be passed back to the API.";
+
+    assert_eq!(
+        detect_trigger_for_protocol_bridge(
+            error,
+            Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
+        ),
+        Some(TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK)
+    );
+    assert_eq!(detect_trigger_for_protocol_bridge(error, None), None);
+    assert_eq!(
+        detect_trigger_for_protocol_bridge(error, Some(crate::providers::CX2CC_BRIDGE_TYPE)),
+        None
+    );
+}
+
+#[test]
 fn detect_trigger_invalid_request_with_thinking_context() {
     assert_eq!(
         detect_trigger("非法请求: thinking block signature mismatch"),
@@ -146,4 +172,66 @@ fn rectify_removes_top_level_thinking_when_tool_use_without_thinking_prefix() {
     assert!(result.applied);
     assert!(result.removed_top_level_thinking);
     assert!(message.get("thinking").is_none());
+}
+
+#[test]
+fn rectify_removes_top_level_thinking_when_assistant_history_lacks_thinking_blocks() {
+    let mut message = json!({
+        "model": "claude-test",
+        "thinking": { "type": "enabled", "budget_tokens": 1024 },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "previous answer" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "continue" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_trigger(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE),
+    );
+    assert!(result.applied);
+    assert!(result.removed_top_level_thinking);
+    assert!(message.get("thinking").is_none());
+    assert_eq!(
+        message["messages"][0]["content"][0]["text"].as_str(),
+        Some("previous answer")
+    );
+}
+
+#[test]
+fn rectify_keeps_top_level_thinking_for_direct_provider_without_tool_use() {
+    let mut message = json!({
+        "model": "claude-test",
+        "thinking": { "type": "enabled", "budget_tokens": 1024 },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "previous answer" }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [ { "type": "text", "text": "continue" } ]
+            }
+        ]
+    });
+
+    let result = rectify_anthropic_request_message_for_trigger(
+        &mut message,
+        TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK,
+        None,
+    );
+    assert!(!result.applied);
+    assert!(!result.removed_top_level_thinking);
+    assert!(message.get("thinking").is_some());
 }

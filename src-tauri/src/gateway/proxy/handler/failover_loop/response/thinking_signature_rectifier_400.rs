@@ -74,6 +74,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         attempt_started_ms,
         attempt_started,
         circuit_before,
+        protocol_bridge_type,
         ..
     } = attempt_ctx;
 
@@ -144,7 +145,12 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         );
         let upstream_body_text = String::from_utf8_lossy(body_for_scan.as_ref()).to_string();
         let signature_trigger = enable_thinking_signature_rectifier
-            .then(|| thinking_signature_rectifier::detect_trigger(&upstream_body_text))
+            .then(|| {
+                thinking_signature_rectifier::detect_trigger_for_protocol_bridge(
+                    &upstream_body_text,
+                    protocol_bridge_type,
+                )
+            })
             .flatten();
         let budget_trigger = signature_trigger
             .is_none()
@@ -179,9 +185,12 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                             serde_json::from_slice::<serde_json::Value>(introspection_body)
                         })
                         .unwrap_or(serde_json::Value::Null);
-                let rectified = thinking_signature_rectifier::rectify_anthropic_request_message(
-                    &mut message_value,
-                );
+                let rectified =
+                    thinking_signature_rectifier::rectify_anthropic_request_message_for_trigger(
+                        &mut message_value,
+                        trigger,
+                        protocol_bridge_type,
+                    );
 
                 response_fixer::push_special_setting(
                     &special_settings,

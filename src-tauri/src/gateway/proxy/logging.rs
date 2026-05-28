@@ -1,6 +1,6 @@
 //! Usage: Best-effort enqueue to DB log tasks with backpressure and fallbacks.
 
-use crate::{db, request_logs};
+use crate::{db, request_logs, usage::UsageMetrics};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -108,6 +108,51 @@ fn bound_optional_json_array(value: Option<String>, field: &'static str) -> Opti
     })
 }
 
+fn usage_metric_is_missing_or_zero(value: Option<i64>) -> bool {
+    matches!(value, None | Some(0))
+}
+
+fn usage_metrics_are_all_missing_or_zero(metrics: &UsageMetrics) -> bool {
+    usage_metric_is_missing_or_zero(metrics.input_tokens)
+        && usage_metric_is_missing_or_zero(metrics.output_tokens)
+        && usage_metric_is_missing_or_zero(metrics.total_tokens)
+        && usage_metric_is_missing_or_zero(metrics.cache_read_input_tokens)
+        && usage_metric_is_missing_or_zero(metrics.cache_creation_input_tokens)
+        && usage_metric_is_missing_or_zero(metrics.cache_creation_5m_input_tokens)
+        && usage_metric_is_missing_or_zero(metrics.cache_creation_1h_input_tokens)
+}
+
+fn usage_json_number_is_zero(value: &serde_json::Value) -> bool {
+    value.as_i64() == Some(0) || value.as_u64() == Some(0) || value.as_f64() == Some(0.0)
+}
+
+fn usage_json_is_all_zero_object(usage_json: &str) -> bool {
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(usage_json)
+    else {
+        return false;
+    };
+    if obj.is_empty() {
+        return false;
+    }
+
+    obj.iter().all(|(key, value)| {
+        matches!(
+            key.as_str(),
+            "input_tokens"
+                | "output_tokens"
+                | "total_tokens"
+                | "cache_read_input_tokens"
+                | "cache_creation_input_tokens"
+                | "cache_creation_5m_input_tokens"
+                | "cache_creation_1h_input_tokens"
+        ) && usage_json_number_is_zero(value)
+    })
+}
+
+fn usage_extract_is_missing_placeholder(metrics: &UsageMetrics, usage_json: &str) -> bool {
+    usage_metrics_are_all_missing_or_zero(metrics) && usage_json_is_all_zero_object(usage_json)
+}
+
 fn request_log_insert_from_args(
     args: super::RequestLogEnqueueArgs,
 ) -> Option<request_logs::RequestLogInsert> {
@@ -139,7 +184,17 @@ fn request_log_insert_from_args(
     }
 
     let (metrics, usage_json) = match usage {
-        Some(extract) => (extract.metrics, Some(extract.usage_json)),
+        Some(extract) => {
+            let crate::usage::UsageExtract {
+                metrics,
+                usage_json,
+            } = extract;
+            if usage_extract_is_missing_placeholder(&metrics, &usage_json) {
+                (UsageMetrics::default(), None)
+            } else {
+                (metrics, Some(usage_json))
+            }
+        }
         None => (usage_metrics.unwrap_or_default(), None),
     };
 
@@ -500,6 +555,33 @@ mod tests {
         assert_eq!(insert.cache_creation_input_tokens, Some(5));
         assert_eq!(insert.cache_creation_5m_input_tokens, Some(6));
         assert_eq!(insert.cache_creation_1h_input_tokens, Some(7));
+        assert_eq!(insert.usage_json, None);
+    }
+
+    #[test]
+    fn request_log_insert_treats_all_zero_usage_extract_as_missing() {
+        let mut args = base_args();
+        args.usage = Some(UsageExtract {
+            metrics: UsageMetrics {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                total_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_creation_5m_input_tokens: None,
+                cache_creation_1h_input_tokens: None,
+            },
+            usage_json: r#"{"input_tokens":0,"output_tokens":0}"#.to_string(),
+        });
+
+        let insert = request_log_insert_from_args(args).expect("insert");
+        assert_eq!(insert.input_tokens, None);
+        assert_eq!(insert.output_tokens, None);
+        assert_eq!(insert.total_tokens, None);
+        assert_eq!(insert.cache_read_input_tokens, None);
+        assert_eq!(insert.cache_creation_input_tokens, None);
+        assert_eq!(insert.cache_creation_5m_input_tokens, None);
+        assert_eq!(insert.cache_creation_1h_input_tokens, None);
         assert_eq!(insert.usage_json, None);
     }
 

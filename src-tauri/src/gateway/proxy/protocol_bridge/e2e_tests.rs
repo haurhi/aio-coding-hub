@@ -138,6 +138,48 @@ mod tests {
     }
 
     #[test]
+    fn claude_chat_completions_drops_anthropic_thinking_history_from_request() {
+        let bridge = get_bridge("claude_chat_completions").unwrap();
+        let ctx = BridgeContext {
+            claude_models: crate::domain::providers::ClaudeModels {
+                sonnet_model: Some("mimo-v2.5-pro".into()),
+                ..Default::default()
+            },
+            requested_model: Some("claude-sonnet-4-20250514".into()),
+            ..cx2cc_ctx()
+        };
+
+        let anthropic_req = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "internal reasoning" },
+                        { "type": "text", "text": "visible answer" }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "continue" }
+                    ]
+                }
+            ]
+        });
+
+        let translated = bridge.translate_request(anthropic_req, &ctx).unwrap();
+        let serialized = translated.body.to_string();
+
+        assert_eq!(translated.target_path, "/chat/completions");
+        assert!(!serialized.contains("internal reasoning"));
+        assert!(!serialized.contains("\"thinking\""));
+        assert_eq!(translated.body["messages"][0]["role"], "assistant");
+        assert_eq!(translated.body["messages"][0]["content"], "visible answer");
+    }
+
+    #[test]
     fn cc2cx_translates_codex_responses_request_to_chat_completions() {
         let bridge = get_bridge("cc2cx").unwrap();
         let ctx = cc2cx_ctx();

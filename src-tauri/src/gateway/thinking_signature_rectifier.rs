@@ -4,6 +4,8 @@ pub(super) const TRIGGER_INVALID_SIGNATURE_IN_THINKING_BLOCK: ThinkingSignatureR
     "invalid_signature_in_thinking_block";
 pub(super) const TRIGGER_ASSISTANT_MESSAGE_MUST_START_WITH_THINKING:
     ThinkingSignatureRectifierTrigger = "assistant_message_must_start_with_thinking";
+pub(super) const TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK: ThinkingSignatureRectifierTrigger =
+    "deepseek_thinking_must_be_passed_back";
 pub(super) const TRIGGER_INVALID_REQUEST: ThinkingSignatureRectifierTrigger = "invalid_request";
 
 #[derive(Debug, Clone, Copy)]
@@ -32,6 +34,13 @@ pub(super) fn detect_trigger(error_message: &str) -> Option<ThinkingSignatureRec
 
     if looks_like_thinking_enabled_but_missing_thinking_prefix {
         return Some(TRIGGER_ASSISTANT_MESSAGE_MUST_START_WITH_THINKING);
+    }
+
+    let looks_like_deepseek_thinking_must_be_passed_back = lower.contains("content[].thinking")
+        && lower.contains("thinking mode")
+        && lower.contains("passed back");
+    if looks_like_deepseek_thinking_must_be_passed_back {
+        return Some(TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK);
     }
 
     let looks_like_invalid_signature_in_thinking_block = lower.contains("invalid")
@@ -73,8 +82,50 @@ pub(super) fn detect_trigger(error_message: &str) -> Option<ThinkingSignatureRec
     None
 }
 
+pub(super) fn detect_trigger_for_protocol_bridge(
+    error_message: &str,
+    protocol_bridge_type: Option<&str>,
+) -> Option<ThinkingSignatureRectifierTrigger> {
+    let trigger = detect_trigger(error_message)?;
+    if trigger == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
+        && protocol_bridge_type != Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE)
+    {
+        return None;
+    }
+    Some(trigger)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct ThinkingSignatureRectifierOptions {
+    pub(super) remove_top_level_thinking_when_any_assistant_lacks_thinking: bool,
+}
+
+#[cfg(test)]
 pub(super) fn rectify_anthropic_request_message(
     message: &mut serde_json::Value,
+) -> ThinkingSignatureRectifierResult {
+    rectify_anthropic_request_message_with_options(
+        message,
+        ThinkingSignatureRectifierOptions::default(),
+    )
+}
+
+pub(super) fn rectify_anthropic_request_message_for_trigger(
+    message: &mut serde_json::Value,
+    trigger: ThinkingSignatureRectifierTrigger,
+    protocol_bridge_type: Option<&str>,
+) -> ThinkingSignatureRectifierResult {
+    let options = ThinkingSignatureRectifierOptions {
+        remove_top_level_thinking_when_any_assistant_lacks_thinking: trigger
+            == TRIGGER_DEEPSEEK_THINKING_MUST_BE_PASSED_BACK
+            && protocol_bridge_type == Some(crate::providers::CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE),
+    };
+    rectify_anthropic_request_message_with_options(message, options)
+}
+
+pub(super) fn rectify_anthropic_request_message_with_options(
+    message: &mut serde_json::Value,
+    options: ThinkingSignatureRectifierOptions,
 ) -> ThinkingSignatureRectifierResult {
     let mut removed_thinking_blocks = 0usize;
     let mut removed_redacted_thinking_blocks = 0usize;
@@ -166,6 +217,31 @@ pub(super) fn rectify_anthropic_request_message(
         // with thinking/redacted_thinking AND contains tool_use, remove top-level thinking to avoid
         // Anthropic 400 "Expected thinking..., but found tool_use".
         if thinking_enabled {
+            if options.remove_top_level_thinking_when_any_assistant_lacks_thinking {
+                should_remove_top_level_thinking = messages
+                    .iter()
+                    .filter_map(|msg| msg.as_object())
+                    .any(|msg_obj| {
+                        if msg_obj.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                            return false;
+                        }
+                        let Some(content) = msg_obj.get("content").and_then(|v| v.as_array())
+                        else {
+                            return false;
+                        };
+                        let has_thinking_block = content.iter().any(|block| {
+                            matches!(
+                                block
+                                    .as_object()
+                                    .and_then(|obj| obj.get("type"))
+                                    .and_then(|v| v.as_str()),
+                                Some("thinking") | Some("redacted_thinking")
+                            )
+                        });
+                        !has_thinking_block
+                    });
+            }
+
             let last_assistant_content = messages.iter().rev().find_map(|msg| {
                 let msg_obj = msg.as_object()?;
                 if msg_obj.get("role").and_then(|v| v.as_str()) != Some("assistant") {
