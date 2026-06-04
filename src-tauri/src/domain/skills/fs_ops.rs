@@ -428,7 +428,38 @@ pub(super) fn is_managed_link_to_ssot(dir: &Path, ssot_root: &Path) -> bool {
 pub(super) use crate::shared::fs::is_symlink;
 
 pub(super) fn has_skill_md(path: &Path) -> bool {
-    path.join("SKILL.md").exists()
+    skill_md_path(path).ok().flatten().is_some()
+}
+
+pub(super) fn skill_md_path(path: &Path) -> crate::shared::error::AppResult<Option<PathBuf>> {
+    let exact = path.join("SKILL.md");
+    if exact.exists() {
+        return Ok(Some(exact));
+    }
+
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(format!("failed to read dir {}: {err}", path.display()).into()),
+    };
+
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("failed to read dir entry {}: {e}", path.display()))?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy().eq_ignore_ascii_case("SKILL.md") {
+            return Ok(Some(entry.path()));
+        }
+    }
+
+    Ok(None)
 }
 
 pub(super) fn remove_managed_dir(dir: &Path) -> crate::shared::error::AppResult<()> {
