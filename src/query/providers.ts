@@ -228,19 +228,60 @@ export function useProvidersReorderMutation() {
 export function useProviderDuplicateMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation<ProviderSummary | null, Error, { providerId: number }>({
+  return useMutation<
+    ProviderSummary | null,
+    Error,
+    { providerId: number },
+    { sourceProviderId: number }
+  >({
     mutationFn: (input: { providerId: number }) => providerDuplicate(input.providerId),
-    onSuccess: (duplicated) => {
+    onMutate: (input) => {
+      return { sourceProviderId: input.providerId };
+    },
+    onSuccess: async (duplicated, _input, context) => {
       if (!duplicated) return;
-      queryClient.setQueryData<ProviderSummary[] | null>(
-        providersKeys.list(duplicated.cli_key),
-        (prev) => {
-          if (!prev) return [duplicated];
-          if (prev.some((row) => row.id === duplicated.id)) return prev;
-          return [...prev, duplicated];
+
+      const cliKey = duplicated.cli_key;
+      const sourceId = context?.sourceProviderId;
+
+      // Insert the duplicated provider right after the source in the cache
+      queryClient.setQueryData<ProviderSummary[] | null>(providersKeys.list(cliKey), (prev) => {
+        if (!prev) return [duplicated];
+
+        const rows = prev.filter((row) => row.id !== duplicated.id);
+
+        if (sourceId != null) {
+          const sourceIndex = rows.findIndex((row) => row.id === sourceId);
+          if (sourceIndex !== -1) {
+            const next = [...rows];
+            next.splice(sourceIndex + 1, 0, duplicated);
+            return next;
+          }
         }
+
+        return [...rows, duplicated];
+      });
+
+      // Persist the new order to the backend
+      const currentList = queryClient.getQueryData<ProviderSummary[] | null>(
+        providersKeys.list(cliKey)
       );
-      queryClient.invalidateQueries({ queryKey: providersKeys.list(duplicated.cli_key) });
+      if (currentList && currentList.length > 1) {
+        try {
+          const reordered = await providersReorder(
+            cliKey as CliKey,
+            currentList.map((p) => p.id)
+          );
+          if (reordered) {
+            queryClient.setQueryData(providersKeys.list(cliKey), reordered);
+          }
+        } catch (error) {
+          await queryClient.invalidateQueries({ queryKey: providersKeys.list(cliKey) });
+          throw error;
+        }
+      } else {
+        await queryClient.invalidateQueries({ queryKey: providersKeys.list(cliKey) });
+      }
     },
   });
 }
