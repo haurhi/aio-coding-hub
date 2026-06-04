@@ -4,6 +4,12 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const NODE_WEBSTORAGE_FLAG = "--no-experimental-webstorage";
+const existingNodeOptions = process.env.NODE_OPTIONS ?? "";
+
+if (!existingNodeOptions.split(/\s+/).includes(NODE_WEBSTORAGE_FLAG)) {
+  process.env.NODE_OPTIONS = [existingNodeOptions, NODE_WEBSTORAGE_FLAG].filter(Boolean).join(" ");
+}
 
 export default defineConfig({
   plugins: [react()],
