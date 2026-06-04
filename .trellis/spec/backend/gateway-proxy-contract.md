@@ -230,6 +230,71 @@ CX2CC is **explicitly non-passthrough**:
 
 This mode is isolated by `source_provider_id` and does not modify non-bridge providers.
 
+### Scenario: CX2CC Count Tokens Compatibility
+
+#### 1. Scope / Trigger
+
+- Trigger: Claude Code Auto mode may call Anthropic
+  `/v1/messages/count_tokens` before sending `/v1/messages`.
+- Scope: only `cli_key=claude` requests where the first resolved provider
+  candidate is a CX2CC bridge.
+
+#### 2. Signatures
+
+- Request path: `POST /v1/messages/count_tokens`.
+- Response shape: `{"input_tokens": <positive integer>}`.
+- Owner:
+  `src-tauri/src/gateway/proxy/handler/middleware/cx2cc_count_tokens_interceptor.rs`.
+
+#### 3. Contracts
+
+- CX2CC count-tokens requests are answered locally; they must not call the
+  Codex source provider or translate into OpenAI Responses `/v1/responses`.
+- Non-CX2CC Claude providers keep the normal upstream forwarding behavior.
+- Normal CX2CC `/v1/messages` translation remains Anthropic Messages → OpenAI
+  Responses.
+- Token counting is best-effort compatibility, not exact tokenizer parity.
+
+#### 4. Validation & Error Matrix
+
+- First resolved provider is CX2CC -> HTTP 200 with positive `input_tokens`.
+- First resolved provider is not CX2CC -> do not intercept; continue normal
+  count-tokens handling.
+- Missing or unparsable JSON body -> HTTP 200 with `input_tokens=1`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: CX2CC bridge handles Claude Code Auto mode count-tokens locally before
+  the main message request.
+- Base: non-CX2CC Anthropic-compatible provider receives count-tokens upstream
+  as before.
+- Bad: CX2CC tries to send count-tokens through OpenAI Responses, which has no
+  equivalent Anthropic count-tokens endpoint.
+
+#### 6. Tests Required
+
+- Unit-test the CX2CC-only intercept predicate.
+- Unit-test the response body is positive and has Anthropic-compatible shape.
+- Unit-test response headers/status for the local intercept.
+- Regression-test existing Claude count-tokens runtime handling and CX2CC model
+  mapping after changes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```rust
+// Treat count_tokens like a normal CX2CC message request.
+translated.target_path == "/v1/responses"
+```
+
+Correct:
+
+```rust
+// Short-circuit only the CX2CC count_tokens helper request.
+serde_json::json!({ "input_tokens": estimate })
+```
+
 ---
 
 ## Body Rectifiers

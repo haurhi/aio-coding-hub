@@ -1470,6 +1470,112 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_internal_forwarded_codex_response_is_not_logged() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let app_settings = settings::AppSettings::default();
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-internal-codex-not-logged-test.sqlite"),
+        )
+        .expect("init test db");
+        let success_body = r#"{"id":"internal-ok","object":"response","model":"gpt-internal"}"#;
+        let (success_base_url, success_task) = spawn_json_upstream(success_body).await;
+        insert_codex_provider_with_priority(&db, "Internal Forward Stub", success_base_url, 0);
+
+        let (log_tx, writer_task) =
+            request_logs::start_buffered_writer(app_handle.clone(), db.clone());
+        let router = build_router(gateway_state(app_handle, db.clone(), log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-aio-gateway-forwarded", "aio-coding-hub")
+            .body(Body::from(r#"{"model":"gpt-internal","input":"hello"}"#))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let trace_id = response
+            .headers()
+            .get("x-trace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("trace header")
+            .to_string();
+
+        tokio::time::timeout(Duration::from_secs(2), writer_task)
+            .await
+            .expect("writer drain timeout")
+            .expect("writer task joins");
+
+        assert!(request_logs::get_by_trace_id(&db, &trace_id)
+            .expect("query request log")
+            .is_none());
+
+        success_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_codex_models_response_is_not_logged() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let app_settings = settings::AppSettings::default();
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("gateway-route-codex-models-test.sqlite"))
+            .expect("init test db");
+        let success_body = r#"{"object":"list","data":[{"id":"gpt-5.5","object":"model"}]}"#;
+        let (success_base_url, success_task) = spawn_json_upstream(success_body).await;
+        insert_codex_provider_with_priority(&db, "Models Stub", success_base_url, 0);
+
+        let (log_tx, writer_task) =
+            request_logs::start_buffered_writer(app_handle.clone(), db.clone());
+        let router = build_router(gateway_state(app_handle, db.clone(), log_tx));
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/models")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let trace_id = response
+            .headers()
+            .get("x-trace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("trace header")
+            .to_string();
+
+        tokio::time::timeout(Duration::from_secs(2), writer_task)
+            .await
+            .expect("writer drain timeout")
+            .expect("writer task joins");
+
+        assert!(request_logs::get_by_trace_id(&db, &trace_id)
+            .expect("query request log")
+            .is_none());
+
+        success_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn mock_runtime_router_sse_stream_persists_success_after_body_consumed() {
         let _env_lock = crate::test_support::test_env_lock();
         let home = tempfile::tempdir().expect("home dir");

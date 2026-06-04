@@ -123,7 +123,7 @@ export function LogsPage() {
     <div className="flex h-full flex-col gap-6 overflow-hidden">
       <PageHeader title="代理记录" />
 
-      <Card padding="md" className="overflow-visible flex flex-col gap-6 pb-7">
+      <Card padding="sm" className="overflow-visible flex flex-col gap-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="text-sm font-semibold text-foreground">筛选条件</div>
 
@@ -148,7 +148,7 @@ export function LogsPage() {
           </div>
         </div>
 
-        <div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-[1.35fr_1fr_1fr_1fr]">
+        <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-[1.35fr_1fr_1fr_1fr]">
           <div className="space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               CLI

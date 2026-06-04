@@ -44,9 +44,9 @@ export function AppLayout() {
             themeClass
           )}
         >
-          {/* Window drag region for titleBarStyle: overlay */}
-          <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-10 h-7" />
-          <main id="main-content" className="flex-1 min-h-0 px-8 pb-5 pt-4">
+          {/* Window drag region for titleBarStyle: overlay (aligned with Sidebar top safe area) */}
+          <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-10 h-8" />
+          <main id="main-content" className="flex-1 min-h-0 px-8 py-5">
             <AppStartupStatusBanner />
             <Outlet />
           </main>

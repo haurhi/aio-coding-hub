@@ -431,7 +431,7 @@ export function SessionsProjectPage() {
                 type="checkbox"
                 checked={allVisibleSelected}
                 onChange={toggleSelectAll}
-                className="h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
+                className="h-4 w-4 rounded border border-input bg-card accent-accent focus:ring-2 focus:ring-ring/30"
                 aria-label="全选"
               />
             </span>
@@ -530,7 +530,7 @@ export function SessionsProjectPage() {
                               type="checkbox"
                               checked={isSelected}
                               onChange={() => toggleSelect(session.file_path)}
-                              className="h-4 w-4 rounded border border-slate-400 bg-card accent-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-secondary"
+                              className="h-4 w-4 rounded border border-input bg-card accent-accent focus:ring-2 focus:ring-ring/30"
                               aria-label={`选择会话 ${title}`}
                             />
                           </div>

@@ -92,7 +92,7 @@ export function TabList<T extends string>({
                 ? "bg-primary text-primary-foreground border-primary shadow-sm shadow-primary/10 cursor-default"
                 : "text-muted-foreground hover:bg-state-hover hover:text-foreground border-transparent cursor-pointer",
               "disabled:cursor-not-allowed disabled:opacity-50",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
               buttonClassName
             )}
           >

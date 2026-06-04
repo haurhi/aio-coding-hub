@@ -149,8 +149,8 @@ export function HomePage() {
   }, [personalizedLayoutEnabled, tab]);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="shrink-0 mb-5">
+    <div className="flex flex-col h-full gap-6 overflow-hidden">
+      <div className="shrink-0">
         <PageHeader
           title="首页"
           actions={

@@ -1158,6 +1158,20 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async skillRepoDiscoverAvailable(
+    repoId: number,
+    refresh: boolean
+  ): Promise<Result<AvailableSkillSummary[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("skill_repo_discover_available", { repoId, refresh }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async skillInstall(
     workspaceId: number,
     gitUrl: string,

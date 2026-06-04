@@ -105,7 +105,7 @@ use crate::gateway::proxy::{
         build_response, has_gzip_content_encoding, has_non_identity_content_encoding,
         is_event_stream, maybe_gunzip_response_body_bytes_with_limit,
     },
-    mark_internal_forwarded_request, ErrorCategory, GatewayErrorCode,
+    ErrorCategory, GatewayErrorCode,
 };
 
 use crate::usage;

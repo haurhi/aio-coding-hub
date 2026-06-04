@@ -6,6 +6,7 @@ import type { CliKey } from "../services/providers/providers";
 import {
   skillInstall,
   skillRepoDelete,
+  skillRepoDiscoverAvailable,
   skillRepoUpsert,
   skillInstallToLocal,
   skillReposList,
@@ -35,6 +36,19 @@ import {
   validateSkillsWorkspaceId,
 } from "../services/workspace/skills";
 import { skillsKeys } from "./keys";
+
+function mergeDiscoveredRepoRows(
+  current: AvailableSkillSummary[] | undefined,
+  repo: SkillRepoSummary,
+  rows: AvailableSkillSummary[]
+) {
+  return [
+    ...(current ?? []).filter(
+      (row) => row.source_git_url !== repo.git_url || row.source_branch !== repo.branch
+    ),
+    ...rows,
+  ].sort((left, right) => left.name.localeCompare(right.name));
+}
 
 export function useSkillReposListQuery(options?: { enabled?: boolean }) {
   return useQuery({
@@ -99,9 +113,25 @@ export function useSkillsDiscoverAvailableMutation() {
       );
       queryClient.setQueryData<AvailableSkillSummary[]>(skillsKeys.discoverAvailable(false), rows);
     },
-    onSettled: (_res, _err, refresh) => {
-      queryClient.invalidateQueries({ queryKey: skillsKeys.discoverAvailable(refresh ?? false) });
-      queryClient.invalidateQueries({ queryKey: skillsKeys.discoverAvailable(false) });
+  });
+}
+
+export function useSkillRepoDiscoverAvailableMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { repo: SkillRepoSummary; refresh: boolean }) =>
+      skillRepoDiscoverAvailable({ repoId: input.repo.id, refresh: input.refresh }),
+    onSuccess: (rows, input) => {
+      if (!rows) return;
+      queryClient.setQueryData<AvailableSkillSummary[]>(
+        skillsKeys.discoverAvailable(input.refresh),
+        (current) => mergeDiscoveredRepoRows(current, input.repo, rows)
+      );
+      queryClient.setQueryData<AvailableSkillSummary[]>(
+        skillsKeys.discoverAvailable(false),
+        (current) => mergeDiscoveredRepoRows(current, input.repo, rows)
+      );
     },
   });
 }

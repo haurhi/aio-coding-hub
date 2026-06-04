@@ -86,6 +86,22 @@ pub(crate) async fn skills_discover_available(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn skill_repo_discover_available(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    repo_id: i64,
+    refresh: bool,
+) -> Result<Vec<skills::AvailableSkillSummary>, String> {
+    let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    blocking::run("skill_repo_discover_available", move || {
+        skills::discover_repo_available(&app, &db, repo_id, refresh)
+    })
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+#[specta::specta]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn skill_install(
     app: tauri::AppHandle,

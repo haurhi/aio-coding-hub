@@ -17,7 +17,7 @@ const PADDING_CLASS: Record<CardPadding, string> = {
 
 const VARIANT_CLASS: Record<CardVariant, string> = {
   panel: "border border-line-subtle bg-surface-panel",
-  raised: "border border-line bg-surface-raised shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+  raised: "border border-line bg-surface-raised shadow-elevated",
   inset: "border border-line-subtle bg-surface-inset",
 };
 

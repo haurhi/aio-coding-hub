@@ -17,7 +17,7 @@ mod types;
 mod update;
 mod util;
 
-pub use discover::discover_available;
+pub use discover::{discover_available, discover_repo_available};
 pub use installed::installed_list_for_workspace;
 pub use local::{delete_local, import_local, import_local_batch, install_to_local, local_list};
 pub(crate) use local_swap::swap_local_skills_for_workspace_switch;

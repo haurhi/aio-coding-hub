@@ -19,6 +19,7 @@ import { Activity, ChevronRight, Search, Filter } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
+import { EmptyState } from "../ui/EmptyState";
 import { PageHeader } from "../ui/PageHeader";
 import { Switch } from "../ui/Switch";
 import { cn } from "../utils/cn";
@@ -384,8 +385,8 @@ export function ConsolePage() {
 
       {/* Filter bar */}
       {showFilters ? (
-        <Card padding="none">
-          <div className="px-4 py-3 flex flex-wrap items-center gap-3">
+        <Card padding="sm">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="relative flex-1 min-w-[200px] max-w-[360px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <input
@@ -463,29 +464,28 @@ export function ConsolePage() {
           )}
         >
           {visibleLogs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center px-4 py-16 text-center">
-              <div className="mb-3 rounded-full bg-secondary p-4 border border-border dark:bg-secondary/50 dark:border-border/50">
-                <svg
-                  className="h-8 w-8 text-muted-foreground"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  strokeWidth="1.5"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"
-                  />
-                </svg>
-              </div>
-              <p className="text-sm font-medium text-muted-foreground">
-                {logs.length === 0 ? "暂无日志" : "暂无可显示的日志"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {logs.length === 0 ? "系统日志将在这里显示" : "调整过滤器以查看更多日志"}
-              </p>
-            </div>
+            <EmptyState
+              className="px-4 py-16"
+              icon={
+                <div className="rounded-full bg-secondary p-4 border border-border dark:bg-secondary/50 dark:border-border/50">
+                  <svg
+                    className="h-8 w-8 text-muted-foreground"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth="1.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"
+                    />
+                  </svg>
+                </div>
+              }
+              title={logs.length === 0 ? "暂无日志" : "暂无可显示的日志"}
+              description={logs.length === 0 ? "系统日志将在这里显示" : "调整过滤器以查看更多日志"}
+            />
           ) : (
             <div
               style={{

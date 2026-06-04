@@ -33,7 +33,7 @@ export const DialogContent = forwardRef<
           ref={ref}
           className={cn(
             [
-              "w-full overflow-hidden border border-line bg-surface-panel shadow-[0_18px_48px_rgba(15,23,42,0.18)]",
+              "w-full overflow-hidden border border-line bg-surface-panel shadow-dialog",
               "flex max-h-[calc(100vh-2rem)] flex-col outline-none",
               "rounded-2xl",
               "max-w-[calc(100vw-2rem)]",
@@ -60,7 +60,7 @@ export const DialogTitle = forwardRef<
   return (
     <DialogPrimitive.Title
       ref={ref}
-      className={cn("truncate text-sm font-semibold text-foreground", className)}
+      className={cn("truncate text-base font-semibold text-foreground", className)}
       {...props}
     />
   );

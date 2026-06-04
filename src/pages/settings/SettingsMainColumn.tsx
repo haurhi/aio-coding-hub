@@ -268,7 +268,7 @@ export function SettingsMainColumn({
         </div>
 
         <div className="space-y-8">
-          <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+          <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
             {/* 系统设置 */}
             <div className="rounded-2xl border border-line-subtle bg-surface-inset p-4">
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

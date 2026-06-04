@@ -98,9 +98,6 @@ where
     // --- Build headers + inject auth ---
     let mut headers = input.base_headers.clone();
     ensure_cli_required_headers(&input.cli_key, &mut headers);
-    if input.cli_key == "claude" {
-        mark_internal_forwarded_request(&mut headers);
-    }
     codex_session_id_completion::inject_session_headers_if_needed(
         &mut headers,
         prepared.cx2cc_codex_session_id.as_deref(),

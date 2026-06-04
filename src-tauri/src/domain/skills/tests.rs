@@ -1,6 +1,7 @@
 use super::git_url::parse_github_owner_repo;
 use super::limits::{
-    SKILL_FILE_COUNT_MAX, SKILL_FILE_MAX_BYTES, SKILL_MD_MAX_BYTES, SKILL_SOURCE_METADATA_MAX_BYTES,
+    SKILL_DISCOVERY_SKILL_MD_MAX, SKILL_FILE_COUNT_MAX, SKILL_FILE_MAX_BYTES, SKILL_MD_MAX_BYTES,
+    SKILL_SOURCE_METADATA_MAX_BYTES,
 };
 use super::repo_cache::{github_api_url, unzip_repo_zip};
 use super::util::now_unix_nanos;
@@ -98,6 +99,22 @@ fn parse_skill_md_rejects_oversized_file() {
     let err = super::skill_md::parse_skill_md(&path).expect_err("oversized SKILL.md should fail");
 
     assert!(err.contains("too large"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn find_skill_md_files_truncates_at_discovery_limit() {
+    let dir = make_temp_dir("aio-skill-md-many");
+    for index in 0..=SKILL_DISCOVERY_SKILL_MD_MAX {
+        let skill_dir = dir.join(format!("skill-{index}"));
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: Many\n---\n")
+            .expect("write skill md");
+    }
+
+    let skill_mds = super::skill_md::find_skill_md_files(&dir).expect("discover skill md files");
+
+    assert_eq!(skill_mds.len(), SKILL_DISCOVERY_SKILL_MD_MAX);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

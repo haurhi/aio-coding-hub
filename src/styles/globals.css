@@ -81,6 +81,11 @@
     --shadow-request-log-hover: 0 4px 12px rgb(0 0 0 / 0.03);
     --shadow-request-log-hover-dark: 0 8px 24px rgb(0 0 0 / 0.35);
 
+    /* Elevation scale (three semantic tiers — single source of truth) */
+    --shadow-elevated: 0 1px 2px rgb(15 23 42 / 0.04);
+    --shadow-panel: 0 8px 24px -6px rgb(15 23 42 / 0.12), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+    --shadow-dialog: 0 18px 48px rgb(15 23 42 / 0.18);
+
     /* Desktop surface hierarchy (Glacial Cobalt & Steel Slate) */
     --surface-canvas: 220 15% 98%;
     --surface-panel: 0 0% 100%;
@@ -185,7 +190,7 @@
     --theme-option-system: 199 90% 60%;
 
     /* Sidebar control center */
-    --sidebar-control: 220 16% 13% / 0.65;
+    --sidebar-control: 220 16% 13% / 0.55;
     --sidebar-control-border: 220 14% 18% / 0.65;
     --sidebar-control-muted: 220 12% 19% / 0.8;
     --sidebar-control-inset: 220 20% 6% / 0.4;
@@ -209,6 +214,11 @@
       0 4px 24px rgb(0 0 0 / 0.35), inset 0 1px 1px rgb(255 255 255 / 0.02);
     --shadow-request-log-hover: 0 4px 12px rgb(0 0 0 / 0.03);
     --shadow-request-log-hover-dark: 0 8px 24px rgb(0 0 0 / 0.35);
+
+    /* Elevation scale (dark — deeper to read on dark surfaces) */
+    --shadow-elevated: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow-panel: 0 8px 24px -6px rgb(0 0 0 / 0.45), 0 2px 6px -2px rgb(0 0 0 / 0.3);
+    --shadow-dialog: 0 18px 48px rgb(0 0 0 / 0.55);
 
     /* Desktop surface hierarchy (dark) */
     --surface-canvas: 222 35% 7%;
@@ -343,7 +353,9 @@ body {
   scrollbar-gutter: auto;
 }
 
-/* Fallback for non-WebKit browsers */
+/* Fallback for non-WebKit browsers (Firefox / most Linux WebKitGTK builds):
+   overflow:overlay is unsupported, so reserve gutter space to avoid the
+   scrollbar pushing fixed-width panels (e.g. the 248px Sidebar) on scroll. */
 @supports not (overflow-y: overlay) {
   .scrollbar-overlay {
     overflow-y: auto;
@@ -513,8 +525,8 @@ body {
         hsla(var(--page-secondary-color, 198 85% 58%) / 0.01) 30%,
         transparent 60%
       ),
-    /* Base grid lines */ linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+    /* Base grid lines */ linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
   background-size:
     100% 100%,
     100% 100%,
@@ -643,25 +655,4 @@ body {
 
 .group.nav-link-item:active {
   transform: scale(0.97);
-}
-
-/* Breathing Border for in-progress trace cards */
-.animate-breathing-border {
-  animation: breathing-border 3s ease-in-out infinite;
-}
-
-@keyframes breathing-border {
-  0%,
-  100% {
-    border-color: hsla(var(--page-accent-color) / 0.15);
-    box-shadow:
-      0 4px 20px -2px rgba(0, 0, 0, 0.35),
-      0 0 0 1px hsla(var(--page-accent-color) / 0.05);
-  }
-  50% {
-    border-color: hsla(var(--page-accent-color) / 0.38);
-    box-shadow:
-      0 8px 24px -2px rgba(0, 0, 0, 0.4),
-      0 0 6px 1px hsla(var(--page-accent-color) / 0.15);
-  }
 }

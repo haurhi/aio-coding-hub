@@ -93,10 +93,7 @@ export function SkillsMarketPage() {
         }
       />
 
-      <Card
-        padding="md"
-        className="border-border/80 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.08),_transparent_45%),linear-gradient(135deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))] dark:border-border dark:bg-card"
-      >
+      <Card padding="md">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <div className="text-sm font-semibold text-foreground">
@@ -114,13 +111,13 @@ export function SkillsMarketPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded-full bg-white/80 px-3 py-1.5 text-secondary-foreground shadow-sm dark:bg-secondary dark:text-secondary-foreground">
+            <span className="rounded-full bg-secondary px-3 py-1.5 font-medium text-secondary-foreground">
               已启用仓库 {enabledRepoCount} / {repos.length}
             </span>
-            <span className="rounded-full bg-white/80 px-3 py-1.5 text-secondary-foreground shadow-sm dark:bg-secondary dark:text-secondary-foreground">
+            <span className="rounded-full bg-secondary px-3 py-1.5 font-medium text-secondary-foreground">
               当前 CLI {currentCli.name}
             </span>
-            <span className="rounded-full bg-white/80 px-3 py-1.5 text-secondary-foreground shadow-sm dark:bg-secondary dark:text-secondary-foreground">
+            <span className="rounded-full bg-secondary px-3 py-1.5 font-medium text-secondary-foreground">
               发现技能 {available.length}
             </span>
           </div>
@@ -137,13 +134,13 @@ export function SkillsMarketPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索技能、仓库、目录"
-            className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent/30 dark:border-border dark:bg-secondary dark:text-foreground sm:w-[320px]"
+            className="w-full rounded-lg border border-line bg-surface-inset px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-ring focus:bg-surface-panel focus:ring-2 focus:ring-ring/30 focus:ring-offset-2 focus:ring-offset-background sm:w-[320px]"
           />
 
           <select
             value={repoFilter}
             onChange={(e) => setRepoFilter(e.target.value)}
-            className="h-10 rounded-xl border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-accent/30 dark:border-border dark:bg-secondary dark:text-foreground"
+            className="h-10 rounded-lg border border-line bg-surface-inset px-3 text-sm text-foreground outline-none transition-colors focus:border-ring focus:bg-surface-panel focus:ring-2 focus:ring-ring/30 focus:ring-offset-2 focus:ring-offset-background"
           >
             <option value="all">全部仓库</option>
             {repoOptions.map((option) => (
@@ -153,7 +150,7 @@ export function SkillsMarketPage() {
             ))}
           </select>
 
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 dark:border-border dark:bg-secondary">
+          <div className="flex h-10 items-center gap-2 rounded-lg border border-line bg-surface-inset px-3">
             <span className="text-xs text-muted-foreground">仅显示可安装</span>
             <Switch checked={onlyActionable} onCheckedChange={setOnlyActionable} />
           </div>
@@ -198,7 +195,7 @@ export function SkillsMarketPage() {
                 return (
                   <section
                     key={group.key}
-                    className="rounded-2xl border border-border/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,0.92))] p-4 dark:border-border dark:bg-card"
+                    className="rounded-lg border border-line-subtle bg-surface-inset p-4"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
@@ -207,7 +204,7 @@ export function SkillsMarketPage() {
                           onClick={() => toggleRepoExpanded(group.key)}
                           className="flex min-w-0 items-start gap-3 text-left"
                         >
-                          <span className="mt-0.5 rounded-full border border-border bg-white p-1 text-muted-foreground dark:border-border dark:bg-secondary dark:text-secondary-foreground">
+                          <span className="mt-0.5 rounded-full border border-border bg-card p-1 text-muted-foreground">
                             {expanded ? (
                               <ChevronDown className="h-4 w-4" />
                             ) : (
@@ -219,7 +216,7 @@ export function SkillsMarketPage() {
                               <span className="truncate text-base font-semibold text-foreground">
                                 {group.repoPrefix}
                               </span>
-                              <span className="rounded-full bg-card px-2.5 py-1 text-[11px] font-medium text-white dark:bg-secondary dark:text-foreground">
+                              <span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-secondary-foreground">
                                 {group.skills.length} 个技能
                               </span>
                               {group.installableCount > 0 ? (
@@ -252,7 +249,7 @@ export function SkillsMarketPage() {
                             href={repoUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-white text-muted-foreground transition hover:text-foreground dark:border-border dark:bg-secondary dark:text-secondary-foreground dark:hover:text-foreground"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
                             title={group.repoPath}
                           >
                             <ExternalLink className="h-4 w-4" />
@@ -281,7 +278,7 @@ export function SkillsMarketPage() {
                         {group.skills.slice(0, 4).map((skill) => (
                           <span
                             key={sourceKey(skill)}
-                            className="rounded-full border border-border bg-white px-3 py-1 text-xs text-muted-foreground dark:border-border dark:bg-secondary dark:text-secondary-foreground"
+                            className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground"
                           >
                             {skill.name}
                           </span>
@@ -302,7 +299,7 @@ export function SkillsMarketPage() {
                           return (
                             <div
                               key={key}
-                              className="rounded-xl border border-border bg-white/90 px-3 py-3 dark:border-border dark:bg-secondary"
+                              className="rounded-lg border border-line-subtle bg-card px-3 py-3"
                             >
                               <div className="flex flex-wrap items-start gap-3">
                                 <div className="min-w-0 flex-1">
@@ -390,7 +387,7 @@ export function SkillsMarketPage() {
         onOpenChange={setRepoDialogOpen}
       >
         <div className="space-y-4">
-          <div className="rounded-xl border border-border bg-secondary p-3 dark:border-border dark:bg-secondary">
+          <div className="rounded-lg border border-line-subtle bg-secondary p-3">
             <div className="text-sm font-semibold">添加仓库</div>
             <div className="mt-2 grid gap-3 sm:grid-cols-3">
               <div className="sm:col-span-2">
@@ -399,7 +396,7 @@ export function SkillsMarketPage() {
                   value={newRepoUrl}
                   onChange={(e) => setNewRepoUrl(e.target.value)}
                   placeholder="https://github.com/owner/repo"
-                  className="mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent/30 dark:border-border dark:bg-secondary dark:text-foreground"
+                  className="mt-1 w-full rounded-lg border border-line bg-surface-inset px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-ring focus:bg-surface-panel focus:ring-2 focus:ring-ring/30 focus:ring-offset-2 focus:ring-offset-background"
                 />
               </div>
               <div>
@@ -408,7 +405,7 @@ export function SkillsMarketPage() {
                   value={newRepoBranch}
                   onChange={(e) => setNewRepoBranch(e.target.value)}
                   placeholder="auto / main / master"
-                  className="mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent/30 dark:border-border dark:bg-secondary dark:text-foreground"
+                  className="mt-1 w-full rounded-lg border border-line bg-surface-inset px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-ring focus:bg-surface-panel focus:ring-2 focus:ring-ring/30 focus:ring-offset-2 focus:ring-offset-background"
                 />
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   推荐使用 <span className="font-mono">auto</span>。
@@ -439,7 +436,7 @@ export function SkillsMarketPage() {
                 return (
                   <div
                     key={repo.id}
-                    className="rounded-xl border border-border bg-white p-3 dark:border-border dark:bg-secondary"
+                    className="rounded-lg border border-line-subtle bg-card p-3"
                   >
                     <div className="flex items-center gap-2">
                       <span className="min-w-0 truncate text-sm font-medium">{repo.git_url}</span>
@@ -495,7 +492,7 @@ export function SkillsMarketPage() {
       >
         <div className="space-y-3">
           <div className="text-sm text-secondary-foreground">确认删除以下仓库？</div>
-          <div className="rounded-xl border border-border bg-secondary p-3 text-xs text-muted-foreground dark:border-border dark:bg-secondary dark:text-muted-foreground">
+          <div className="rounded-lg border border-line-subtle bg-secondary p-3 text-xs text-muted-foreground">
             <div className="break-all font-mono">{repoDeleteTarget?.git_url}</div>
             <div className="mt-1">
               branch: <span className="font-mono">{repoDeleteTarget?.branch}</span>

@@ -182,14 +182,7 @@ impl ClaudeModels {
     pub(crate) fn map_model(&self, original_model: &str, has_thinking: bool) -> String {
         let model_lower = original_model.to_ascii_lowercase();
 
-        // 1) thinking 模式优先使用推理模型
-        if has_thinking {
-            if let Some(model) = self.reasoning_model.as_deref() {
-                return model.to_string();
-            }
-        }
-
-        // 2) 按模型类型匹配（子串）
+        // 1) 按模型类型匹配（子串）
         if model_lower.contains("haiku") {
             if let Some(model) = self.haiku_model.as_deref() {
                 return model.to_string();
@@ -202,6 +195,13 @@ impl ClaudeModels {
         }
         if model_lower.contains("sonnet") {
             if let Some(model) = self.sonnet_model.as_deref() {
+                return model.to_string();
+            }
+        }
+
+        // 2) thinking 模式在未命中具体模型槽位时使用推理模型
+        if has_thinking {
+            if let Some(model) = self.reasoning_model.as_deref() {
                 return model.to_string();
             }
         }

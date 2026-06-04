@@ -8,7 +8,7 @@ export type SkeletonProps = {
 };
 
 const VARIANT_CLASS: Record<SkeletonVariant, string> = {
-  text: "h-4 w-full rounded",
+  text: "h-4 w-full rounded-md",
   circular: "rounded-full",
   rectangular: "rounded-lg",
 };

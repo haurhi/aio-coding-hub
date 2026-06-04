@@ -111,9 +111,12 @@ pub(super) fn find_skill_md_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 
             if file_name.eq_ignore_ascii_case("SKILL.md") {
                 if out.len() >= SKILL_DISCOVERY_SKILL_MD_MAX {
-                    return Err(format!(
-                        "SEC_INVALID_INPUT: too many SKILL.md files (max {SKILL_DISCOVERY_SKILL_MD_MAX})"
-                    ));
+                    tracing::warn!(
+                        root = %root.display(),
+                        max = SKILL_DISCOVERY_SKILL_MD_MAX,
+                        "skill discovery truncated after SKILL.md limit"
+                    );
+                    return Ok(out);
                 }
                 out.push(path);
             }

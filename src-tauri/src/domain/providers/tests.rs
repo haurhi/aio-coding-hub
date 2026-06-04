@@ -12,7 +12,26 @@ fn claude_models_no_config_keeps_original() {
 }
 
 #[test]
-fn claude_models_thinking_prefers_reasoning_model() {
+fn claude_models_type_slot_prevents_thinking_reasoning_override() {
+    let models = ClaudeModels {
+        main_model: Some("glm-main".to_string()),
+        reasoning_model: Some("glm-thinking".to_string()),
+        haiku_model: Some("claude-haiku-4-5-20251001".to_string()),
+        sonnet_model: Some("glm-sonnet".to_string()),
+        opus_model: Some("glm-opus".to_string()),
+    }
+    .normalized();
+
+    assert_eq!(
+        models.map_model("claude-haiku-4-5-20251001", true),
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(models.map_model("claude-sonnet-4", true), "glm-sonnet");
+    assert_eq!(models.map_model("claude-opus-4", true), "glm-opus");
+}
+
+#[test]
+fn claude_models_thinking_uses_reasoning_for_unknown_model() {
     let models = ClaudeModels {
         main_model: Some("glm-main".to_string()),
         reasoning_model: Some("glm-thinking".to_string()),
@@ -22,7 +41,7 @@ fn claude_models_thinking_prefers_reasoning_model() {
     }
     .normalized();
 
-    assert_eq!(models.map_model("claude-sonnet-4", true), "glm-thinking");
+    assert_eq!(models.map_model("some-unknown-model", true), "glm-thinking");
 }
 
 #[test]

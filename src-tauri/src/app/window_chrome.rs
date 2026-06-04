@@ -13,9 +13,9 @@ pub(crate) fn apply_main_window_chrome(window: &tauri::WebviewWindow) {
 #[cfg(windows)]
 fn hide_windows_titlebar_icon(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, ICON_BIG,
-        ICON_SMALL, ICON_SMALL2, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, WM_SETICON, WS_EX_DLGMODALFRAME,
+        GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, ICON_SMALL,
+        ICON_SMALL2, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        WM_SETICON, WS_EX_DLGMODALFRAME,
     };
 
     let hwnd = window.hwnd()?;
@@ -23,7 +23,6 @@ fn hide_windows_titlebar_icon(window: &tauri::WebviewWindow) -> tauri::Result<()
 
     unsafe {
         SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, 0);
-        SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, 0);
         SendMessageW(hwnd, WM_SETICON, ICON_SMALL2 as usize, 0);
 
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);

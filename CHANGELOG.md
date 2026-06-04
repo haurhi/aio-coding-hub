@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.55.0](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.54.0...aio-coding-hub-v0.55.0) (2026-06-03)
+
+
+### Features
+
+* **skills:** 支持按仓库单独刷新技能发现 ([83d112b](https://github.com/dyndynjyxa/aio-coding-hub/commit/83d112bd4b33ccbf23ff00bd99a5021651460561))
+
+
+### Code Refactoring
+
+* **ui:** 统一原子组件浮层圆角/阴影/焦点环/状态色 ([18ad29d](https://github.com/dyndynjyxa/aio-coding-hub/commit/18ad29d5c32c80ae67c9f4752d675b0ca9f5653f))
+* **ui:** 补齐 Select/Textarea/TabList 焦点环一致性 ([be9b9bd](https://github.com/dyndynjyxa/aio-coding-hub/commit/be9b9bd6c391460c5b06af298bed650c50a6f481))
+
+
+### Styles
+
+* **layout:** 统一外壳节奏与 Sidebar 精修 ([bcfb24e](https://github.com/dyndynjyxa/aio-coding-hub/commit/bcfb24e3d38311f0eb039e6dca4858fc24749f53))
+* **pages:** 统一页面垂直节奏与表单控件 token ([5ed53bf](https://github.com/dyndynjyxa/aio-coding-hub/commit/5ed53bfc4346e335d47608d3056ae0daaaf490d1))
+* **skills:** 重构技能卡片布局并清理硬编码 ([e165343](https://github.com/dyndynjyxa/aio-coding-hub/commit/e1653438e1307917c5ee27d045e4e160fde24676))
+* **tokens:** 新增阴影语义 token 并注册 display 字体 ([c9ee72a](https://github.com/dyndynjyxa/aio-coding-hub/commit/c9ee72a9d54eedc92cc01ca0887d5f6935e0b19a))
+
+## [0.54.0](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.53.0...aio-coding-hub-v0.54.0) (2026-06-03)
+
+
+### Features
+
+* **config:** 优化release-please配置的changelog分区 ([69315b7](https://github.com/dyndynjyxa/aio-coding-hub/commit/69315b7543bacf590ed25392ed0fa6940307b681))
+
+
+### Code Refactoring
+
+* **proxy:** 移除内部请求标记相关代码并简化测试逻辑 ([5f16257](https://github.com/dyndynjyxa/aio-coding-hub/commit/5f1625707dd1df85de460463e2901864080eb7c6))
+
+## [0.53.0](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.52.1...aio-coding-hub-v0.53.0) (2026-06-02)
+
+
+### Features
+
+* **proxy:** 本地拦截处理CX2CC Claude计数Token请求 ([9fa1201](https://github.com/dyndynjyxa/aio-coding-hub/commit/9fa12019f9e0c1a641f31419fa730cca6f813e47))
+
+
+### Bug Fixes
+
+* **gateway:** prioritize Claude model slots before thinking fallback ([95d5ece](https://github.com/dyndynjyxa/aio-coding-hub/commit/95d5ece7fe80e03b834b56e3e4cb394c7c952a8c))
+* **scripts:** 修复pnpm audit命令参数以只检查生产依赖 ([d0bc737](https://github.com/dyndynjyxa/aio-coding-hub/commit/d0bc737cbb054aedac97c4a75c596de438364e8f))
+
 ## [0.52.1](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.52.0...aio-coding-hub-v0.52.1) (2026-05-28)
 
 

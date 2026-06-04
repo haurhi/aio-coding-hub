@@ -38,7 +38,7 @@ HSL format without wrapper).
 | `--background` / `--foreground` | Page surface / text | Inverted | `bg-background`, `text-foreground` |
 | `--card` / `--card-foreground` | Card surface / text | slate-800 region | `bg-card`, `text-card-foreground` |
 | `--popover` / `--popover-foreground` | Overlay surface / text | — | `bg-popover`, `text-popover-foreground` |
-| `--primary` / `--primary-foreground` | Premium indigo `#5153EC` / white | Same | `bg-primary`, `text-primary-foreground` |
+| `--primary` / `--primary-foreground` | Brand blue `#2563EB` (`221 83% 53%`) / white | `#3B82F6` (`217 91% 60%`) / white | `bg-primary`, `text-primary-foreground` |
 | `--secondary` / `--secondary-foreground` | Subtle surface / text | — | `bg-secondary`, `text-secondary-foreground` |
 | `--muted` / `--muted-foreground` | Disabled/subtle surface / text | — | `bg-muted`, `text-muted-foreground` |
 | `--accent` / `--accent-foreground` | Brand blue (= primary) / white | Same | `bg-accent`, `text-accent-foreground` |
@@ -51,8 +51,8 @@ HSL format without wrapper).
 
 | Name | Value | Usage |
 |------|-------|-------|
-| `brand` / `accent` | `#5153EC` | Premium indigo primary (also exposed via `--primary` / `--accent`) |
-| `accent-secondary` | `#6366F1` | Secondary indigo accent / gradient endpoint |
+| `brand` / `accent` | `#2563EB` | Brand blue primary (also exposed via `--primary` / `--accent`; matches `BRAND.accent` in `src/constants/colors.ts`) |
+| `accent-secondary` | `#0EA5E9` | Secondary sky-blue accent / gradient endpoint (`BRAND.accentSecondary`) |
 | `success` | `#34D399` | Success states |
 | `warning` | `#FB923C` | Warning states |
 | `danger` | `#F87171` | Destructive/error states |
@@ -71,10 +71,34 @@ Chart colors use `--chart-1` through `--chart-5`, bridged as `chart-1` through
 
 ### Radius
 
-`--radius: 0.625rem` is the premium base token. Derived values:
-- `rounded-lg` = `var(--radius)` (10px)
-- `rounded-md` = `calc(var(--radius) - 2px)` (8px)
-- `rounded-sm` = `calc(var(--radius) - 4px)` (6px)
+`--radius: 0.875rem` is the premium base token (14px). Derived values:
+- `rounded-lg` = `var(--radius)` (14px) — the standard anchor for interactive
+  controls (button/input/select/textarea) and floating containers
+  (popover/tooltip/dropdown).
+- `rounded-md` = `calc(var(--radius) - 2px)` (12px)
+- `rounded-sm` = `calc(var(--radius) - 4px)` (10px) — menu items inside `p-1`
+  floating containers.
+- `rounded-2xl` (18px) is used by the `Card`/`Dialog` primitives; existing usages
+  are intentional but **do not spread `rounded-2xl`/`rounded-xl` to new surfaces** —
+  new reusable surfaces anchor on `rounded-lg`.
+- Floating layers (Popover/Tooltip/Dropdown content) use one consistent
+  `rounded-lg` container radius; do not mix `rounded-md`/`rounded-lg` across
+  same-tier overlays.
+
+### Elevation (shadow scale)
+
+Three semantic shadow tokens are the single source of truth (defined in
+`globals.css` for light + dark, bridged in `tailwind.config.ts`). Do not write
+inline `shadow-[...]` values in components.
+- `shadow-elevated` — base raised cards (`Card` raised variant).
+- `shadow-panel` — floating layers (Popover/Tooltip/Dropdown content).
+- `shadow-dialog` — top-level modal dialogs.
+
+### Focus ring
+
+All interactive primitives use `ring-2 ring-ring/30 ring-offset-2
+ring-offset-background` (via `focus-visible:`, or `focus:` for text inputs).
+Do not vary ring opacity per component.
 
 ---
 

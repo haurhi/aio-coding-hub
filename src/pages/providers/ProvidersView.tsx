@@ -71,7 +71,7 @@ export function ProvidersView({ activeCli }: ProvidersViewProps) {
 
   return (
     <>
-      <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
+      <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-1.5">
             <button

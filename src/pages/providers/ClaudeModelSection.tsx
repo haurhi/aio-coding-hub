@@ -59,7 +59,10 @@ export function ClaudeModelSection(props: { form: UseProviderEditorFormReturn })
           />
         </FormField>
 
-        <FormField label="推理模型 (Thinking)" hint="当请求中 thinking.type=enabled 时优先使用">
+        <FormField
+          label="推理模型 (Thinking)"
+          hint="当请求中 thinking.type=enabled 且未命中 Haiku/Sonnet/Opus 槽位时使用"
+        >
           <Input
             value={claudeModels.reasoning_model ?? ""}
             onChange={(e) => {

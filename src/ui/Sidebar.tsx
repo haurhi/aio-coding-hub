@@ -150,7 +150,7 @@ export function Sidebar({ className }: SidebarProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               {/* Premium abstract AIO high-tech SVG Logo */}
-              <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm shadow-primary/10">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm shadow-primary/10 dark:shadow-primary/30">
                 <img src="/logo.jpg" alt="AIO Logo" className="h-full w-full object-cover" />
               </div>
               <div className="flex flex-col">
@@ -201,7 +201,7 @@ export function Sidebar({ className }: SidebarProps) {
               <section key={section.id} aria-labelledby={headingId} className="space-y-1">
                 <h2
                   id={headingId}
-                  className="px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70"
+                  className="px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70"
                 >
                   {section.label}
                 </h2>
@@ -212,7 +212,7 @@ export function Sidebar({ className }: SidebarProps) {
                       to={item.to}
                       className={({ isActive }) =>
                         cn(
-                          "group nav-link-item relative flex items-center gap-3 rounded-lg px-3 py-1.5 font-display text-[13px] font-semibold border border-transparent",
+                          "group nav-link-item relative flex items-center gap-3 rounded-lg px-3 py-2 font-display text-[13px] font-semibold border border-transparent",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
                           isActive
                             ? "sidebar-active-item"
@@ -246,7 +246,7 @@ export function Sidebar({ className }: SidebarProps) {
           {/* Flat Unified Premium Control Center Card */}
           <div
             className={cn(
-              "rounded-xl border p-3 space-y-2.5 transition-all duration-300 backdrop-blur-md",
+              "rounded-xl border p-4 space-y-2.5 transition-all duration-300 backdrop-blur-md",
               "border-sidebar-control-border bg-sidebar-control shadow-sidebar-control hover:shadow-sidebar-control-hover"
             )}
           >
@@ -298,7 +298,7 @@ export function Sidebar({ className }: SidebarProps) {
                   代理状态不可用
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-3 gap-2">
                   {CLIS.map((cli) => {
                     const cliKey = cli.key;
                     const isEnabled = cliProxyState.cliProxyEnabled[cliKey];
@@ -349,7 +349,6 @@ export function Sidebar({ className }: SidebarProps) {
                               cliProxyState.requestCliProxyEnabledSwitch(cliKey, next)
                             }
                             size="sm"
-                            className="scale-75 origin-right"
                             aria-label={`${SIDEBAR_CLI_LABELS[cliKey]} 代理开关`}
                           />
                         </div>

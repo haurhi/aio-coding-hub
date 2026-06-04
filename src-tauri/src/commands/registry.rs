@@ -144,6 +144,7 @@ macro_rules! generated_command_registry {
             skill_repo_delete => crate::commands::skills::skill_repo_delete,
             skills_installed_list => crate::commands::skills::skills_installed_list,
             skills_discover_available => crate::commands::skills::skills_discover_available,
+            skill_repo_discover_available => crate::commands::skills::skill_repo_discover_available,
             skill_install => crate::commands::skills::skill_install,
             skill_install_to_local => crate::commands::skills::skill_install_to_local,
             skill_set_enabled => crate::commands::skills::skill_set_enabled,

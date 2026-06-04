@@ -184,7 +184,7 @@ function UsagePageView({
   availability: UsageAvailabilityState;
 }) {
   return (
-    <div className="flex flex-col gap-5 h-full overflow-hidden">
+    <div className="flex flex-col gap-6 h-full overflow-hidden">
       <div className="shrink-0">
         <UsagePageHeader loading={model.loading} filters={filters} />
       </div>

@@ -13,6 +13,7 @@ import {
   skillInstall,
   skillInstallToLocal,
   skillRepoDelete,
+  skillRepoDiscoverAvailable,
   skillRepoUpsert,
   skillReposList,
   skillSetEnabled,
@@ -40,6 +41,7 @@ vi.mock("../../../generated/bindings", async () => {
       skillReposList: vi.fn(),
       skillRepoUpsert: vi.fn(),
       skillRepoDelete: vi.fn(),
+      skillRepoDiscoverAvailable: vi.fn(),
       skillsDiscoverAvailable: vi.fn(),
       skillInstall: vi.fn(),
       skillSetEnabled: vi.fn(),
@@ -145,6 +147,10 @@ describe("services/workspace/skills", () => {
       data: createSkillRepoSummary(),
     });
     vi.mocked(commands.skillRepoDelete).mockResolvedValue({ status: "ok", data: true });
+    vi.mocked(commands.skillRepoDiscoverAvailable).mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
     vi.mocked(commands.skillsDiscoverAvailable).mockResolvedValue({
       status: "ok",
       data: [],
@@ -193,6 +199,9 @@ describe("services/workspace/skills", () => {
 
     await skillRepoDelete(1);
     expect(commands.skillRepoDelete).toHaveBeenCalledWith(1);
+
+    await skillRepoDiscoverAvailable({ repoId: 1, refresh: true });
+    expect(commands.skillRepoDiscoverAvailable).toHaveBeenCalledWith(1, true);
 
     await skillsDiscoverAvailable(true);
     expect(commands.skillsDiscoverAvailable).toHaveBeenCalledWith(true);

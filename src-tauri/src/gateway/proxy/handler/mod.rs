@@ -33,10 +33,10 @@ mod runtime_settings;
 use early_error::extract_forced_provider_id;
 use middleware::{
     BillingHeaderRectifierMiddleware, BodyReaderMiddleware, CliProxyGuardMiddleware,
-    CodexSessionCompletionMiddleware, MiddlewareAction, ModelInferenceMiddleware,
-    ProbeInterceptorMiddleware, ProviderResolutionMiddleware, ProxyContext,
-    RecursionGuardMiddleware, RequestFingerprintMiddleware, RuntimeSettingsMiddleware,
-    WarmupInterceptorMiddleware,
+    CodexSessionCompletionMiddleware, Cx2ccCountTokensInterceptorMiddleware, MiddlewareAction,
+    ModelInferenceMiddleware, ProbeInterceptorMiddleware, ProviderResolutionMiddleware,
+    ProxyContext, RecursionGuardMiddleware, RequestFingerprintMiddleware,
+    RuntimeSettingsMiddleware, WarmupInterceptorMiddleware,
 };
 
 type SpecialSettings = Arc<Mutex<Vec<serde_json::Value>>>;
@@ -207,7 +207,13 @@ where
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 11. Request fingerprinting + recent error cache gate.
+    // 11. CX2CC count_tokens compatibility.
+    let ctx = match Cx2ccCountTokensInterceptorMiddleware::run(ctx) {
+        MiddlewareAction::Continue(ctx) => *ctx,
+        MiddlewareAction::ShortCircuit(resp) => return resp,
+    };
+
+    // 12. Request fingerprinting + recent error cache gate.
     let ctx = match RequestFingerprintMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,

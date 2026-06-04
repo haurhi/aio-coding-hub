@@ -16,6 +16,21 @@ export default {
     },
     extend: {
       fontFamily: {
+        // Display family for route headers and premium navigation surfaces.
+        // Shares the sans fallback stack so platforms without Plus Jakarta Sans
+        // (typical on Windows/Linux) degrade to the same body fallbacks.
+        display: [
+          "Plus Jakarta Sans",
+          "DM Sans",
+          "ui-sans-serif",
+          "system-ui",
+          "-apple-system",
+          "Segoe UI",
+          "Roboto",
+          "Helvetica Neue",
+          "Arial",
+          "sans-serif",
+        ],
         sans: [
           "Plus Jakarta Sans",
           "DM Sans",
@@ -188,6 +203,9 @@ export default {
       },
       boxShadow: {
         card: "none",
+        elevated: "var(--shadow-elevated)",
+        panel: "var(--shadow-panel)",
+        dialog: "var(--shadow-dialog)",
         "heatmap-strong": "var(--heatmap-l4-glow)",
         "page-accent-soft": "var(--shadow-page-accent-soft)",
         "sidebar-control": "var(--shadow-sidebar-control)",

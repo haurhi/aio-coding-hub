@@ -39,7 +39,7 @@ describe("ui/Button", () => {
     expect(screen.getByRole("button")).toHaveClass("hover:bg-state-hover");
 
     rerender(<Button variant="danger">Danger</Button>);
-    expect(screen.getByRole("button")).toHaveClass("text-rose-700");
+    expect(screen.getByRole("button")).toHaveClass("text-destructive");
 
     rerender(<Button variant="warning">Warning</Button>);
     expect(screen.getByRole("button")).toHaveClass("text-amber-800");

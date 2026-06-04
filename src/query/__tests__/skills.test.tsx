@@ -15,6 +15,7 @@ import {
   skillsImportLocalBatch,
   skillInstall,
   skillRepoDelete,
+  skillRepoDiscoverAvailable,
   skillRepoUpsert,
   skillReposList,
   skillSetEnabled,
@@ -35,6 +36,7 @@ import {
   useSkillsImportLocalBatchMutation,
   useSkillInstallMutation,
   useSkillRepoDeleteMutation,
+  useSkillRepoDiscoverAvailableMutation,
   useSkillRepoUpsertMutation,
   useSkillReposListQuery,
   useSkillSetEnabledMutation,
@@ -56,6 +58,7 @@ vi.mock("../../services/workspace/skills", async () => {
     skillsInstalledList: vi.fn(),
     skillsLocalList: vi.fn(),
     skillsDiscoverAvailable: vi.fn(),
+    skillRepoDiscoverAvailable: vi.fn(),
     skillsPathsGet: vi.fn(),
     skillRepoUpsert: vi.fn(),
     skillRepoDelete: vi.fn(),
@@ -98,6 +101,18 @@ function createLocalSkillSummary(overrides: Partial<LocalSkillSummary> = {}): Lo
     source_git_url: null,
     source_branch: null,
     source_subdir: null,
+    ...overrides,
+  };
+}
+
+function createSkillRepoSummary(overrides: Partial<SkillRepoSummary> = {}): SkillRepoSummary {
+  return {
+    id: 1,
+    git_url: "https://example.com/repo.git",
+    branch: "main",
+    enabled: true,
+    created_at: 0,
+    updated_at: 0,
     ...overrides,
   };
 }
@@ -419,8 +434,7 @@ describe("query/skills", () => {
     });
 
     expect(setSpy).not.toHaveBeenCalled();
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: skillsKeys.discoverAvailable(true) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: skillsKeys.discoverAvailable(false) });
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
   it("useSkillsDiscoverAvailableMutation updates both refresh and cached query keys", async () => {
@@ -449,8 +463,54 @@ describe("query/skills", () => {
 
     expect(client.getQueryData(skillsKeys.discoverAvailable(true))).toEqual(rows);
     expect(client.getQueryData(skillsKeys.discoverAvailable(false))).toEqual(rows);
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: skillsKeys.discoverAvailable(true) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: skillsKeys.discoverAvailable(false) });
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("useSkillRepoDiscoverAvailableMutation replaces only that repo cached rows", async () => {
+    setTauriRuntime();
+
+    const repo = createSkillRepoSummary();
+    const otherRow: AvailableSkillSummary = {
+      name: "Other",
+      description: "d",
+      source_git_url: "https://example.com/other.git",
+      source_branch: "main",
+      source_subdir: "skills/other",
+      installed: false,
+    };
+    const staleRepoRow: AvailableSkillSummary = {
+      name: "Stale",
+      description: "d",
+      source_git_url: repo.git_url,
+      source_branch: repo.branch,
+      source_subdir: "skills/stale",
+      installed: false,
+    };
+    const nextRepoRow: AvailableSkillSummary = {
+      name: "Next",
+      description: "d",
+      source_git_url: repo.git_url,
+      source_branch: repo.branch,
+      source_subdir: "skills/next",
+      installed: false,
+    };
+    vi.mocked(skillRepoDiscoverAvailable).mockResolvedValue([nextRepoRow]);
+
+    const client = createTestQueryClient();
+    client.setQueryData(skillsKeys.discoverAvailable(false), [staleRepoRow, otherRow]);
+    const wrapper = createQueryWrapper(client);
+
+    const { result } = renderHook(() => useSkillRepoDiscoverAvailableMutation(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ repo, refresh: true });
+    });
+
+    expect(skillRepoDiscoverAvailable).toHaveBeenCalledWith({ repoId: repo.id, refresh: true });
+    expect(client.getQueryData(skillsKeys.discoverAvailable(false))).toEqual([
+      nextRepoRow,
+      otherRow,
+    ]);
+    expect(client.getQueryData(skillsKeys.discoverAvailable(true))).toEqual([nextRepoRow]);
   });
 
   it("useSkillRepoUpsertMutation no-ops on null response", async () => {

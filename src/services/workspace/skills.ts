@@ -31,6 +31,11 @@ export type SkillRepoUpsertInput = {
   enabled: boolean;
 };
 
+export type SkillRepoDiscoverAvailableInput = {
+  repoId: number;
+  refresh: boolean;
+};
+
 export type SkillInstallInput = {
   workspaceId: number;
   gitUrl: string;
@@ -237,6 +242,20 @@ export async function skillsDiscoverAvailable(refresh: boolean) {
     args: { refresh },
     invoke: () =>
       commands.skillsDiscoverAvailable(refresh) as Promise<
+        GeneratedCommandResult<AvailableSkillSummary[]>
+      >,
+  });
+}
+
+export async function skillRepoDiscoverAvailable(input: SkillRepoDiscoverAvailableInput) {
+  const repoId = validateSkillRepoId(input.repoId);
+
+  return invokeGeneratedIpc<AvailableSkillSummary[]>({
+    title: "发现仓库技能失败",
+    cmd: "skill_repo_discover_available",
+    args: { repoId, refresh: input.refresh },
+    invoke: () =>
+      commands.skillRepoDiscoverAvailable(repoId, input.refresh) as Promise<
         GeneratedCommandResult<AvailableSkillSummary[]>
       >,
   });
