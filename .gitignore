@@ -42,6 +42,7 @@ src/templates/
 .codex/
 .codex-temp/
 .opencode/
+.omc/
 src-tauri/target*/
 .pnpm-store/
 .codegraph/

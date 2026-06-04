@@ -565,8 +565,8 @@ mod tests {
         );
         let mut stream = BridgeStream::for_bridge(
             MockStream::new(vec![Ok(Bytes::from_static(upstream.as_bytes()))]),
-            Some("cc2cx"),
-            Some("gpt-route-cc2cx".into()),
+            Some("r2c"),
+            Some("gpt-route-r2c".into()),
             crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
         );
         let waker = std::task::Waker::from(Arc::new(NoopWaker));

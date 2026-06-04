@@ -12,9 +12,9 @@ pub use types::{
 
 #[allow(unused_imports)]
 pub(crate) use types::{
-    ClaudeTerminalLaunchContext, GatewayProvidersSelection, ProviderForGateway,
-    ProviderOAuthDetails, CC2CX_BRIDGE_TYPE, CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE,
-    CX2CC_BRIDGE_TYPE,
+    is_r2c_bridge, ClaudeTerminalLaunchContext, GatewayProvidersSelection, ProviderForGateway,
+    ProviderOAuthDetails, CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE, CX2CC_BRIDGE_TYPE,
+    LEGACY_CC2CX_BRIDGE_TYPE, R2C_BRIDGE_TYPE,
 };
 
 pub use queries::{delete, get_api_key_plaintext, list_by_cli, names_by_id, reorder, upsert};

@@ -726,18 +726,19 @@ pub fn upsert(
 
     if let Some(ref bt) = bridge_type {
         if bt != CX2CC_BRIDGE_TYPE
-            && bt != CC2CX_BRIDGE_TYPE
+            && bt != R2C_BRIDGE_TYPE
+            && bt != LEGACY_CC2CX_BRIDGE_TYPE
             && bt != CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE
         {
             return Err(format!("SEC_INVALID_INPUT: unsupported bridge_type: {bt}").into());
         }
     }
 
-    let is_cc2cx = is_cc2cx_bridge(bridge_type.as_deref());
+    let is_r2c = is_r2c_bridge(bridge_type.as_deref());
     let is_claude_chat_completions = is_claude_chat_completions_bridge(bridge_type.as_deref());
-    if is_cc2cx && source_provider_id.is_some() {
+    if is_r2c && source_provider_id.is_some() {
         return Err(
-            "SEC_INVALID_INPUT: cc2cx bridge cannot use source_provider_id"
+            "SEC_INVALID_INPUT: r2c bridge cannot use source_provider_id"
                 .to_string()
                 .into(),
         );
@@ -746,8 +747,8 @@ pub fn upsert(
     let is_cx2cc = is_cx2cc_bridge(source_provider_id, bridge_type.as_deref());
     let bridge_type = if is_cx2cc {
         Some(CX2CC_BRIDGE_TYPE.to_string())
-    } else if is_cc2cx {
-        Some(CC2CX_BRIDGE_TYPE.to_string())
+    } else if is_r2c {
+        Some(R2C_BRIDGE_TYPE.to_string())
     } else if is_claude_chat_completions {
         Some(CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE.to_string())
     } else {
@@ -814,12 +815,10 @@ pub fn upsert(
                 .into(),
         );
     }
-    if is_cc2cx && cli_key != "codex" {
-        return Err(
-            "SEC_INVALID_INPUT: cc2cx bridge is only supported for codex"
-                .to_string()
-                .into(),
-        );
+    if is_r2c && cli_key != "codex" {
+        return Err("SEC_INVALID_INPUT: r2c bridge is only supported for codex"
+            .to_string()
+            .into());
     }
     if is_claude_chat_completions && cli_key != "claude" {
         return Err(

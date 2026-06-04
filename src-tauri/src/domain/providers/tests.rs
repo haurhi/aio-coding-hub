@@ -481,24 +481,24 @@ fn upsert_oauth_provider_drops_submitted_base_urls() {
 }
 
 #[test]
-fn upsert_accepts_cc2cx_bridge_for_codex_api_key_provider() {
+fn upsert_accepts_r2c_bridge_for_codex_api_key_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("providers_cc2cx_codex.db");
+    let db_path = dir.path().join("providers_r2c_codex.db");
     let db = crate::db::init_for_tests(&db_path).expect("init db");
 
     let mut params = default_provider_params("volcengine-coding-plan-chat");
     params.cli_key = "codex".to_string();
     params.base_urls = vec!["https://ark.cn-beijing.volces.com/api/coding/v3".to_string()];
-    params.bridge_type = Some("cc2cx".to_string());
+    params.bridge_type = Some("r2c".to_string());
     params.model_mapping = Some(ProviderModelMapping::from_iter([
         (" gpt-5.5 ".to_string(), " DeepSeek-V4-Pro ".to_string()),
         ("gpt-5".to_string(), "".to_string()),
     ]));
 
-    let saved = upsert(&db, params).expect("save cc2cx provider");
+    let saved = upsert(&db, params).expect("save r2c provider");
 
     assert_eq!(saved.cli_key, "codex");
-    assert_eq!(saved.bridge_type.as_deref(), Some("cc2cx"));
+    assert_eq!(saved.bridge_type.as_deref(), Some("r2c"));
     assert_eq!(
         saved.model_mapping.get("gpt-5.5").map(String::as_str),
         Some("DeepSeek-V4-Pro")
@@ -508,6 +508,23 @@ fn upsert_accepts_cc2cx_bridge_for_codex_api_key_provider() {
         saved.base_urls,
         vec!["https://ark.cn-beijing.volces.com/api/coding/v3"]
     );
+}
+
+#[test]
+fn upsert_accepts_legacy_cc2cx_bridge_for_codex_api_key_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_legacy_cc2cx_codex.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("legacy-volcengine-coding-plan-chat");
+    params.cli_key = "codex".to_string();
+    params.base_urls = vec!["https://ark.cn-beijing.volces.com/api/coding/v3".to_string()];
+    params.bridge_type = Some("cc2cx".to_string());
+
+    let saved = upsert(&db, params).expect("save legacy cc2cx provider");
+
+    assert_eq!(saved.cli_key, "codex");
+    assert_eq!(saved.bridge_type.as_deref(), Some("r2c"));
 }
 
 #[test]
@@ -545,18 +562,18 @@ fn upsert_accepts_claude_chat_completions_bridge_for_claude_api_key_provider() {
 }
 
 #[test]
-fn upsert_rejects_cc2cx_bridge_for_non_codex_provider() {
+fn upsert_rejects_r2c_bridge_for_non_codex_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("providers_cc2cx_claude.db");
+    let db_path = dir.path().join("providers_r2c_claude.db");
     let db = crate::db::init_for_tests(&db_path).expect("init db");
 
-    let mut params = default_provider_params("invalid-cc2cx-claude");
-    params.bridge_type = Some("cc2cx".to_string());
+    let mut params = default_provider_params("invalid-r2c-claude");
+    params.bridge_type = Some("r2c".to_string());
 
-    let err = upsert(&db, params).expect_err("cc2cx is codex-only");
+    let err = upsert(&db, params).expect_err("r2c is codex-only");
     assert!(err
         .to_string()
-        .contains("cc2cx bridge is only supported for codex"));
+        .contains("r2c bridge is only supported for codex"));
 }
 
 #[test]

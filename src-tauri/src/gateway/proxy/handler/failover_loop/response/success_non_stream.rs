@@ -1338,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_non_stream_json_translates_to_responses_json() {
+    fn r2c_non_stream_json_translates_to_responses_json() {
         let chat_body = json!({
             "id": "chatcmpl_123",
             "model": "DeepSeek-V4-Pro",
@@ -1357,7 +1357,7 @@ mod tests {
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("321"));
 
         let body = translate_protocol_bridge_non_stream_body(
-            Some(crate::providers::CC2CX_BRIDGE_TYPE),
+            Some(crate::providers::R2C_BRIDGE_TYPE),
             false,
             Some("DeepSeek-V4-Pro"),
             &crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),

@@ -827,13 +827,14 @@ fn ensure_provider_bridge_type(conn: &mut Connection) -> Result<(), String> {
     if !column_exists(conn, "providers", "bridge_type")? {
         conn.execute_batch("ALTER TABLE providers ADD COLUMN bridge_type TEXT DEFAULT NULL;")
             .map_err(|e| format!("failed to ensure providers bridge_type column: {e}"))?;
-
-        // Back-fill existing CX2CC providers.
-        conn.execute_batch(
-            "UPDATE providers SET bridge_type = 'cx2cc' WHERE source_provider_id IS NOT NULL AND bridge_type IS NULL;",
-        )
-        .map_err(|e| format!("failed to back-fill bridge_type for cx2cc providers: {e}"))?;
     }
+
+    // Back-fill existing CX2CC providers.
+    conn.execute_batch(
+        "UPDATE providers SET bridge_type = 'cx2cc' WHERE source_provider_id IS NOT NULL AND bridge_type IS NULL;",
+    )
+    .map_err(|e| format!("failed to back-fill bridge_type for cx2cc providers: {e}"))?;
+
     Ok(())
 }
 
@@ -925,4 +926,38 @@ fn column_exists(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_bridge_type_preserves_legacy_cc2cx_when_column_already_exists() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.execute_batch(
+            r#"
+CREATE TABLE providers (
+  id INTEGER PRIMARY KEY,
+  source_provider_id INTEGER DEFAULT NULL,
+  bridge_type TEXT DEFAULT NULL
+);
+
+INSERT INTO providers (id, bridge_type) VALUES (1, 'cc2cx');
+"#,
+        )
+        .expect("create legacy providers table");
+
+        ensure_provider_bridge_type(&mut conn).expect("ensure provider bridge type");
+
+        let bridge_type: String = conn
+            .query_row(
+                "SELECT bridge_type FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated bridge_type");
+        assert_eq!(bridge_type, "cc2cx");
+        assert!(crate::providers::is_r2c_bridge(Some(&bridge_type)));
+    }
 }

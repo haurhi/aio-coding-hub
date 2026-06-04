@@ -464,7 +464,7 @@ mod tests {
         insert_codex_provider_with_priority(db, "Timeout Stub", base_url, 0)
     }
 
-    fn insert_cc2cx_provider_with_priority(
+    fn insert_r2c_provider_with_priority(
         db: &db::Db,
         name: &str,
         base_url: String,
@@ -495,11 +495,11 @@ mod tests {
                 tags: None,
                 note: None,
                 source_provider_id: None,
-                bridge_type: Some("cc2cx".to_string()),
+                bridge_type: Some("r2c".to_string()),
                 stream_idle_timeout_seconds: None,
             },
         )
-        .expect("insert cc2cx provider")
+        .expect("insert r2c provider")
         .id
     }
 
@@ -1962,7 +1962,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn mock_runtime_router_cc2cx_stream_returns_parseable_responses_done_item() {
+    async fn mock_runtime_router_r2c_stream_returns_parseable_responses_done_item() {
         let _env_lock = crate::test_support::test_env_lock();
         let home = tempfile::tempdir().expect("home dir");
         let _env = isolate_app_env(home.path());
@@ -1978,22 +1978,22 @@ mod tests {
         let db = db::init_for_tests(
             &db_dir
                 .path()
-                .join("gateway-route-cc2cx-stream-done-item-test.sqlite"),
+                .join("gateway-route-r2c-stream-done-item-test.sqlite"),
         )
         .expect("init test db");
         let (sse_base_url, sse_task) = spawn_chunked_sse_upstream(
             vec![
-                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
-                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from chat\"}}]}\n\n",
-                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n",
-                "data: {\"id\":\"chatcmpl-cc2cx\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13,\"prompt_tokens_details\":{\"cached_tokens\":6},\"cache_creation_5m_input_tokens\":2,\"cache_creation_1h_input_tokens\":1}}\n\n",
+                "data: {\"id\":\"chatcmpl-r2c\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+                "data: {\"id\":\"chatcmpl-r2c\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from chat\"}}]}\n\n",
+                "data: {\"id\":\"chatcmpl-r2c\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n",
+                "data: {\"id\":\"chatcmpl-r2c\",\"object\":\"chat.completion.chunk\",\"model\":\"DeepSeek-V4-Pro\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13,\"prompt_tokens_details\":{\"cached_tokens\":6},\"cache_creation_5m_input_tokens\":2,\"cache_creation_1h_input_tokens\":1}}\n\n",
                 "data: [DONE]\n\n",
             ],
             Duration::from_millis(10),
         )
         .await;
         let provider_id =
-            insert_cc2cx_provider_with_priority(&db, "CC2CX Chat SSE Stub", sse_base_url, 0);
+            insert_r2c_provider_with_priority(&db, "R2C Chat SSE Stub", sse_base_url, 0);
 
         let (log_tx, writer_task) =
             request_logs::start_buffered_writer(app_handle.clone(), db.clone());
@@ -2003,7 +2003,7 @@ mod tests {
             .uri("/v1/responses")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                r#"{"model":"gpt-route-cc2cx","stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}"#,
+                r#"{"model":"gpt-route-r2c","stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}"#,
             ))
             .expect("request");
 
@@ -2087,7 +2087,7 @@ mod tests {
             exclude_cx2cc_gateway_bridge: Some(false),
         };
         let summary = usage_stats::summary_v2(&db, &usage_params, |_| Vec::new())
-            .expect("usage summary includes cc2cx translated stream");
+            .expect("usage summary includes r2c translated stream");
         assert_eq!(summary.requests_total, 1);
         assert_eq!(summary.requests_with_usage, 1);
         assert_eq!(summary.requests_success, 1);
@@ -2105,10 +2105,10 @@ mod tests {
 
         let leaderboard =
             usage_stats::leaderboard_v2(&db, "provider", &usage_params, Some(10), |_| Vec::new())
-                .expect("usage provider leaderboard includes cc2cx translated stream");
+                .expect("usage provider leaderboard includes r2c translated stream");
         assert_eq!(leaderboard.len(), 1);
         assert_eq!(leaderboard[0].key, format!("codex:{provider_id}"));
-        assert_eq!(leaderboard[0].name, "codex/CC2CX Chat SSE Stub");
+        assert_eq!(leaderboard[0].name, "codex/R2C Chat SSE Stub");
         assert_eq!(leaderboard[0].requests_total, 1);
         assert_eq!(leaderboard[0].requests_success, 1);
         assert_eq!(leaderboard[0].input_tokens, 4);
@@ -2122,10 +2122,10 @@ mod tests {
             .is_some_and(|tokens_per_second| tokens_per_second > 0.0));
 
         let cache_trend = usage_stats::provider_cache_rate_trend_v1(&db, &usage_params, Some(10))
-            .expect("cache trend includes cc2cx translated stream");
+            .expect("cache trend includes r2c translated stream");
         assert_eq!(cache_trend.len(), 1);
         assert_eq!(cache_trend[0].key, format!("codex:{provider_id}"));
-        assert_eq!(cache_trend[0].name, "codex/CC2CX Chat SSE Stub");
+        assert_eq!(cache_trend[0].name, "codex/R2C Chat SSE Stub");
         assert_eq!(cache_trend[0].denom_tokens, 13);
         assert_eq!(cache_trend[0].cache_read_input_tokens, 6);
         assert_eq!(cache_trend[0].requests_success, 1);

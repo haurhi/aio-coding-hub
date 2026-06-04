@@ -271,14 +271,14 @@ describe("pages/providers/ProviderEditorDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("saves codex providers with cc2cx bridge from the auth mode tabs", async () => {
+  it("saves codex providers with r2c bridge from the auth mode tabs", async () => {
     vi.mocked(providerUpsert).mockResolvedValue(
       makeProvider({
         id: 4,
         cli_key: "codex",
         name: "Volcengine Coding Plan",
         base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
-        bridge_type: "cc2cx",
+        bridge_type: "r2c",
         api_key_configured: true,
       })
     );
@@ -294,7 +294,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
     );
 
     const dialog = within(screen.getByRole("dialog"));
-    fireEvent.click(dialog.getByRole("tab", { name: "CC2CX 转译" }));
+    fireEvent.click(dialog.getByRole("tab", { name: "R2C 转译" }));
     fireEvent.change(dialog.getByPlaceholderText("default"), {
       target: { value: "Volcengine Coding Plan" },
     });
@@ -313,21 +313,21 @@ describe("pages/providers/ProviderEditorDialog", () => {
           authMode: "api_key",
           apiKey: "sk-volc",
           baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
-          bridgeType: "cc2cx",
+          bridgeType: "r2c",
           sourceProviderId: null,
         })
       )
     );
   });
 
-  it("saves codex cc2cx model mappings from the editor", async () => {
+  it("saves codex r2c model mappings from the editor", async () => {
     vi.mocked(providerUpsert).mockResolvedValue(
       makeProvider({
         id: 4,
         cli_key: "codex",
         name: "Volcengine Coding Plan",
         base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
-        bridge_type: "cc2cx",
+        bridge_type: "r2c",
         model_mapping: { "gpt-5.5": "DeepSeek-V4-Pro" },
         api_key_configured: true,
       })
@@ -344,7 +344,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
     );
 
     const dialog = within(screen.getByRole("dialog"));
-    fireEvent.click(dialog.getByRole("tab", { name: "CC2CX 转译" }));
+    fireEvent.click(dialog.getByRole("tab", { name: "R2C 转译" }));
     fireEvent.click(dialog.getByText("Codex 模型映射"));
     fireEvent.change(dialog.getByPlaceholderText("gpt-5.5"), {
       target: { value: "gpt-5.5" },
@@ -366,7 +366,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
       expect(vi.mocked(providerUpsert)).toHaveBeenCalledWith(
         expect.objectContaining({
           cliKey: "codex",
-          bridgeType: "cc2cx",
+          bridgeType: "r2c",
           modelMapping: { "gpt-5.5": "DeepSeek-V4-Pro" },
         })
       )

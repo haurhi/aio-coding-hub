@@ -21,7 +21,7 @@ mod tests {
         }
     }
 
-    fn cc2cx_ctx() -> BridgeContext {
+    fn r2c_ctx() -> BridgeContext {
         BridgeContext {
             claude_models: crate::domain::providers::ClaudeModels::default(),
             model_mapping: Default::default(),
@@ -71,7 +71,13 @@ mod tests {
     }
 
     #[test]
-    fn available_bridge_types_includes_cc2cx() {
+    fn available_bridge_types_includes_r2c() {
+        let types = registry::available_bridge_types();
+        assert!(types.contains(&"r2c"));
+    }
+
+    #[test]
+    fn available_bridge_types_includes_legacy_cc2cx_alias() {
         let types = registry::available_bridge_types();
         assert!(types.contains(&"cc2cx"));
     }
@@ -180,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_translates_codex_responses_request_to_chat_completions() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_translates_codex_responses_request_to_chat_completions() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
 
         let responses_req = json!({
             "model": "gpt-5.4",
@@ -255,9 +261,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_preserves_chat_completions_cache_usage_in_response() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_preserves_chat_completions_cache_usage_in_response() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
 
         let chat_resp = json!({
             "id": "chatcmpl_cache",
@@ -292,9 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_preserves_chat_completions_cache_usage_in_stream() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_preserves_chat_completions_cache_usage_in_stream() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
         let mut translator = bridge.create_stream_translator();
 
         let start = translator
@@ -360,9 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_preserves_chat_completions_usage_only_stream_chunk() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_preserves_chat_completions_usage_only_stream_chunk() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
         let mut translator = bridge.create_stream_translator();
 
         let start = translator
@@ -574,9 +580,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_translates_chat_completions_text_stream_to_responses_sse() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_translates_chat_completions_text_stream_to_responses_sse() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
         let mut translator = bridge.create_stream_translator();
 
         let first = translator
@@ -675,9 +681,9 @@ mod tests {
     }
 
     #[test]
-    fn cc2cx_translates_chat_completions_tool_stream_to_responses_sse() {
-        let bridge = get_bridge("cc2cx").unwrap();
-        let ctx = cc2cx_ctx();
+    fn r2c_translates_chat_completions_tool_stream_to_responses_sse() {
+        let bridge = get_bridge("r2c").unwrap();
+        let ctx = r2c_ctx();
         let mut translator = bridge.create_stream_translator();
 
         let first = translator

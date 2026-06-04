@@ -484,14 +484,14 @@ export interface ProviderTypeInfo {
   isCx2cc: boolean;
   /** Whether this is a CX2CC gateway (bridge_type=cx2cc but no source_provider_id) */
   isCx2ccGateway: boolean;
-  /** Whether this is a CC2CX bridge (Chat Completions provider exposed to Codex) */
-  isCc2cx: boolean;
+  /** Whether this is a R2C bridge (Chat Completions provider exposed to Codex) */
+  isR2c: boolean;
   /** Whether this is a Claude Messages provider backed by OpenAI Chat Completions */
   isClaudeChatCompletions: boolean;
   /** Whether this is OAuth mode */
   isOAuth: boolean;
-  /** Effective auth mode: api_key / oauth / cx2cc / cc2cx / claude_chat_completions */
-  effectiveAuthMode: "api_key" | "oauth" | "cx2cc" | "cc2cx" | "claude_chat_completions";
+  /** Effective auth mode: api_key / oauth / cx2cc / r2c / claude_chat_completions */
+  effectiveAuthMode: "api_key" | "oauth" | "cx2cc" | "r2c" | "claude_chat_completions";
 }
 
 export function getProviderTypeInfo(
@@ -504,7 +504,7 @@ export function getProviderTypeInfo(
     return {
       isCx2cc: false,
       isCx2ccGateway: false,
-      isCc2cx: false,
+      isR2c: false,
       isClaudeChatCompletions: false,
       isOAuth: false,
       effectiveAuthMode: "api_key",
@@ -512,13 +512,13 @@ export function getProviderTypeInfo(
   }
   const isCx2cc = provider.source_provider_id != null || provider.bridge_type === "cx2cc";
   const isCx2ccGateway = provider.bridge_type === "cx2cc" && provider.source_provider_id == null;
-  const isCc2cx = provider.bridge_type === "cc2cx";
+  const isR2c = provider.bridge_type === "r2c" || provider.bridge_type === "cc2cx";
   const isClaudeChatCompletions = provider.bridge_type === "claude_chat_completions";
   const isOAuth = provider.auth_mode === "oauth";
   const effectiveAuthMode: ProviderTypeInfo["effectiveAuthMode"] = isCx2cc
     ? "cx2cc"
-    : isCc2cx
-      ? "cc2cx"
+    : isR2c
+      ? "r2c"
       : isClaudeChatCompletions
         ? "claude_chat_completions"
         : isOAuth
@@ -527,7 +527,7 @@ export function getProviderTypeInfo(
   return {
     isCx2cc,
     isCx2ccGateway,
-    isCc2cx,
+    isR2c,
     isClaudeChatCompletions,
     isOAuth,
     effectiveAuthMode,

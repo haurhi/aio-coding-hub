@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   baseUrlPingMs,
   MAX_PROVIDER_ORDER_IDS,
+  getProviderTypeInfo,
   type ProviderSummary,
   providerClaudeTerminalLaunchCommand,
   providerCopyApiKeyToClipboard,
@@ -95,6 +96,13 @@ function createProviderSummary(overrides: Partial<ProviderSummary> = {}): Provid
 }
 
 describe("services/providers/providers", () => {
+  it("treats legacy cc2cx bridge providers as r2c", () => {
+    const info = getProviderTypeInfo(createProviderSummary({ bridge_type: "cc2cx" }));
+
+    expect(info.isR2c).toBe(true);
+    expect(info.effectiveAuthMode).toBe("r2c");
+  });
+
   it("rethrows and logs when invoke fails", async () => {
     vi.mocked(commands.providersList).mockRejectedValueOnce(new Error("providers boom"));
 

@@ -264,11 +264,11 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
     }
 
     let mut direct_bridge_applied = false;
-    if provider.bridge_type.as_deref() == Some(crate::providers::CC2CX_BRIDGE_TYPE)
+    if crate::providers::is_r2c_bridge(provider.bridge_type.as_deref())
         && is_responses_request_path(&upstream_forwarded_path)
     {
         match translate_direct_bridge_request(
-            crate::providers::CC2CX_BRIDGE_TYPE,
+            crate::providers::R2C_BRIDGE_TYPE,
             &upstream_body_bytes,
             input.requested_model.as_deref(),
             anthropic_stream_requested,
@@ -277,7 +277,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
             &provider.model_mapping,
         ) {
             Ok(translated) => {
-                protocol_bridge_type = Some(crate::providers::CC2CX_BRIDGE_TYPE.to_string());
+                protocol_bridge_type = Some(crate::providers::R2C_BRIDGE_TYPE.to_string());
                 upstream_forwarded_path = translated.forwarded_path;
                 upstream_query = None;
                 upstream_body_bytes = translated.body_bytes;
@@ -294,7 +294,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
                     SkipReason {
                         error_category: "translation",
                         error_code: GatewayErrorCode::InternalError.as_str(),
-                        reason: format!("cc2cx translation failed: {err}"),
+                        reason: format!("r2c translation failed: {err}"),
                     },
                 );
                 return PreparationOutcome::Skipped;
@@ -586,7 +586,7 @@ mod tests {
         );
 
         let translated = translate_direct_bridge_request(
-            crate::providers::CC2CX_BRIDGE_TYPE,
+            crate::providers::R2C_BRIDGE_TYPE,
             &body,
             Some("DeepSeek-V4-Pro"),
             true,
@@ -594,7 +594,7 @@ mod tests {
             &crate::providers::ClaudeModels::default(),
             &crate::providers::ProviderModelMapping::default(),
         )
-        .expect("translate cc2cx request");
+        .expect("translate r2c request");
         let translated_body: serde_json::Value =
             serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
 
@@ -625,7 +625,7 @@ mod tests {
         )]);
 
         let translated = translate_direct_bridge_request(
-            crate::providers::CC2CX_BRIDGE_TYPE,
+            crate::providers::R2C_BRIDGE_TYPE,
             &body,
             Some("gpt-5.5"),
             true,
@@ -633,7 +633,7 @@ mod tests {
             &crate::providers::ClaudeModels::default(),
             &mapping,
         )
-        .expect("translate cc2cx request with model mapping");
+        .expect("translate r2c request with model mapping");
         let translated_body: serde_json::Value =
             serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
 

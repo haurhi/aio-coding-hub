@@ -97,11 +97,11 @@ describe("pages/providers/providerEditorSubmitModel", () => {
     expect(result.value.payload.authMode).toBe("api_key");
   });
 
-  it("marks codex api-key providers as cc2cx bridge when selected", () => {
+  it("marks codex api-key providers as r2c bridge when selected", () => {
     const result = buildProviderEditorUpsertInput(
       makeContext({
         cliKey: "codex",
-        authMode: "cc2cx",
+        authMode: "r2c",
         baseUrlRows: [
           {
             id: "1",
@@ -127,7 +127,7 @@ describe("pages/providers/providerEditorSubmitModel", () => {
         apiKey: "sk-volc",
         baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
         sourceProviderId: null,
-        bridgeType: "cc2cx",
+        bridgeType: "r2c",
       })
     );
   });
@@ -175,11 +175,11 @@ describe("pages/providers/providerEditorSubmitModel", () => {
     );
   });
 
-  it("includes normalized codex model mapping for cc2cx providers", () => {
+  it("includes normalized codex model mapping for r2c providers", () => {
     const result = buildProviderEditorUpsertInput(
       makeContext({
         cliKey: "codex",
-        authMode: "cc2cx",
+        authMode: "r2c",
         modelMappingRows: [
           { id: "1", source: " gpt-5.5 ", target: " DeepSeek-V4-Pro " },
           { id: "2", source: "gpt-5", target: "" },

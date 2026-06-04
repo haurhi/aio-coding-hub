@@ -197,7 +197,7 @@ export const ProviderCard = memo(function ProviderCard({
 
   const circuitState = useMemo(() => getGatewayCircuitDerivedState(circuit), [circuit]);
   const { isUnavailable, unavailableUntil } = circuitState;
-  const { isOAuth, isCx2cc, isCx2ccGateway, isCc2cx, isClaudeChatCompletions } =
+  const { isOAuth, isCx2cc, isCx2ccGateway, isR2c, isClaudeChatCompletions } =
     getProviderTypeInfo(provider);
   const [apiKeyDetailsVisible, setApiKeyDetailsVisible] = useState(false);
   const [limitsRefreshing, setLimitsRefreshing] = useState(false);
@@ -335,19 +335,19 @@ export const ProviderCard = memo(function ProviderCard({
                     "inline-flex w-16 shrink-0 cursor-pointer items-center justify-center rounded-full px-2 py-0.5 font-mono text-[10px] transition-opacity hover:opacity-80",
                     isClaudeChatCompletions
                       ? "bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300"
-                      : isCc2cx
+                      : isR2c
                         ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
                         : "bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
                   )}
                   title={
                     isClaudeChatCompletions
                       ? "Chat 转译：Chat Completions 供应商接入 Claude Messages"
-                      : isCc2cx
-                        ? "CC2CX 转译：Chat Completions 供应商接入 Codex"
+                      : isR2c
+                        ? "R2C 转译：Chat Completions 供应商接入 Codex"
                         : "API Key 认证"
                   }
                 >
-                  {isClaudeChatCompletions ? "Chat" : isCc2cx ? "CC2CX" : "API Key"}
+                  {isClaudeChatCompletions ? "Chat" : isR2c ? "R2C" : "API Key"}
                 </button>
                 <span className="shrink-0 rounded-full bg-cyan-50 px-2 py-0.5 font-mono text-[10px] text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">
                   {provider.base_url_mode === "ping" ? "Ping" : "顺序"}
@@ -376,7 +376,7 @@ export const ProviderCard = memo(function ProviderCard({
                 模型映射 {claudeModelsCount}/5
               </span>
             ) : null}
-            {isCc2cx && modelMappingCount > 0 ? (
+            {isR2c && modelMappingCount > 0 ? (
               <span
                 className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[10px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
                 title={[`已配置 Codex 模型映射（${modelMappingCount}）`, ...modelMappings].join(

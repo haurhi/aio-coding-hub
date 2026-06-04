@@ -13,7 +13,7 @@ export type ProviderEditorAuthMode =
   | "api_key"
   | "oauth"
   | "cx2cc"
-  | "cc2cx"
+  | "r2c"
   | "claude_chat_completions";
 
 /** Provider identity and lifecycle */

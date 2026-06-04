@@ -381,19 +381,29 @@ describe("pages/providers/SortableProviderCard", () => {
     expect(screen.getByText("跟随当前 Codex 分流")).toBeInTheDocument();
   });
 
-  it("renders cc2cx bridge as its own codex provider mode", () => {
+  it("renders r2c bridge as its own codex provider mode", () => {
+    renderCard({
+      cli_key: "codex",
+      bridge_type: "r2c",
+      base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+    });
+
+    const badge = screen.getByRole("button", { name: "R2C" });
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute("title")).toContain("Chat Completions");
+    expect(badge.getAttribute("title")).toContain("Codex");
+    fireEvent.click(badge);
+    expect(screen.getByText("https://ark.cn-beijing.volces.com/api/coding/v3")).toBeInTheDocument();
+  });
+
+  it("renders legacy cc2cx bridge as r2c mode", () => {
     renderCard({
       cli_key: "codex",
       bridge_type: "cc2cx",
       base_urls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
     });
 
-    const badge = screen.getByRole("button", { name: "CC2CX" });
-    expect(badge).toBeInTheDocument();
-    expect(badge.getAttribute("title")).toContain("Chat Completions");
-    expect(badge.getAttribute("title")).toContain("Codex");
-    fireEvent.click(badge);
-    expect(screen.getByText("https://ark.cn-beijing.volces.com/api/coding/v3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "R2C" })).toBeInTheDocument();
   });
 
   it("renders claude chat-completions bridge as its own provider mode", () => {
