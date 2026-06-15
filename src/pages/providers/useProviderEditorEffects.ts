@@ -45,6 +45,7 @@ export type EffectDeps = {
   baseUrlRowSeqRef: React.MutableRefObject<number>;
   modelMappingRowSeqRef: React.MutableRefObject<number>;
   oauthStatusRequestSeqRef: React.MutableRefObject<number>;
+  cancelActiveOAuthLoginAttempt: (resetUi?: boolean) => void;
   newBaseUrlRow: (url?: string) => BaseUrlRow;
   newModelMappingRow: (source?: string, target?: string) => ModelMappingRow;
   setBaseUrlMode: (v: ProviderBaseUrlMode) => void;
@@ -92,6 +93,7 @@ export function useProviderEditorEffects(d: EffectDeps) {
     baseUrlRowSeqRef,
     modelMappingRowSeqRef,
     oauthStatusRequestSeqRef,
+    cancelActiveOAuthLoginAttempt,
     newBaseUrlRow,
     newModelMappingRow,
     setBaseUrlMode,
@@ -124,11 +126,15 @@ export function useProviderEditorEffects(d: EffectDeps) {
     setOauthLoading(false);
 
     if (!open) {
+      cancelActiveOAuthLoginAttempt();
       setOauthStatus(null);
       return () => {
         oauthStatusRequestSeqRef.current += 1;
+        cancelActiveOAuthLoginAttempt(false);
       };
     }
+
+    cancelActiveOAuthLoginAttempt();
 
     baseUrlRowSeqRef.current = 1;
     modelMappingRowSeqRef.current = 1;
@@ -148,11 +154,17 @@ export function useProviderEditorEffects(d: EffectDeps) {
       setAuthMode(deriveAuthMode(createInitialValues));
       setOauthStatus(null);
       reset(buildFormValues(createInitialValues));
-      return;
+      return () => {
+        cancelActiveOAuthLoginAttempt(false);
+      };
     }
 
     const snapshot = editProviderSnapshotRef.current;
-    if (!snapshot) return;
+    if (!snapshot) {
+      return () => {
+        cancelActiveOAuthLoginAttempt(false);
+      };
+    }
 
     const initialAuthMode = deriveAuthMode(snapshot);
     setAuthMode(initialAuthMode);
@@ -184,9 +196,11 @@ export function useProviderEditorEffects(d: EffectDeps) {
     });
     return () => {
       oauthStatusRequestSeqRef.current += 1;
+      cancelActiveOAuthLoginAttempt(false);
     };
   }, [
     baseUrlRowSeqRef,
+    cancelActiveOAuthLoginAttempt,
     cliKey,
     createInitialValues,
     editProviderSnapshotRef,
@@ -211,6 +225,11 @@ export function useProviderEditorEffects(d: EffectDeps) {
     setTagInput,
     setTags,
   ]);
+
+  useEffect(() => {
+    if (!open || authMode === "oauth") return;
+    cancelActiveOAuthLoginAttempt();
+  }, [authMode, cancelActiveOAuthLoginAttempt, open]);
 
   useEffect(() => {
     if (authMode !== "cx2cc") return;

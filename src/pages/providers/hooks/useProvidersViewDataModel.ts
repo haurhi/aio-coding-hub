@@ -629,7 +629,10 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     }
   }
 
-  function handleDragEnd(event: DragEndEvent) {
+  function reorderProvidersByVisibility(
+    event: DragEndEvent,
+    isVisible: (provider: ProviderSummary) => boolean
+  ) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -640,7 +643,7 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
       activeId: active.id,
       overId: over.id,
       getId: (provider) => provider.id,
-      isVisible: (provider) => provider.enabled,
+      isVisible,
     });
     if (!nextProviders) return;
 
@@ -648,6 +651,15 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     if (saveToken == null) return;
 
     void persistProvidersOrder(cliKey, saveToken, nextProviders);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    reorderProvidersByVisibility(event, (provider) => provider.enabled);
+  }
+
+  function handleProviderCardDragEnd(event: DragEndEvent) {
+    const visibleProviderIds = new Set(filteredProviders.map((provider) => provider.id));
+    reorderProvidersByVisibility(event, (provider) => visibleProviderIds.has(provider.id));
   }
 
   return {
@@ -675,6 +687,7 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     duplicateProvider,
     requestValidateProviderModel,
     handleDragEnd,
+    handleProviderCardDragEnd,
     sensors,
     createDialogState,
     setCreateDialogState,

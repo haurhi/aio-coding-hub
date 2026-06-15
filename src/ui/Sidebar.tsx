@@ -12,6 +12,7 @@ import {
   Moon,
   MessageSquare,
   Pencil,
+  Puzzle,
   Settings2,
   Sun,
   Terminal,
@@ -63,6 +64,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: "/prompts", label: "提示词", icon: Pencil, theme: "amber" },
       { to: "/mcp", label: "MCP", icon: Command, theme: "indigo" },
       { to: "/skills", label: "Skill", icon: Cpu, theme: "pink" },
+      { to: "/plugins", label: "插件", icon: Puzzle, theme: "emerald" },
       { to: "/usage", label: "用量", icon: TrendingDown, theme: "orange" },
       { to: "/logs", label: "请求日志", icon: FileText, theme: "slate" },
       { to: "/cli-manager", label: "CLI 管理", icon: Wrench, theme: "sky" },
@@ -426,6 +428,7 @@ export function Sidebar({ className }: SidebarProps) {
             : "检测到环境变量冲突"
         }
         description="继续启用可能会被这些环境变量覆盖（不会显示变量值）。是否继续？"
+        className="max-w-lg"
       >
         {pendingCliProxyEnablePrompt ? (
           <div className="space-y-4">

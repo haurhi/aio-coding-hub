@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { CACHE_ANOMALY_MONITOR_GUIDE_COPY } from "../../../../services/gateway/cacheAnomalyMonitorConfig";
 import type { GatewayRectifierSettingsPatch } from "../../../../services/settings/settingsGatewayRectifier";
 import { createTestAppSettings } from "../../../../test/fixtures/settings";
-import { CliManagerGeneralTab } from "../GeneralTab";
+import { CliManagerGeneralTab, type CliManagerGeneralTabProps } from "../GeneralTab";
 
 const navigateMock = vi.fn();
 
@@ -61,7 +61,7 @@ function createRectifierPatch(): GatewayRectifierSettingsPatch {
 
 type DefaultPropsOverrides = {
   appSettings?: ReturnType<typeof createTestAppSettings>;
-  onPersistCommonSettings?: ReturnType<typeof vi.fn>;
+  onPersistCommonSettings?: CliManagerGeneralTabProps["onPersistCommonSettings"];
 };
 
 function createDefaultTabProps(overrides: DefaultPropsOverrides = {}) {

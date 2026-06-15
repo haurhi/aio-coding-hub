@@ -8,9 +8,12 @@ import {
   providerCopyApiKeyToClipboard,
   providerDelete,
   providerDuplicate,
+  providerOAuthCancelDeviceFlow,
   providerOAuthDisconnect,
   providerOAuthFetchLimits,
+  providerOAuthPollDeviceFlow,
   providerOAuthRefresh,
+  providerOAuthStartDeviceFlow,
   providerOAuthStartFlow,
   providerOAuthStatus,
   providerSetEnabled,
@@ -42,6 +45,9 @@ vi.mock("../../../generated/bindings", async () => {
       providerCopyApiKeyToClipboard: vi.fn(),
       baseUrlPingMs: vi.fn(),
       providerOauthStartFlow: vi.fn(),
+      providerOauthStartDeviceFlow: vi.fn(),
+      providerOauthPollDeviceFlow: vi.fn(),
+      providerOauthCancelDeviceFlow: vi.fn(),
       providerOauthRefresh: vi.fn(),
       providerOauthDisconnect: vi.fn(),
       providerOauthStatus: vi.fn(),
@@ -335,6 +341,9 @@ describe("services/providers/providers", () => {
     vi.mocked(commands.providerDelete).mockClear();
     vi.mocked(commands.providerDuplicate).mockClear();
     vi.mocked(commands.providerOauthStartFlow).mockClear();
+    vi.mocked(commands.providerOauthStartDeviceFlow).mockClear();
+    vi.mocked(commands.providerOauthPollDeviceFlow).mockClear();
+    vi.mocked(commands.providerOauthCancelDeviceFlow).mockClear();
     vi.mocked(commands.providerOauthRefresh).mockClear();
     vi.mocked(commands.providerOauthDisconnect).mockClear();
     vi.mocked(commands.providerOauthStatus).mockClear();
@@ -392,6 +401,10 @@ describe("services/providers/providers", () => {
     await expect(providerDelete(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerDuplicate(1.5)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthStartFlow("not-a-cli", 1)).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(providerOAuthStartDeviceFlow(0)).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(providerOAuthPollDeviceFlow(1, "", "device", "user")).rejects.toThrow(
+      "SEC_INVALID_INPUT"
+    );
     await expect(providerOAuthRefresh(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthDisconnect(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthStatus(0)).rejects.toThrow("SEC_INVALID_INPUT");
@@ -403,6 +416,8 @@ describe("services/providers/providers", () => {
     expect(commands.providerDelete).not.toHaveBeenCalled();
     expect(commands.providerDuplicate).not.toHaveBeenCalled();
     expect(commands.providerOauthStartFlow).not.toHaveBeenCalled();
+    expect(commands.providerOauthStartDeviceFlow).not.toHaveBeenCalled();
+    expect(commands.providerOauthPollDeviceFlow).not.toHaveBeenCalled();
     expect(commands.providerOauthRefresh).not.toHaveBeenCalled();
     expect(commands.providerOauthDisconnect).not.toHaveBeenCalled();
     expect(commands.providerOauthStatus).not.toHaveBeenCalled();
@@ -457,6 +472,72 @@ describe("services/providers/providers", () => {
       provider_id: 10,
     });
     expect(commands.providerOauthStartFlow).toHaveBeenCalledWith("claude", 10);
+  });
+
+  it("providerOAuthStartDeviceFlow uses generated ipc", async () => {
+    vi.mocked(commands.providerOauthStartDeviceFlow).mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        provider_id: 10,
+        provider_type: "codex_oauth",
+        flow_id: "flow_123",
+        device_code: "device_123",
+        user_code: "ABCD-EFGH",
+        verification_uri: "https://auth.openai.com/codex/device",
+        expires_in: 900,
+        interval: 5,
+      } as any,
+    });
+
+    const result = await providerOAuthStartDeviceFlow(10);
+    expect(result).toEqual({
+      provider_id: 10,
+      provider_type: "codex_oauth",
+      flow_id: "flow_123",
+      device_code: "device_123",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://auth.openai.com/codex/device",
+      expires_in: 900,
+      interval: 5,
+    });
+    expect(commands.providerOauthStartDeviceFlow).toHaveBeenCalledWith(10);
+  });
+
+  it("providerOAuthPollDeviceFlow uses generated ipc input", async () => {
+    vi.mocked(commands.providerOauthPollDeviceFlow).mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        completed: true,
+        provider_id: 10,
+        provider_type: "codex_oauth",
+        expires_at: 1700000000,
+      } as any,
+    });
+
+    const result = await providerOAuthPollDeviceFlow(10, " flow_123 ", "device_123", "ABCD-EFGH");
+    expect(result).toEqual({
+      completed: true,
+      provider_id: 10,
+      provider_type: "codex_oauth",
+      expires_at: 1700000000,
+    });
+    expect(commands.providerOauthPollDeviceFlow).toHaveBeenCalledWith({
+      providerId: 10,
+      flowId: "flow_123",
+      deviceCode: "device_123",
+      userCode: "ABCD-EFGH",
+    });
+  });
+
+  it("providerOAuthCancelDeviceFlow uses generated ipc", async () => {
+    vi.mocked(commands.providerOauthCancelDeviceFlow).mockResolvedValueOnce({
+      status: "ok",
+      data: { cancelled: true } as any,
+    });
+
+    const result = await providerOAuthCancelDeviceFlow(" flow_123 ");
+    expect(result).toEqual({ cancelled: true });
+    expect(commands.providerOauthCancelDeviceFlow).toHaveBeenCalledWith("flow_123");
   });
 
   it("providerOAuthRefresh uses generated ipc", async () => {

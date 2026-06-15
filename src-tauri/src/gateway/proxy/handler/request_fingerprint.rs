@@ -1,3 +1,8 @@
+//! Pre-provider request fingerprints used only for recent-error-cache gating.
+//!
+//! These fingerprints intentionally run before provider selection, auth
+//! injection, protocol bridging, and final upstream request mutation.
+
 use crate::gateway::proxy::caches::RecentErrorCache;
 use crate::gateway::proxy::errors::error_response_with_retry_after;
 use crate::gateway::util::{

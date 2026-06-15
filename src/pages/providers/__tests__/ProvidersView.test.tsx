@@ -556,6 +556,87 @@ describe("pages/providers/ProvidersView", () => {
     await reorderPromise;
   });
 
+  it("reorders visible provider cards including disabled providers", async () => {
+    const providers = [
+      {
+        id: 1,
+        cli_key: "claude",
+        name: "P1",
+        enabled: true,
+        base_urls: ["https://a"],
+        base_url_mode: "order",
+        cost_multiplier: 1,
+        claude_models: {},
+      },
+      {
+        id: 2,
+        cli_key: "claude",
+        name: "P2",
+        enabled: false,
+        base_urls: ["https://b"],
+        base_url_mode: "order",
+        cost_multiplier: 1,
+        claude_models: {},
+      },
+      {
+        id: 3,
+        cli_key: "claude",
+        name: "P3",
+        enabled: true,
+        base_urls: ["https://c"],
+        base_url_mode: "order",
+        cost_multiplier: 1,
+        claude_models: {},
+      },
+    ] as any[];
+
+    vi.mocked(useProvidersListQuery).mockReturnValue({
+      data: providers,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(useGatewayCircuitStatusQuery).mockReturnValue({
+      data: [],
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useProviderSetEnabledMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+    vi.mocked(useProviderDeleteMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+    vi.mocked(useGatewayCircuitResetProviderMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useGatewayCircuitResetCliMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+
+    const reorderMutation = {
+      mutateAsync: vi.fn().mockResolvedValue([providers[0], providers[2], providers[1]]),
+    };
+    vi.mocked(useProvidersReorderMutation).mockReturnValue(reorderMutation as any);
+
+    const { result } = renderHook(() => useProvidersViewDataModel("claude"), {
+      wrapper: queryWrapper(),
+    });
+
+    act(() => {
+      result.current.handleProviderCardDragEnd({
+        active: { id: 2, data: { current: undefined }, rect: { current: {} } },
+        over: { id: 3, rect: {}, disabled: false, data: { current: undefined } },
+      } as Parameters<typeof result.current.handleProviderCardDragEnd>[0]);
+    });
+
+    await waitFor(() =>
+      expect(reorderMutation.mutateAsync).toHaveBeenCalledWith({
+        cliKey: "claude",
+        orderedProviderIds: [1, 3, 2],
+        optimisticProviders: [
+          expect.objectContaining({ id: 1, name: "P1", enabled: true }),
+          expect.objectContaining({ id: 3, name: "P3", enabled: true }),
+          expect.objectContaining({ id: 2, name: "P2", enabled: false }),
+        ],
+      })
+    );
+  });
+
   it("duplicates a provider directly through backend mutation", async () => {
     const providers = [
       {
@@ -1211,7 +1292,7 @@ describe("pages/providers/ProvidersView", () => {
         <ProvidersView activeCli="claude" setActiveCli={vi.fn()} />
       </QueryClientProvider>
     );
-    fireEvent.click(screen.getByTitle("编辑"));
+    fireEvent.click(screen.getAllByTitle("编辑")[0]!);
     expect(screen.getByTestId("provider-editor")).toHaveTextContent("edit");
 
     rerender(
@@ -1367,7 +1448,7 @@ describe("pages/providers/ProvidersView", () => {
     await waitFor(() => expect(screen.queryByTestId("provider-editor")).not.toBeInTheDocument());
 
     // edit dialog onSaved + onOpenChange
-    fireEvent.click(screen.getByTitle("编辑"));
+    fireEvent.click(screen.getAllByTitle("编辑")[0]!);
     const editEditor = screen
       .getAllByTestId("provider-editor")
       .find((el) => el.textContent?.includes("edit"));
@@ -1395,6 +1476,88 @@ describe("pages/providers/ProvidersView", () => {
     fireEvent.click(screen.getByTitle("删除"));
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("restores providers list scroll position after editing saves and background refresh completes", async () => {
+    const providers = [
+      {
+        id: 1,
+        cli_key: "claude",
+        name: "P1",
+        enabled: true,
+        base_urls: ["https://a"],
+        base_url_mode: "order",
+        cost_multiplier: 1,
+        claude_models: {},
+      },
+      {
+        id: 2,
+        cli_key: "claude",
+        name: "P2",
+        enabled: true,
+        base_urls: ["https://b"],
+        base_url_mode: "order",
+        cost_multiplier: 1,
+        claude_models: {},
+      },
+    ] as any[];
+
+    let providersFetching = false;
+    vi.mocked(useProvidersListQuery).mockImplementation(() => {
+      return { data: providers, isFetching: providersFetching } as any;
+    });
+    vi.mocked(useGatewayCircuitStatusQuery).mockReturnValue({
+      data: [],
+      isFetching: false,
+      refetch: vi.fn().mockResolvedValue({ data: [] }),
+    } as any);
+    vi.mocked(useProviderSetEnabledMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+    vi.mocked(useProviderDeleteMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+    vi.mocked(useProvidersReorderMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+    vi.mocked(useGatewayCircuitResetProviderMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useGatewayCircuitResetCliMutation).mockReturnValue({ mutateAsync: vi.fn() } as any);
+
+    const client = createTestQueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <ProvidersView activeCli="claude" setActiveCli={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    const providersScrollContainer = document.querySelectorAll(".scrollbar-overlay")[0] as
+      | HTMLElement
+      | undefined;
+    expect(providersScrollContainer).toBeTruthy();
+
+    providersScrollContainer!.scrollTop = 180;
+
+    fireEvent.click(screen.getAllByTitle("编辑")[0]!);
+    const editEditor = screen
+      .getAllByTestId("provider-editor")
+      .find((el) => el.textContent?.includes("edit"));
+    expect(editEditor).toBeTruthy();
+
+    fireEvent.click(within(editEditor as HTMLElement).getByRole("button", { name: "saved" }));
+
+    // 模拟后台刷新临时替换列表内容，导致浏览器滚动位置被重置。
+    providersFetching = true;
+    providersScrollContainer!.scrollTop = 0;
+    rerender(
+      <QueryClientProvider client={client}>
+        <ProvidersView activeCli="claude" setActiveCli={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    providersFetching = false;
+    rerender(
+      <QueryClientProvider client={client}>
+        <ProvidersView activeCli="claude" setActiveCli={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    await waitFor(() => expect(providersScrollContainer!.scrollTop).toBe(180));
   });
 
   it("covers providers loading and empty branches", () => {

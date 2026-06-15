@@ -729,6 +729,45 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async providerOauthStartDeviceFlow(
+    providerId: number
+  ): Promise<Result<ProviderOAuthDeviceCodeStartResult, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("provider_oauth_start_device_flow", { providerId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async providerOauthPollDeviceFlow(
+    input: ProviderOAuthDeviceCodePollInput
+  ): Promise<Result<ProviderOAuthDeviceCodePollResult, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("provider_oauth_poll_device_flow", { input }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async providerOauthCancelDeviceFlow(
+    flowId: string
+  ): Promise<Result<ProviderOAuthDeviceCodeCancelResult, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("provider_oauth_cancel_device_flow", { flowId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async providerOauthRefresh(
     providerId: number
   ): Promise<Result<ProviderOAuthRefreshResult, string>> {
@@ -1323,6 +1362,148 @@ export const commands = {
   ): Promise<Result<InstalledSkillSummary, string>> {
     try {
       return { status: "ok", data: await TAURI_INVOKE("skill_update", { workspaceId, skillId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginList(): Promise<Result<PluginSummary[], string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_list") };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginGet(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_get", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginInstallFromFile(
+    input: PluginInstallFromFileInput
+  ): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_install_from_file", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginUpdateFromFile(
+    input: PluginInstallFromFileInput
+  ): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_update_from_file", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginRollback(input: PluginRollbackInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_rollback", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginParseMarketIndex(
+    input: PluginMarketIndexInput
+  ): Promise<Result<PluginMarketListing[], string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_parse_market_index", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginInstallRemote(
+    input: PluginInstallRemoteInput
+  ): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_install_remote", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginInstallOfficial(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_install_official", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginQuarantineRevoked(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_quarantine_revoked", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginEnable(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_enable", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginDisable(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_disable", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginUninstall(input: PluginGetInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_uninstall", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginSaveConfig(input: PluginSaveConfigInput): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_save_config", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginGrantPermissions(
+    input: PluginGrantPermissionsInput
+  ): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_grant_permissions", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginRevokePermission(
+    input: PluginRevokePermissionInput
+  ): Promise<Result<PluginDetail, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_revoke_permission", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginListAuditLogs(
+    input: PluginListAuditLogsInput
+  ): Promise<Result<PluginAuditLog[], string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_list_audit_logs", { input }) };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: "error", error: e as any };
@@ -2453,6 +2634,120 @@ export type ModelPricesSyncReport = {
 };
 export type NoticeLevel = "info" | "success" | "warning" | "error";
 export type NoticeSendInput = { level: NoticeLevel; title: string | null; body: string };
+export type PluginAuditLog = {
+  id: number;
+  plugin_id: string | null;
+  trace_id: string | null;
+  event_type: string;
+  risk_level: string;
+  message: string;
+  details: JsonValue;
+  created_at: number;
+};
+export type PluginDetail = {
+  summary: PluginSummary;
+  manifest: PluginManifest;
+  install_source: PluginInstallSource;
+  installed_dir: string | null;
+  config: JsonValue;
+  granted_permissions: string[];
+  pending_permissions: string[];
+  audit_logs: PluginAuditLog[];
+  runtime_failures: PluginRuntimeFailure[];
+};
+export type PluginGetInput = { pluginId: string };
+export type PluginGrantPermissionsInput = { pluginId: string; permissions: string[] };
+export type PluginHook = { name: string; priority?: number; failurePolicy?: string | null };
+export type PluginHostCompatibility = { app: string; pluginApi: string; platforms?: string[] };
+export type PluginInstallFromFileInput = { filePath: string };
+export type PluginInstallRemoteInput = {
+  pluginId: string;
+  downloadUrl: string;
+  checksum: string;
+  signature: string | null;
+  publicKey: string | null;
+  source: string | null;
+};
+export type PluginInstallSource = "local" | "market" | "github_release" | "offline" | "official";
+export type PluginListAuditLogsInput = { pluginId: string | null; limit: number | null };
+export type PluginManifest = {
+  id: string;
+  name: string;
+  version: string;
+  apiVersion: string;
+  runtime: PluginRuntime;
+  hooks: PluginHook[];
+  permissions: string[];
+  hostCompatibility: PluginHostCompatibility;
+  entry?: string | null;
+  configSchema?: JsonValue | null;
+  configVersion?: number | null;
+  description?: string | null;
+  author?: JsonValue | null;
+  homepage?: string | null;
+  repository?: JsonValue | null;
+  license?: string | null;
+  checksum?: string | null;
+  signature?: string | null;
+  category?: string | null;
+};
+export type PluginMarketIndexInput = {
+  indexJson: string;
+  indexUrl: string | null;
+  signature: string | null;
+};
+export type PluginMarketListing = {
+  pluginId: string;
+  name: string;
+  latestVersion: string | null;
+  downloadUrl: string | null;
+  checksum: string | null;
+  signature: string | null;
+  riskLabels: string[];
+  revoked: boolean;
+  compatible: boolean;
+  updateAvailable: boolean;
+  installBlockReason: string | null;
+};
+export type PluginPermissionRisk = "low" | "medium" | "high" | "critical";
+export type PluginRevokePermissionInput = { pluginId: string; permission: string };
+export type PluginRollbackInput = { pluginId: string; version: string };
+export type PluginRuntime =
+  | { kind: "declarativeRules"; rules: string[] }
+  | { kind: "native"; engine: string }
+  | { kind: "wasm"; abiVersion: string; memoryLimitBytes?: number | null };
+export type PluginRuntimeFailure = {
+  id: number;
+  plugin_id: string;
+  hook_name: string | null;
+  failure_kind: string;
+  message: string;
+  trace_id: string | null;
+  created_at: number;
+};
+export type PluginSaveConfigInput = { pluginId: string; config: JsonValue };
+export type PluginStatus =
+  | "available"
+  | "installed"
+  | "enabled"
+  | "disabled"
+  | "update_available"
+  | "incompatible"
+  | "quarantined"
+  | "uninstalled";
+export type PluginSummary = {
+  id: number;
+  plugin_id: string;
+  name: string;
+  current_version: string | null;
+  status: PluginStatus;
+  runtime: string;
+  permission_risk: PluginPermissionRisk;
+  update_available: boolean;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+};
 export type PromptListSummary = {
   id: number;
   workspace_id: number;
@@ -2507,6 +2802,29 @@ export type ProviderLimitUsageRow = {
   window_daily_start_ts: number;
   window_weekly_start_ts: number;
   window_monthly_start_ts: number;
+};
+export type ProviderOAuthDeviceCodeCancelResult = { cancelled: boolean };
+export type ProviderOAuthDeviceCodePollInput = {
+  providerId: number;
+  flowId: string;
+  deviceCode: string;
+  userCode: string;
+};
+export type ProviderOAuthDeviceCodePollResult = {
+  completed: boolean;
+  provider_id: number;
+  provider_type: string;
+  expires_at: number | null;
+};
+export type ProviderOAuthDeviceCodeStartResult = {
+  provider_id: number;
+  provider_type: string;
+  flow_id: string;
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
 };
 export type ProviderOAuthDisconnectResult = { success: boolean };
 export type ProviderOAuthLimitsResult = {

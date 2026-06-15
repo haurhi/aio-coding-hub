@@ -1,6 +1,7 @@
 //! Usage: Claude (Anthropic) OAuth adapter.
 
 use crate::gateway::oauth::provider_trait::*;
+use crate::gateway::upstream_identity;
 use crate::shared::http_body::read_text_with_limit;
 use axum::http::{HeaderMap, HeaderValue};
 use chrono::DateTime;
@@ -108,24 +109,31 @@ impl OAuthProvider for ClaudeOAuthProvider {
                 .unwrap_or_else(|_| HeaderValue::from_static("oauth-2025-04-20")),
         );
 
-        // Mimic Claude Code CLI User-Agent and stainless headers
-        headers.insert("user-agent", HeaderValue::from_static("claude-code/2.1.45"));
+        // Mimic Claude Code CLI User-Agent and stainless headers.
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_static(upstream_identity::CLAUDE_CODE_USER_AGENT),
+        );
 
-        // Use actual OS instead of hardcoded Windows
-        let os = if cfg!(target_os = "windows") {
-            "Windows"
-        } else if cfg!(target_os = "macos") {
-            "macOS"
-        } else {
-            "Linux"
-        };
-        headers.insert("x-stainless-os", HeaderValue::from_static(os));
-        headers.insert("x-stainless-runtime", HeaderValue::from_static("node"));
-        headers.insert("x-stainless-arch", HeaderValue::from_static("x64"));
-        headers.insert("x-stainless-lang", HeaderValue::from_static("js"));
+        headers.insert(
+            "x-stainless-os",
+            HeaderValue::from_static(upstream_identity::claude_stainless_os()),
+        );
+        headers.insert(
+            "x-stainless-runtime",
+            HeaderValue::from_static(upstream_identity::CLAUDE_STAINLESS_RUNTIME),
+        );
+        headers.insert(
+            "x-stainless-arch",
+            HeaderValue::from_static(upstream_identity::claude_stainless_arch()),
+        );
+        headers.insert(
+            "x-stainless-lang",
+            HeaderValue::from_static(upstream_identity::CLAUDE_STAINLESS_LANG),
+        );
         headers.insert(
             "x-stainless-package-version",
-            HeaderValue::from_static("0.52.0"),
+            HeaderValue::from_static(upstream_identity::CLAUDE_STAINLESS_PACKAGE_VERSION),
         );
         Ok(())
     }
@@ -180,5 +188,48 @@ impl OAuthProvider for ClaudeOAuthProvider {
                 ..Default::default()
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header;
+
+    #[test]
+    fn inject_upstream_headers_uses_centralized_identity_markers() {
+        let provider = ClaudeOAuthProvider::new();
+        let mut headers = HeaderMap::new();
+
+        provider
+            .inject_upstream_headers(&mut headers, "access-token")
+            .expect("inject headers");
+
+        assert_eq!(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer access-token")
+        );
+        assert_eq!(
+            headers.get("user-agent").and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::CLAUDE_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            headers.get("x-stainless-os").and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::claude_stainless_os())
+        );
+        assert_eq!(
+            headers
+                .get("x-stainless-arch")
+                .and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::claude_stainless_arch())
+        );
+        assert_eq!(
+            headers
+                .get("x-stainless-package-version")
+                .and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::CLAUDE_STAINLESS_PACKAGE_VERSION)
+        );
     }
 }

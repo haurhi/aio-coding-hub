@@ -305,6 +305,9 @@ where
                 common.forwarded_path.trim_end_matches('/'),
                 "/v1/responses" | "/responses"
             );
+        let plugin_pipeline = common.state.plugin_pipeline.clone();
+        let plugin_db = common.state.db.clone();
+        let trace_id = common.trace_id.clone();
 
         let body = match (enable_response_fixer_for_this_response, should_gunzip) {
             (true, true) => {
@@ -322,6 +325,12 @@ where
                     upstream,
                     response_fixer_stream_config,
                     common.special_settings.clone(),
+                );
+                let upstream = MaybePluginChunkStream::new(
+                    upstream,
+                    plugin_pipeline.clone(),
+                    plugin_db.clone(),
+                    trace_id.clone(),
                 );
                 if use_sse_relay {
                     spawn_usage_sse_relay_body(
@@ -355,6 +364,12 @@ where
                     response_fixer_stream_config,
                     common.special_settings.clone(),
                 );
+                let upstream = MaybePluginChunkStream::new(
+                    upstream,
+                    plugin_pipeline.clone(),
+                    plugin_db.clone(),
+                    trace_id.clone(),
+                );
                 if use_sse_relay {
                     spawn_usage_sse_relay_body(
                         upstream,
@@ -383,6 +398,12 @@ where
                     common.requested_model.clone(),
                     common.cx2cc_settings.clone(),
                 );
+                let upstream = MaybePluginChunkStream::new(
+                    upstream,
+                    plugin_pipeline.clone(),
+                    plugin_db.clone(),
+                    trace_id.clone(),
+                );
                 if use_sse_relay {
                     spawn_usage_sse_relay_body(
                         upstream,
@@ -409,6 +430,12 @@ where
                     protocol_bridge_type,
                     common.requested_model.clone(),
                     common.cx2cc_settings.clone(),
+                );
+                let upstream = MaybePluginChunkStream::new(
+                    upstream,
+                    plugin_pipeline.clone(),
+                    plugin_db.clone(),
+                    trace_id.clone(),
                 );
                 if use_sse_relay {
                     spawn_usage_sse_relay_body(

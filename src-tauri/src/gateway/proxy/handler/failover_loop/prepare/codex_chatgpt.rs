@@ -1,12 +1,11 @@
 //! Usage: Codex ChatGPT backend compatibility helpers for `failover_loop`.
 
 use crate::gateway::proxy::protocol_bridge::cx2cc as bridge_cx2cc;
+use crate::gateway::upstream_identity;
 use axum::body::Bytes;
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-
-const CODEX_ORIGINATOR_HEADER_VALUE: &str = "codex_cli_rs";
 
 pub(super) fn is_codex_chatgpt_backend(
     cli_key: &str,
@@ -71,7 +70,7 @@ pub(super) fn maybe_inject_codex_chatgpt_headers(
     if !headers.contains_key("originator") {
         headers.insert(
             "originator",
-            HeaderValue::from_static(CODEX_ORIGINATOR_HEADER_VALUE),
+            HeaderValue::from_static(upstream_identity::CODEX_CLI_ORIGINATOR),
         );
     }
     if headers.contains_key("chatgpt-account-id") {

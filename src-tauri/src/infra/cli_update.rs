@@ -35,13 +35,70 @@ pub struct CliUpdateResult {
     pub error: Option<String>,
 }
 
-/// Extract the leading semver-like portion from a version string.
-/// e.g. "2.1.90 (Claude Code)" → "2.1.90", "v1.0.0-beta" → "1.0.0-beta"
+/// Extract the first semver-like portion from a version string.
+/// e.g. "2.1.90 (Claude Code)" -> "2.1.90", "codex-cli 0.137.0" -> "0.137.0"
 fn extract_semver(raw: &str) -> &str {
-    let s = raw.trim().trim_start_matches('v');
-    // Take characters until we hit a space or any char that can't be part of semver
+    let s = raw.trim();
+    let bytes = s.as_bytes();
+
+    for index in 0..bytes.len() {
+        let start = match bytes[index] {
+            b'v' | b'V' if index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit() => {
+                index + 1
+            }
+            digit if digit.is_ascii_digit() => index,
+            _ => continue,
+        };
+
+        let Some(end) = parse_semver_end(bytes, start) else {
+            continue;
+        };
+        return &s[start..end];
+    }
+
+    let s = s.trim_start_matches(['v', 'V']);
     let end = s.find([' ', '(', ')']).unwrap_or(s.len());
     s[..end].trim_end_matches(|c: char| !c.is_ascii_alphanumeric())
+}
+
+fn parse_digits(bytes: &[u8], mut index: usize) -> Option<usize> {
+    let start = index;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    (index > start).then_some(index)
+}
+
+fn parse_semver_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = parse_digits(bytes, start)?;
+    if bytes.get(index) != Some(&b'.') {
+        return None;
+    }
+    index = parse_digits(bytes, index + 1)?;
+    if bytes.get(index) != Some(&b'.') {
+        return None;
+    }
+    index = parse_digits(bytes, index + 1)?;
+
+    while matches!(bytes.get(index), Some(b'-' | b'+')) {
+        index += 1;
+        let suffix_start = index;
+        while matches!(bytes.get(index), Some(ch) if ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-'))
+        {
+            index += 1;
+        }
+        if index == suffix_start {
+            return Some(suffix_start - 1);
+        }
+    }
+
+    Some(index)
+}
+
+fn is_update_available(installed_version: Option<&str>, latest_version: &str) -> bool {
+    installed_version
+        .map(|installed| extract_semver(installed) != extract_semver(latest_version))
+        .unwrap_or(false)
 }
 
 fn npm_package_for_cli_key(cli_key: &str) -> Option<&'static str> {
@@ -118,14 +175,8 @@ pub async fn cli_check_latest_version(app: &tauri::AppHandle, cli_key: String) -
 
     match fetch_latest_version(npm_package).await {
         Ok(latest_version) => {
-            let update_available = installed_version
-                .as_ref()
-                .map(|installed| {
-                    let installed_clean = extract_semver(installed);
-                    let latest_clean = extract_semver(&latest_version);
-                    installed_clean != latest_clean
-                })
-                .unwrap_or(false);
+            let update_available =
+                is_update_available(installed_version.as_deref(), &latest_version);
 
             CliVersionCheck {
                 cli_key: normalized_cli_key,
@@ -460,9 +511,27 @@ mod tests {
     fn extract_semver_strips_suffix_and_prefix() {
         assert_eq!(extract_semver("2.1.90 (Claude Code)"), "2.1.90");
         assert_eq!(extract_semver("v2.1.90"), "2.1.90");
+        assert_eq!(extract_semver("V2.1.90"), "2.1.90");
         assert_eq!(extract_semver("2.1.90"), "2.1.90");
         assert_eq!(extract_semver("1.0.0-beta.1"), "1.0.0-beta.1");
+        assert_eq!(extract_semver("1.0.0+build.5"), "1.0.0+build.5");
         assert_eq!(extract_semver("  v3.0.0  "), "3.0.0");
+    }
+
+    #[test]
+    fn extract_semver_finds_cli_version_inside_output() {
+        assert_eq!(extract_semver("codex-cli 0.137.0"), "0.137.0");
+        assert_eq!(extract_semver("@openai/codex 0.137.0"), "0.137.0");
+        assert_eq!(extract_semver("Codex CLI v0.137.0"), "0.137.0");
+        assert_eq!(extract_semver("version: v2.1.168"), "2.1.168");
+    }
+
+    #[test]
+    fn update_available_normalizes_cli_version_strings() {
+        assert!(!is_update_available(Some("codex-cli 0.137.0"), "v0.137.0"));
+        assert!(!is_update_available(Some("v2.1.168"), "2.1.168"));
+        assert!(is_update_available(Some("codex-cli 0.136.0"), "v0.137.0"));
+        assert!(!is_update_available(None, "v0.137.0"));
     }
 
     #[test]

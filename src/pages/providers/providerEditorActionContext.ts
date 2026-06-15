@@ -1,6 +1,7 @@
 import type {
   ClaudeModels,
   CliKey,
+  ProviderOAuthDeviceCodeStartResult,
   ProviderOAuthStatusResult,
   ProviderUpsertInput,
   ProviderSummary,
@@ -38,6 +39,12 @@ export type AuthActionContext = {
   refreshOauthStatus: (providerId?: number | null) => Promise<OAuthStatusValue>;
   oauthLoading: boolean;
   setOauthLoading: (v: boolean) => void;
+  oauthDeviceFlow: ProviderOAuthDeviceCodeStartResult | null;
+  setOauthDeviceFlow: (v: ProviderOAuthDeviceCodeStartResult | null) => void;
+  oauthDevicePolling: boolean;
+  setOauthDevicePolling: (v: boolean) => void;
+  oauthDeviceError: string | null;
+  setOauthDeviceError: (v: string | null) => void;
   cx2ccSourceValue: string;
   isCodexGatewaySource: boolean;
   sourceProviderId: number | null;
@@ -119,8 +126,22 @@ export type OAuthActionContext = ProviderActionContext &
   Pick<FormActionContext, "form"> &
   Pick<
     AuthActionContext,
-    "oauthStatus" | "setOauthStatus" | "refreshOauthStatus" | "setOauthLoading"
+    | "oauthStatus"
+    | "setOauthStatus"
+    | "refreshOauthStatus"
+    | "setOauthLoading"
+    | "oauthDeviceFlow"
+    | "setOauthDeviceFlow"
+    | "oauthDevicePolling"
+    | "setOauthDevicePolling"
+    | "oauthDeviceError"
+    | "setOauthDeviceError"
   > & {
     persistProvider: (input: ProviderUpsertInput) => Promise<ProviderSummary>;
     removeProvider: (providerId: number) => Promise<boolean>;
+    beginOAuthLoginAttempt: () => number;
+    isOAuthLoginAttemptCurrent: (attemptId: number) => boolean;
+    cancelOAuthDeviceFlow: (flowId: string) => void;
+    setActiveOAuthDeviceFlow: (attemptId: number, flowId: string) => void;
+    clearActiveOAuthDeviceFlow: (flowId: string) => void;
   };

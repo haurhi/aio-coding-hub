@@ -5,6 +5,9 @@ import {
   type ProviderAuthMode as GeneratedProviderAuthMode,
   type ProviderAvailabilityResult,
   type ProviderBaseUrlMode as GeneratedProviderBaseUrlMode,
+  type ProviderOAuthDeviceCodeCancelResult as GeneratedProviderOAuthDeviceCodeCancelResult,
+  type ProviderOAuthDeviceCodePollResult as GeneratedProviderOAuthDeviceCodePollResult,
+  type ProviderOAuthDeviceCodeStartResult as GeneratedProviderOAuthDeviceCodeStartResult,
   type ProviderOAuthDisconnectResult,
   type ProviderOAuthLimitsResult,
   type ProviderOAuthRefreshResult,
@@ -28,6 +31,9 @@ import { createRiskyIpcConfirm } from "../ipcConfirm";
 
 export type {
   ProviderAvailabilityResult,
+  GeneratedProviderOAuthDeviceCodePollResult as ProviderOAuthDeviceCodePollResult,
+  GeneratedProviderOAuthDeviceCodeStartResult as ProviderOAuthDeviceCodeStartResult,
+  GeneratedProviderOAuthDeviceCodeCancelResult as ProviderOAuthDeviceCodeCancelResult,
   ProviderOAuthDisconnectResult,
   ProviderOAuthLimitsResult,
   ProviderOAuthRefreshResult,
@@ -359,6 +365,64 @@ export async function providerOAuthStartFlow(
     invoke: () =>
       commands.providerOauthStartFlow(normalizedCliKey, normalizedProviderId) as Promise<
         GeneratedCommandResult<ProviderOAuthStartFlowResult>
+      >,
+  });
+}
+
+export async function providerOAuthStartDeviceFlow(
+  providerId: number
+): Promise<GeneratedProviderOAuthDeviceCodeStartResult> {
+  const normalizedProviderId = validateProviderId(providerId);
+
+  return invokeGeneratedIpc<GeneratedProviderOAuthDeviceCodeStartResult>({
+    title: "启动设备码登录失败",
+    cmd: "provider_oauth_start_device_flow",
+    args: { providerId: normalizedProviderId },
+    invoke: () =>
+      commands.providerOauthStartDeviceFlow(normalizedProviderId) as Promise<
+        GeneratedCommandResult<GeneratedProviderOAuthDeviceCodeStartResult>
+      >,
+  });
+}
+
+export async function providerOAuthPollDeviceFlow(
+  providerId: number,
+  flowId: string,
+  deviceCode: string,
+  userCode: string
+): Promise<GeneratedProviderOAuthDeviceCodePollResult> {
+  const normalizedProviderId = validateProviderId(providerId);
+  const normalizedFlowId = flowId.trim();
+  if (!normalizedFlowId) {
+    throw new Error("SEC_INVALID_INPUT: invalid flowId");
+  }
+
+  return invokeGeneratedIpc<GeneratedProviderOAuthDeviceCodePollResult>({
+    title: "轮询设备码登录失败",
+    cmd: "provider_oauth_poll_device_flow",
+    args: { providerId: normalizedProviderId, flowId: normalizedFlowId, deviceCode, userCode },
+    invoke: () =>
+      commands.providerOauthPollDeviceFlow({
+        providerId: normalizedProviderId,
+        flowId: normalizedFlowId,
+        deviceCode,
+        userCode,
+      }) as Promise<GeneratedCommandResult<GeneratedProviderOAuthDeviceCodePollResult>>,
+  });
+}
+
+export async function providerOAuthCancelDeviceFlow(
+  flowId: string
+): Promise<GeneratedProviderOAuthDeviceCodeCancelResult> {
+  const normalizedFlowId = flowId.trim();
+
+  return invokeGeneratedIpc<GeneratedProviderOAuthDeviceCodeCancelResult>({
+    title: "取消设备码登录失败",
+    cmd: "provider_oauth_cancel_device_flow",
+    args: { flowId: normalizedFlowId },
+    invoke: () =>
+      commands.providerOauthCancelDeviceFlow(normalizedFlowId) as Promise<
+        GeneratedCommandResult<GeneratedProviderOAuthDeviceCodeCancelResult>
       >,
   });
 }

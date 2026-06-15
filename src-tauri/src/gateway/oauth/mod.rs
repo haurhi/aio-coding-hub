@@ -12,24 +12,92 @@ pub(crate) mod token_exchange;
 use std::sync::Mutex;
 use tokio::sync::watch;
 
-/// Global abort handle for in-progress OAuth flows.
+struct ActiveOAuthFlow {
+    flow_id: String,
+    _abort: watch::Sender<()>,
+}
+
+pub(crate) struct OAuthFlowLifecycle {
+    pub(crate) flow_id: String,
+    pub(crate) abort_rx: watch::Receiver<()>,
+}
+
+/// Global lifecycle handle for in-progress OAuth flows.
 /// When a new flow starts, it cancels any prior pending flow so the old callback
-/// listener is dropped immediately (frees the port).
-static ACTIVE_FLOW_ABORT: Mutex<Option<watch::Sender<()>>> = Mutex::new(None);
+/// listener is dropped immediately (frees the port) and stale device-code polls
+/// can no longer persist tokens.
+static ACTIVE_FLOW: Mutex<Option<ActiveOAuthFlow>> = Mutex::new(None);
+
+fn generate_flow_id() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+}
 
 /// Cancel any in-progress OAuth flow and return a receiver that the new flow
 /// should select on so it can itself be cancelled by a future invocation.
-pub(crate) fn cancel_previous_flow() -> watch::Receiver<()> {
-    let mut guard = ACTIVE_FLOW_ABORT.lock().unwrap_or_else(|e| e.into_inner());
+pub(crate) fn begin_flow_lifecycle() -> OAuthFlowLifecycle {
+    let mut guard = ACTIVE_FLOW.lock().unwrap_or_else(|e| e.into_inner());
     // Dropping the old sender causes the old receiver to see a channel-closed signal,
     // which aborts the old `wait_for_callback` via the tokio::select! in the caller.
     let (tx, rx) = watch::channel(());
-    *guard = Some(tx);
-    rx
+    let flow_id = generate_flow_id();
+    *guard = Some(ActiveOAuthFlow {
+        flow_id: flow_id.clone(),
+        _abort: tx,
+    });
+    OAuthFlowLifecycle {
+        flow_id,
+        abort_rx: rx,
+    }
 }
 
-/// Default User-Agent for OAuth HTTP requests (mirrors official Codex CLI).
-pub(crate) const DEFAULT_OAUTH_USER_AGENT: &str = "codex_cli_rs/0.76.0";
+pub(crate) fn is_current_flow(flow_id: &str) -> bool {
+    let guard = ACTIVE_FLOW.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_ref()
+        .is_some_and(|active| active.flow_id == flow_id)
+}
+
+pub(crate) fn cancel_flow(flow_id: &str) -> bool {
+    let mut guard = ACTIVE_FLOW.lock().unwrap_or_else(|e| e.into_inner());
+    if guard
+        .as_ref()
+        .is_some_and(|active| active.flow_id == flow_id)
+    {
+        *guard = None;
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn complete_current_flow<T>(
+    flow_id: &str,
+    complete: impl FnOnce() -> crate::shared::error::AppResult<T>,
+) -> crate::shared::error::AppResult<T> {
+    let mut guard = ACTIVE_FLOW.lock().unwrap_or_else(|e| e.into_inner());
+    if guard
+        .as_ref()
+        .is_none_or(|active| active.flow_id != flow_id)
+    {
+        return Err(crate::shared::error::AppError::from(
+            "OAuth flow cancelled: login attempt is no longer current".to_string(),
+        ));
+    }
+
+    let result = complete();
+    if result.is_ok() {
+        *guard = None;
+    }
+    result
+}
+
+/// Default User-Agent for OAuth HTTP requests (mirrors the supported Codex CLI).
+pub(crate) const DEFAULT_OAUTH_USER_AGENT: &str =
+    crate::gateway::upstream_identity::CODEX_CLI_USER_AGENT;
 /// Default request timeout in seconds for OAuth HTTP requests.
 pub(crate) const DEFAULT_OAUTH_TIMEOUT_SECS: u64 = 30;
 /// Default connect timeout in seconds for OAuth HTTP requests.
@@ -116,6 +184,7 @@ pub(crate) fn build_oauth_http_client(
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     struct EnvVarRestore {
         key: &'static str,
@@ -137,6 +206,19 @@ mod tests {
                 None => std::env::remove_var(self.key),
             }
         }
+    }
+
+    fn oauth_flow_test_lock() -> MutexGuard<'static, ()> {
+        static FLOW_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        FLOW_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn reset_oauth_flow_for_test() {
+        let mut guard = ACTIVE_FLOW.lock().unwrap_or_else(|err| err.into_inner());
+        *guard = None;
     }
 
     #[test]
@@ -167,5 +249,42 @@ mod tests {
         assert!(err.contains("[redacted]"));
         assert!(!err.contains("super-secret"));
         assert!(!err.contains("user:"));
+    }
+
+    #[test]
+    fn oauth_flow_lifecycle_replaces_current_flow() {
+        let _flow_lock = oauth_flow_test_lock();
+        reset_oauth_flow_for_test();
+
+        let first = begin_flow_lifecycle();
+        assert!(is_current_flow(&first.flow_id));
+
+        let second = begin_flow_lifecycle();
+        assert!(!is_current_flow(&first.flow_id));
+        assert!(is_current_flow(&second.flow_id));
+
+        assert!(!cancel_flow(&first.flow_id));
+        assert!(cancel_flow(&second.flow_id));
+        assert!(!is_current_flow(&second.flow_id));
+    }
+
+    #[test]
+    fn oauth_flow_completion_rejects_stale_flow() {
+        let _flow_lock = oauth_flow_test_lock();
+        reset_oauth_flow_for_test();
+
+        let first = begin_flow_lifecycle();
+        let second = begin_flow_lifecycle();
+
+        let stale = complete_current_flow(&first.flow_id, || {
+            Ok::<_, crate::shared::error::AppError>(())
+        });
+        assert!(stale.is_err());
+
+        let current = complete_current_flow(&second.flow_id, || {
+            Ok::<_, crate::shared::error::AppError>(())
+        });
+        assert!(current.is_ok());
+        assert!(!is_current_flow(&second.flow_id));
     }
 }

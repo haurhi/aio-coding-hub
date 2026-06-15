@@ -1,5 +1,86 @@
 use crate::app_state::{ensure_db_ready, DbInitState};
 use crate::{blocking, providers};
+use base64::Engine as _;
+use serde::Deserialize;
+
+const CODEX_DEVICE_AUTH_USERCODE_URL: &str =
+    "https://auth.openai.com/api/accounts/deviceauth/usercode";
+const CODEX_DEVICE_AUTH_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+const CODEX_DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
+const CODEX_DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
+const CODEX_DEVICE_CODE_DEFAULT_EXPIRES_IN: u64 = 900;
+const CODEX_DEVICE_POLLING_SAFETY_MARGIN_SECS: u64 = 3;
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexDeviceCodeResponse {
+    device_auth_id: String,
+    user_code: String,
+    #[serde(default)]
+    interval: Option<serde_json::Value>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexDevicePollSuccess {
+    authorization_code: String,
+    code_verifier: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexDeviceTokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CodexIdTokenClaims {
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default, rename = "https://api.openai.com/auth")]
+    openai_auth: Option<CodexOpenAiAuthClaim>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CodexOpenAiAuthClaim {
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct ProviderOAuthDeviceCodeStartResult {
+    pub provider_id: i64,
+    pub provider_type: String,
+    pub flow_id: String,
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderOAuthDeviceCodePollInput {
+    pub provider_id: i64,
+    pub flow_id: String,
+    pub device_code: String,
+    pub user_code: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct ProviderOAuthDeviceCodePollResult {
+    pub completed: bool,
+    pub provider_id: i64,
+    pub provider_type: String,
+    pub expires_at: Option<i64>,
+}
 
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub(crate) struct ProviderOAuthStartFlowResult {
@@ -18,6 +99,11 @@ pub(crate) struct ProviderOAuthRefreshResult {
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub(crate) struct ProviderOAuthDisconnectResult {
     pub success: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct ProviderOAuthDeviceCodeCancelResult {
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
@@ -55,6 +141,88 @@ fn build_oauth_authorize_url(
     }
 
     authorize_url
+}
+
+fn parse_codex_device_interval(value: Option<&serde_json::Value>) -> u64 {
+    let parsed = match value {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        Some(serde_json::Value::String(text)) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    };
+    parsed.unwrap_or(5) + CODEX_DEVICE_POLLING_SAFETY_MARGIN_SECS
+}
+
+fn compute_codex_expires_at(expires_in: Option<i64>) -> Option<i64> {
+    let seconds = expires_in?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some(now + seconds)
+}
+
+fn decode_codex_id_token_claims(id_token: &str) -> Option<CodexIdTokenClaims> {
+    let mut segments = id_token.split('.');
+    let _header = segments.next()?;
+    let claims = segments.next()?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(claims)
+        .ok()?;
+    serde_json::from_slice::<CodexIdTokenClaims>(&decoded).ok()
+}
+
+fn extract_codex_identity(id_token: Option<&str>) -> (Option<String>, Option<String>) {
+    let claims = id_token.and_then(decode_codex_id_token_claims);
+    let account_id = claims.as_ref().and_then(|value| {
+        value.chatgpt_account_id.clone().or_else(|| {
+            value
+                .openai_auth
+                .as_ref()
+                .and_then(|auth| auth.chatgpt_account_id.clone())
+        })
+    });
+    let email = claims.and_then(|value| value.email);
+    (account_id, email)
+}
+
+fn ensure_current_oauth_flow(flow_id: &str) -> Result<(), String> {
+    if crate::gateway::oauth::is_current_flow(flow_id) {
+        Ok(())
+    } else {
+        Err("OAuth flow cancelled: login attempt is no longer current".to_string())
+    }
+}
+
+async fn codex_exchange_device_code_for_tokens(
+    client: &reqwest::Client,
+    client_id: &str,
+    authorization_code: &str,
+    code_verifier: &str,
+) -> Result<CodexDeviceTokenResponse, String> {
+    let response = client
+        .post("https://auth.openai.com/oauth/token")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", authorization_code),
+            ("redirect_uri", CODEX_DEVICE_REDIRECT_URI),
+            ("client_id", client_id),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("device token exchange request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("device token exchange failed: {status} - {text}"));
+    }
+
+    response
+        .json::<CodexDeviceTokenResponse>()
+        .await
+        .map_err(|e| format!("device token exchange parse failed: {e}"))
 }
 
 #[tauri::command]
@@ -103,7 +271,9 @@ pub(crate) async fn provider_oauth_start_flow(
     );
 
     // 3b. Cancel any prior pending OAuth flow so its listener is dropped (frees port).
-    let mut abort_rx = crate::gateway::oauth::cancel_previous_flow();
+    let flow_lifecycle = crate::gateway::oauth::begin_flow_lifecycle();
+    let flow_id = flow_lifecycle.flow_id;
+    let mut abort_rx = flow_lifecycle.abort_rx;
 
     // 4. Bind callback listener
     let listener = crate::gateway::oauth::callback_server::bind_callback_listener(
@@ -144,6 +314,8 @@ pub(crate) async fn provider_oauth_start_flow(
         .code
         .ok_or("OAuth callback missing authorization code")?;
 
+    ensure_current_oauth_flow(&flow_id)?;
+
     // 8. Exchange code for tokens
     let client = crate::gateway::oauth::build_default_oauth_http_client()?;
     let token_set = crate::gateway::oauth::token_exchange::exchange_authorization_code(
@@ -169,22 +341,24 @@ pub(crate) async fn provider_oauth_start_flow(
     // 10. Save to provider
     let app_handle = app.clone();
     blocking::run("provider_oauth_start_flow_save", move || {
-        crate::providers::update_oauth_tokens(
-            &db,
-            provider_id,
-            "oauth",
-            provider_type,
-            &effective_token,
-            token_set.refresh_token.as_deref(),
-            id_token.as_deref(),
-            endpoints.token_url,
-            &endpoints.client_id,
-            endpoints.client_secret.as_deref(),
-            token_expires_at,
-            None,
-        )?;
-        crate::domain::provider_oauth_limits::clear_snapshot(&db, provider_id)?;
-        Ok::<(), crate::shared::error::AppError>(())
+        crate::gateway::oauth::complete_current_flow(&flow_id, || {
+            crate::providers::update_oauth_tokens(
+                &db,
+                provider_id,
+                "oauth",
+                provider_type,
+                &effective_token,
+                token_set.refresh_token.as_deref(),
+                id_token.as_deref(),
+                endpoints.token_url,
+                &endpoints.client_id,
+                endpoints.client_secret.as_deref(),
+                token_expires_at,
+                None,
+            )?;
+            crate::domain::provider_oauth_limits::clear_snapshot(&db, provider_id)?;
+            Ok(())
+        })
     })
     .await
     .map_err(Into::<String>::into)?;
@@ -201,6 +375,225 @@ pub(crate) async fn provider_oauth_start_flow(
         provider_id,
         provider_type: provider_type.to_string(),
         expires_at: token_expires_at,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn provider_oauth_start_device_flow(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    provider_id: i64,
+) -> Result<ProviderOAuthDeviceCodeStartResult, String> {
+    let db = ensure_db_ready(app, db_state.inner()).await?;
+    let provider_cli_key =
+        blocking::run("provider_oauth_start_device_flow_load_provider_cli_key", {
+            let db = db.clone();
+            move || {
+                providers::cli_key_by_id(&db, provider_id)?.ok_or_else(|| {
+                    crate::shared::error::AppError::from(
+                        "DB_NOT_FOUND: provider not found".to_string(),
+                    )
+                })
+            }
+        })
+        .await
+        .map_err(Into::<String>::into)?;
+
+    if provider_cli_key != "codex" {
+        return Err(format!(
+            "SEC_INVALID_INPUT: device code login is only supported for codex providers (provider_id={provider_id}, cli_key={provider_cli_key})"
+        ));
+    }
+
+    let adapter = crate::gateway::oauth::registry::global_registry()
+        .get_by_cli_key("codex")
+        .ok_or_else(|| "no OAuth adapter for cli_key=codex".to_string())?;
+    let endpoints = adapter.endpoints();
+    let client = crate::gateway::oauth::build_default_oauth_http_client()?;
+    let flow_id = crate::gateway::oauth::begin_flow_lifecycle().flow_id;
+
+    let response = client
+        .post(CODEX_DEVICE_AUTH_USERCODE_URL)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "client_id": endpoints.client_id }))
+        .send()
+        .await
+        .map_err(|e| format!("device code request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("device code request failed: {status} - {text}"));
+    }
+
+    let payload = response
+        .json::<CodexDeviceCodeResponse>()
+        .await
+        .map_err(|e| format!("device code response parse failed: {e}"))?;
+
+    let expires_in = payload
+        .expires_in
+        .unwrap_or(CODEX_DEVICE_CODE_DEFAULT_EXPIRES_IN);
+    let interval = parse_codex_device_interval(payload.interval.as_ref());
+
+    Ok(ProviderOAuthDeviceCodeStartResult {
+        provider_id,
+        provider_type: adapter.provider_type().to_string(),
+        flow_id,
+        device_code: payload.device_auth_id,
+        user_code: payload.user_code,
+        verification_uri: CODEX_DEVICE_VERIFICATION_URL.to_string(),
+        expires_in,
+        interval,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn provider_oauth_poll_device_flow(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    input: ProviderOAuthDeviceCodePollInput,
+) -> Result<ProviderOAuthDeviceCodePollResult, String> {
+    ensure_current_oauth_flow(&input.flow_id)?;
+    let provider_id = input.provider_id;
+    let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let provider_cli_key =
+        blocking::run("provider_oauth_poll_device_flow_load_provider_cli_key", {
+            let db = db.clone();
+            move || {
+                providers::cli_key_by_id(&db, provider_id)?.ok_or_else(|| {
+                    crate::shared::error::AppError::from(
+                        "DB_NOT_FOUND: provider not found".to_string(),
+                    )
+                })
+            }
+        })
+        .await
+        .map_err(Into::<String>::into)?;
+
+    if provider_cli_key != "codex" {
+        return Err(format!(
+            "SEC_INVALID_INPUT: device code login is only supported for codex providers (provider_id={provider_id}, cli_key={provider_cli_key})"
+        ));
+    }
+
+    let adapter = crate::gateway::oauth::registry::global_registry()
+        .get_by_cli_key("codex")
+        .ok_or_else(|| "no OAuth adapter for cli_key=codex".to_string())?;
+    let endpoints = adapter.endpoints();
+    let client = crate::gateway::oauth::build_default_oauth_http_client()?;
+
+    let poll_response = client
+        .post(CODEX_DEVICE_AUTH_TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "device_auth_id": input.device_code,
+            "user_code": input.user_code,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("device code poll failed: {e}"))?;
+
+    ensure_current_oauth_flow(&input.flow_id)?;
+
+    let status = poll_response.status();
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(ProviderOAuthDeviceCodePollResult {
+            completed: false,
+            provider_id,
+            provider_type: adapter.provider_type().to_string(),
+            expires_at: None,
+        });
+    }
+    if status == reqwest::StatusCode::GONE {
+        crate::gateway::oauth::cancel_flow(&input.flow_id);
+        return Err("Device code 已过期，请重新开始登录。".to_string());
+    }
+    if !status.is_success() {
+        let text = poll_response.text().await.unwrap_or_default();
+        crate::gateway::oauth::cancel_flow(&input.flow_id);
+        return Err(format!("device code poll failed: {status} - {text}"));
+    }
+
+    let success = poll_response
+        .json::<CodexDevicePollSuccess>()
+        .await
+        .map_err(|e| format!("device code poll parse failed: {e}"))?;
+
+    ensure_current_oauth_flow(&input.flow_id)?;
+
+    let token_set = codex_exchange_device_code_for_tokens(
+        &client,
+        &endpoints.client_id,
+        &success.authorization_code,
+        &success.code_verifier,
+    )
+    .await?;
+
+    let oauth_token_set = crate::gateway::oauth::provider_trait::OAuthTokenSet {
+        access_token: token_set.access_token,
+        refresh_token: token_set.refresh_token,
+        expires_at: compute_codex_expires_at(token_set.expires_in),
+        id_token: token_set.id_token,
+    };
+
+    let (effective_token, id_token) =
+        adapter.resolve_effective_token(&oauth_token_set, oauth_token_set.id_token.as_deref());
+    let token_expires_at = oauth_token_set.expires_at;
+    let provider_type = adapter.provider_type();
+    let (_, email) = extract_codex_identity(id_token.as_deref());
+
+    blocking::run("provider_oauth_poll_device_flow_save", move || {
+        crate::gateway::oauth::complete_current_flow(&input.flow_id, || {
+            crate::providers::update_oauth_tokens(
+                &db,
+                provider_id,
+                "oauth",
+                provider_type,
+                &effective_token,
+                oauth_token_set.refresh_token.as_deref(),
+                id_token.as_deref(),
+                endpoints.token_url,
+                &endpoints.client_id,
+                endpoints.client_secret.as_deref(),
+                token_expires_at,
+                email.as_deref(),
+            )?;
+            crate::domain::provider_oauth_limits::clear_snapshot(&db, provider_id)?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(Into::<String>::into)?;
+
+    crate::gateway::events::emit_gateway_log(
+        &app,
+        "info",
+        "OAUTH_DEVICE_LOGIN_OK",
+        format!("OAuth 设备码登录成功：provider_id={provider_id} type={provider_type}"),
+    );
+
+    Ok(ProviderOAuthDeviceCodePollResult {
+        completed: true,
+        provider_id,
+        provider_type: provider_type.to_string(),
+        expires_at: token_expires_at,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn provider_oauth_cancel_device_flow(
+    flow_id: String,
+) -> Result<ProviderOAuthDeviceCodeCancelResult, String> {
+    if flow_id.trim().is_empty() {
+        return Ok(ProviderOAuthDeviceCodeCancelResult { cancelled: false });
+    }
+
+    Ok(ProviderOAuthDeviceCodeCancelResult {
+        cancelled: crate::gateway::oauth::cancel_flow(flow_id.trim()),
     })
 }
 

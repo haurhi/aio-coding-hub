@@ -1,6 +1,7 @@
 //! Usage: Codex (OpenAI / ChatGPT) OAuth adapter.
 
 use crate::gateway::oauth::provider_trait::*;
+use crate::gateway::upstream_identity;
 use crate::shared::http_body::read_text_with_limit;
 use axum::http::{HeaderMap, HeaderValue};
 use std::future::Future;
@@ -57,7 +58,7 @@ impl OAuthProvider for CodexOAuthProvider {
         vec![
             ("id_token_add_organizations", "true"),
             ("codex_cli_simplified_flow", "true"),
-            ("originator", "codex_cli_rs"),
+            ("originator", upstream_identity::CODEX_CLI_ORIGINATOR),
         ]
     }
 
@@ -83,7 +84,10 @@ impl OAuthProvider for CodexOAuthProvider {
         access_token: &str,
     ) -> Result<(), String> {
         insert_bearer_auth(headers, access_token, "codex oauth")?;
-        headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
+        headers.insert(
+            "originator",
+            HeaderValue::from_static(upstream_identity::CODEX_CLI_ORIGINATOR),
+        );
         Ok(())
     }
 
@@ -125,5 +129,41 @@ impl OAuthProvider for CodexOAuthProvider {
                 ..Default::default()
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header;
+
+    #[test]
+    fn authorize_params_use_centralized_originator() {
+        let provider = CodexOAuthProvider::new();
+
+        assert!(provider
+            .extra_authorize_params()
+            .contains(&("originator", upstream_identity::CODEX_CLI_ORIGINATOR)));
+    }
+
+    #[test]
+    fn inject_upstream_headers_uses_centralized_originator() {
+        let provider = CodexOAuthProvider::new();
+        let mut headers = HeaderMap::new();
+
+        provider
+            .inject_upstream_headers(&mut headers, "access-token")
+            .expect("inject headers");
+
+        assert_eq!(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer access-token")
+        );
+        assert_eq!(
+            headers.get("originator").and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::CODEX_CLI_ORIGINATOR)
+        );
     }
 }
