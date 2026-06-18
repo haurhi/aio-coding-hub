@@ -975,6 +975,42 @@ INSERT INTO request_logs (
 }
 
 #[test]
+fn v2_provider_leaderboard_handles_large_cost_totals_without_integer_overflow() {
+    let conn = setup_conn();
+
+    for created_at in [1000i64, 1001i64] {
+        insert_usage_log(
+            &conn,
+            TestUsageLog {
+                cost_usd_femto: Some(6_000_000_000_000_000_000),
+                created_at,
+                ..base_usage_log(created_at)
+            },
+        );
+    }
+
+    let rows = leaderboard_v2_with_conn(
+        &conn,
+        UsageScopeV2::Provider,
+        None,
+        None,
+        None,
+        None,
+        Some(50),
+        false,
+    )
+    .expect("leaderboard_v2_with_conn provider");
+
+    let row = rows
+        .iter()
+        .find(|row| row.key == "codex:123")
+        .expect("codex provider row");
+    assert_eq!(row.requests_total, 2);
+    assert_eq!(row.requests_success, 2);
+    assert_eq!(row.cost_usd, Some(12_000.0));
+}
+
+#[test]
 fn v1_provider_cache_rate_trend_uses_effective_denom_and_bucket() {
     let conn = setup_conn();
 
