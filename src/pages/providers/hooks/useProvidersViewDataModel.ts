@@ -168,8 +168,6 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
   const [testingByProviderId, setTestingByProviderId] = useState<Record<number, boolean>>({});
   const testingByProviderIdRef = useRef<ProviderActionMap>({});
   const togglingByProviderIdRef = useRef<ProviderActionMap>({});
-  const [validateDialogOpen, setValidateDialogOpen] = useState(false);
-  const [validateProvider, setValidateProvider] = useState<ProviderSummary | null>(null);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [providerSearch, setProviderSearch] = useState("");
   const [providersRefreshingByCli, setProvidersRefreshingByCli] = useState<
@@ -274,13 +272,6 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     setEditTarget(null);
     setDeleteTarget(null);
   }, [activeCli]);
-
-  useEffect(() => {
-    if (activeCli !== "claude" && validateDialogOpen) {
-      setValidateDialogOpen(false);
-      setValidateProvider(null);
-    }
-  }, [activeCli, validateDialogOpen]);
 
   useEffect(() => {
     togglingByProviderIdRef.current = {};
@@ -414,40 +405,43 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     [circuitQuery, resetCircuitCliMutation]
   );
 
-  const requestValidateProviderModel = useCallback((provider: ProviderSummary) => {
-    if (activeCliRef.current !== "claude") return;
-    setValidateProvider(provider);
-    setValidateDialogOpen(true);
-  }, []);
+  const confirmRemoveProvider = useCallback(
+    async (options?: { clearUsageStats?: boolean }) => {
+      if (!deleteTarget || deletingRef.current) return;
+      const clearUsageStats = options?.clearUsageStats === true;
 
-  const confirmRemoveProvider = useCallback(async () => {
-    if (!deleteTarget || deletingRef.current) return;
+      deletingRef.current = true;
+      setDeleting(true);
+      try {
+        await providerDeleteMutation.mutateAsync({
+          cliKey: deleteTarget.cli_key,
+          providerId: deleteTarget.id,
+          clearUsageStats,
+        });
 
-    deletingRef.current = true;
-    setDeleting(true);
-    try {
-      await providerDeleteMutation.mutateAsync({
-        cliKey: deleteTarget.cli_key,
-        providerId: deleteTarget.id,
-      });
-
-      logToConsole("info", "删除 Provider", {
-        id: deleteTarget.id,
-        name: deleteTarget.name,
-      });
-      toast("Provider 已删除");
-      setDeleteTarget(null);
-    } catch (error) {
-      logToConsole("error", "删除 Provider 失败", {
-        error: String(error),
-        id: deleteTarget.id,
-      });
-      toast(`删除失败：${String(error)}`);
-    } finally {
-      deletingRef.current = false;
-      setDeleting(false);
-    }
-  }, [deleteTarget, providerDeleteMutation]);
+        logToConsole("info", "删除 Provider", {
+          id: deleteTarget.id,
+          name: deleteTarget.name,
+          clear_usage_stats: clearUsageStats,
+          delete_request_logs: clearUsageStats,
+        });
+        toast(
+          clearUsageStats ? "Provider 已删除，相关请求日志和用量统计已删除" : "Provider 已删除"
+        );
+        setDeleteTarget(null);
+      } catch (error) {
+        logToConsole("error", "删除 Provider 失败", {
+          error: String(error),
+          id: deleteTarget.id,
+        });
+        toast(`删除失败：${String(error)}`);
+      } finally {
+        deletingRef.current = false;
+        setDeleting(false);
+      }
+    },
+    [deleteTarget, providerDeleteMutation]
+  );
 
   function terminalLaunchCopiedToastMessage(command: string) {
     const normalized = command.trim().toLowerCase();
@@ -685,7 +679,6 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     resetCircuit,
     copyTerminalLaunchCommand,
     duplicateProvider,
-    requestValidateProviderModel,
     handleDragEnd,
     handleProviderCardDragEnd,
     sensors,
@@ -697,10 +690,6 @@ export function useProvidersViewDataModel(activeCli: CliKey) {
     setDeleteTarget,
     deleting,
     confirmRemoveProvider,
-    validateDialogOpen,
-    setValidateDialogOpen,
-    validateProvider,
-    setValidateProvider,
     sourceProviderNamesById,
     sourceProvidersById,
     terminalCopyingByProviderId,

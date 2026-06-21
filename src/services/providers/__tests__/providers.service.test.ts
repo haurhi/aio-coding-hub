@@ -13,6 +13,7 @@ import {
   providerOAuthFetchLimits,
   providerOAuthPollDeviceFlow,
   providerOAuthRefresh,
+  providerOAuthResetCodexQuota,
   providerOAuthStartDeviceFlow,
   providerOAuthStartFlow,
   providerOAuthStatus,
@@ -52,6 +53,7 @@ vi.mock("../../../generated/bindings", async () => {
       providerOauthDisconnect: vi.fn(),
       providerOauthStatus: vi.fn(),
       providerOauthFetchLimits: vi.fn(),
+      providerOauthResetCodexQuota: vi.fn(),
       providerTestAvailability: vi.fn(),
     },
   };
@@ -252,10 +254,19 @@ describe("services/providers/providers", () => {
     expect(commands.providersList).toHaveBeenCalledWith("claude");
     expect(commands.baseUrlPingMs).toHaveBeenCalledWith("https://api.example.com");
     expect(commands.providerSetEnabled).toHaveBeenCalledWith(1, true);
-    expect(commands.providerDelete).toHaveBeenCalledWith(1);
+    expect(commands.providerDelete).toHaveBeenCalledWith(1, false);
     expect(commands.providersReorder).toHaveBeenCalledWith("claude", [2, 1]);
     expect(commands.providerClaudeTerminalLaunchCommand).toHaveBeenCalledWith(5);
     expect(commands.providerTestAvailability).toHaveBeenCalledWith(5);
+  });
+
+  it("passes the provider usage stats cleanup flag to IPC", async () => {
+    vi.mocked(commands.providerDelete).mockClear();
+    vi.mocked(commands.providerDelete).mockResolvedValue({ status: "ok", data: true });
+
+    await providerDelete(1, { clearUsageStats: true });
+
+    expect(commands.providerDelete).toHaveBeenCalledWith(1, true);
   });
 
   it("normalizes provider cli keys before IPC", async () => {
@@ -345,6 +356,7 @@ describe("services/providers/providers", () => {
     vi.mocked(commands.providerOauthPollDeviceFlow).mockClear();
     vi.mocked(commands.providerOauthCancelDeviceFlow).mockClear();
     vi.mocked(commands.providerOauthRefresh).mockClear();
+    vi.mocked(commands.providerOauthResetCodexQuota).mockClear();
     vi.mocked(commands.providerOauthDisconnect).mockClear();
     vi.mocked(commands.providerOauthStatus).mockClear();
     vi.mocked(commands.providerOauthFetchLimits).mockClear();
@@ -406,6 +418,7 @@ describe("services/providers/providers", () => {
       "SEC_INVALID_INPUT"
     );
     await expect(providerOAuthRefresh(0)).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(providerOAuthResetCodexQuota(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthDisconnect(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthStatus(0)).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(providerOAuthFetchLimits(0)).rejects.toThrow("SEC_INVALID_INPUT");
@@ -419,6 +432,7 @@ describe("services/providers/providers", () => {
     expect(commands.providerOauthStartDeviceFlow).not.toHaveBeenCalled();
     expect(commands.providerOauthPollDeviceFlow).not.toHaveBeenCalled();
     expect(commands.providerOauthRefresh).not.toHaveBeenCalled();
+    expect(commands.providerOauthResetCodexQuota).not.toHaveBeenCalled();
     expect(commands.providerOauthDisconnect).not.toHaveBeenCalled();
     expect(commands.providerOauthStatus).not.toHaveBeenCalled();
     expect(commands.providerOauthFetchLimits).not.toHaveBeenCalled();
@@ -592,6 +606,9 @@ describe("services/providers/providers", () => {
         limit_short_label: "1h",
         limit_5h_text: "100 requests",
         limit_weekly_text: "1000 requests",
+        limit_5h_reset_at: null,
+        limit_weekly_reset_at: null,
+        reset_credit_available_count: 3,
       } as any,
     });
 
@@ -600,7 +617,57 @@ describe("services/providers/providers", () => {
       limit_short_label: "1h",
       limit_5h_text: "100 requests",
       limit_weekly_text: "1000 requests",
+      limit_5h_reset_at: null,
+      limit_weekly_reset_at: null,
+      reset_credit_available_count: 3,
     });
     expect(commands.providerOauthFetchLimits).toHaveBeenCalledWith(50);
+  });
+
+  it("providerOAuthResetCodexQuota uses risky confirm resource scoped to provider", async () => {
+    vi.mocked(commands.providerOauthResetCodexQuota).mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        success: true,
+        code: "ok",
+        windows_reset: 2,
+        refreshed_limits: {
+          limit_short_label: "5h",
+          limit_5h_text: "0%",
+          limit_weekly_text: "50%",
+          limit_5h_reset_at: 1_700_000_000,
+          limit_weekly_reset_at: 1_700_100_000,
+          reset_credit_available_count: 2,
+        },
+        refresh_error: null,
+      } as any,
+    });
+
+    const result = await providerOAuthResetCodexQuota(51);
+
+    expect(result).toEqual({
+      success: true,
+      code: "ok",
+      windows_reset: 2,
+      refreshed_limits: {
+        limit_short_label: "5h",
+        limit_5h_text: "0%",
+        limit_weekly_text: "50%",
+        limit_5h_reset_at: 1_700_000_000,
+        limit_weekly_reset_at: 1_700_100_000,
+        reset_credit_available_count: 2,
+      },
+      refresh_error: null,
+    });
+    expect(commands.providerOauthResetCodexQuota).toHaveBeenCalledWith(
+      51,
+      expect.objectContaining({
+        confirm: expect.objectContaining({
+          action: "provider_oauth_reset_codex_quota",
+          resource: "provider:51:codex_reset_credit",
+          nonce: expect.any(String),
+        }),
+      })
+    );
   });
 });

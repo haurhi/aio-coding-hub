@@ -11,6 +11,7 @@ import {
   type ProviderOAuthDisconnectResult,
   type ProviderOAuthLimitsResult,
   type ProviderOAuthRefreshResult,
+  type ProviderOAuthResetCodexQuotaResult,
   type ProviderOAuthStartFlowResult,
   type ProviderOAuthStatusResult,
   type ProviderSummary as GeneratedProviderSummary,
@@ -37,6 +38,7 @@ export type {
   ProviderOAuthDisconnectResult,
   ProviderOAuthLimitsResult,
   ProviderOAuthRefreshResult,
+  ProviderOAuthResetCodexQuotaResult,
   ProviderOAuthStartFlowResult,
   ProviderOAuthStatusResult,
 };
@@ -64,6 +66,12 @@ export type ProviderSummary = Override<
     model_mapping: ProviderModelMapping;
   }
 >;
+
+type ProviderDeleteCommandArgs = Parameters<typeof commands.providerDelete>;
+
+export type ProviderDeleteOptions = {
+  clearUsageStats?: ProviderDeleteCommandArgs[1] | null;
+};
 
 type ProviderUpsertFieldMap = {
   providerId: "providerId";
@@ -274,15 +282,18 @@ export async function providerSetEnabled(
   });
 }
 
-export async function providerDelete(providerId: number) {
+export async function providerDelete(providerId: number, options: ProviderDeleteOptions = {}) {
   const normalizedProviderId = validateProviderId(providerId);
+  const clearUsageStats = options.clearUsageStats === true;
 
   return invokeGeneratedIpc<boolean>({
     title: "删除供应商失败",
     cmd: "provider_delete",
-    args: { providerId: normalizedProviderId },
+    args: { providerId: normalizedProviderId, clearUsageStats },
     invoke: () =>
-      commands.providerDelete(normalizedProviderId) as Promise<GeneratedCommandResult<boolean>>,
+      commands.providerDelete(normalizedProviderId, clearUsageStats) as Promise<
+        GeneratedCommandResult<boolean>
+      >,
   });
 }
 
@@ -519,6 +530,26 @@ export async function providerOAuthFetchLimits(
     invoke: () =>
       commands.providerOauthFetchLimits(normalizedProviderId) as Promise<
         GeneratedCommandResult<OAuthLimitsResult>
+      >,
+  });
+}
+
+export async function providerOAuthResetCodexQuota(
+  providerId: number
+): Promise<ProviderOAuthResetCodexQuotaResult> {
+  const normalizedProviderId = validateProviderId(providerId);
+  const confirm = createRiskyIpcConfirm(
+    "provider_oauth_reset_codex_quota",
+    `provider:${normalizedProviderId}:codex_reset_credit`
+  );
+
+  return invokeGeneratedIpc<ProviderOAuthResetCodexQuotaResult>({
+    title: "重置 Codex OAuth 额度失败",
+    cmd: "provider_oauth_reset_codex_quota",
+    args: { providerId: normalizedProviderId, confirm },
+    invoke: () =>
+      commands.providerOauthResetCodexQuota(normalizedProviderId, confirm) as Promise<
+        GeneratedCommandResult<ProviderOAuthResetCodexQuotaResult>
       >,
   });
 }
