@@ -1,6 +1,177 @@
 use super::*;
 
 #[test]
+fn migrate_v32_to_v33_backfills_pool_and_default_route_orders() {
+    let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        r#"
+CREATE TABLE providers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cli_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  base_urls_json TEXT NOT NULL DEFAULT '[]',
+  base_url_mode TEXT NOT NULL DEFAULT 'order',
+  claude_models_json TEXT NOT NULL DEFAULT '{}',
+  api_key_plaintext TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  priority INTEGER NOT NULL DEFAULT 100,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  cost_multiplier REAL NOT NULL DEFAULT 1.0,
+  supported_models_json TEXT NOT NULL DEFAULT '{}',
+  model_mapping_json TEXT NOT NULL DEFAULT '{}',
+  auth_mode TEXT NOT NULL DEFAULT 'api_key',
+  oauth_provider_type TEXT,
+  oauth_access_token TEXT,
+  oauth_refresh_token TEXT,
+  oauth_expires_at INTEGER,
+  oauth_email TEXT,
+  oauth_last_error TEXT,
+  limit_5h_usd REAL,
+  limit_daily_usd REAL,
+  daily_reset_mode TEXT NOT NULL DEFAULT 'fixed',
+  daily_reset_time TEXT NOT NULL DEFAULT '00:00:00',
+  limit_weekly_usd REAL,
+  limit_monthly_usd REAL,
+  limit_total_usd REAL,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '',
+  source_provider_id INTEGER,
+  bridge_type TEXT,
+  stream_idle_timeout_seconds INTEGER,
+  UNIQUE(cli_key, name)
+);
+"#,
+    )
+    .expect("create providers table");
+
+    for (id, name, enabled, sort_order) in [
+        (1_i64, "p1", 1_i64, 0_i64),
+        (2_i64, "p2", 0_i64, 1_i64),
+        (3_i64, "p3", 1_i64, 2_i64),
+    ] {
+        conn.execute(
+            r#"
+INSERT INTO providers(
+  id,
+  cli_key,
+  name,
+  base_url,
+  api_key_plaintext,
+  enabled,
+  created_at,
+  updated_at,
+  sort_order
+) VALUES (?1, 'claude', ?2, 'https://example.com', 'sk', ?3, 1, 1, ?4)
+"#,
+            rusqlite::params![id, name, enabled, sort_order],
+        )
+        .expect("insert provider");
+    }
+
+    v32_to_v33::migrate_v32_to_v33(&mut conn).expect("migrate v32->v33");
+
+    let pool_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT provider_id FROM provider_pool_order ORDER BY sort_order ASC")
+            .expect("prepare pool");
+        stmt.query_map([], |row| row.get(0))
+            .expect("query pool")
+            .map(|row| row.expect("pool row"))
+            .collect()
+    };
+    assert_eq!(pool_ids, vec![1, 2, 3]);
+
+    let default_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT provider_id FROM default_route_providers ORDER BY sort_order ASC")
+            .expect("prepare default");
+        stmt.query_map([], |row| row.get(0))
+            .expect("query default")
+            .map(|row| row.expect("default row"))
+            .collect()
+    };
+    assert_eq!(default_ids, vec![1, 3]);
+}
+
+#[test]
+fn ensure_patches_do_not_repopulate_default_route_members() {
+    let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    apply_migrations(&mut conn).expect("apply migrations");
+
+    for (id, name, sort_order) in [
+        (1_i64, "p1", 0_i64),
+        (2_i64, "p2", 1_i64),
+        (3_i64, "p3", 2_i64),
+    ] {
+        conn.execute(
+            r#"
+INSERT INTO providers(
+  id,
+  cli_key,
+  name,
+  base_url,
+  api_key_plaintext,
+  enabled,
+  created_at,
+  updated_at,
+  sort_order
+) VALUES (?1, 'claude', ?2, 'https://example.com', 'sk', 1, 1, 1, ?3)
+"#,
+            rusqlite::params![id, name, sort_order],
+        )
+        .expect("insert provider");
+    }
+
+    for (provider_id, sort_order) in [(1_i64, 0_i64), (2_i64, 1_i64), (3_i64, 2_i64)] {
+        conn.execute(
+            r#"
+INSERT INTO default_route_providers(
+  cli_key,
+  provider_id,
+  sort_order,
+  created_at,
+  updated_at
+) VALUES ('claude', ?1, ?2, 1, 1)
+"#,
+            rusqlite::params![provider_id, sort_order],
+        )
+        .expect("insert default route provider");
+    }
+    conn.execute(
+        "DELETE FROM default_route_providers WHERE cli_key = 'claude' AND provider_id = 2",
+        [],
+    )
+    .expect("simulate removing provider from default route");
+
+    ensure::apply_ensure_patches(&mut conn).expect("apply ensure patches");
+
+    let default_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT provider_id FROM default_route_providers ORDER BY sort_order ASC")
+            .expect("prepare default");
+        stmt.query_map([], |row| row.get(0))
+            .expect("query default")
+            .map(|row| row.expect("default row"))
+            .collect()
+    };
+    assert_eq!(default_ids, vec![1, 3]);
+
+    let pool_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT provider_id FROM provider_pool_order ORDER BY sort_order ASC")
+            .expect("prepare pool");
+        stmt.query_map([], |row| row.get(0))
+            .expect("query pool")
+            .map(|row| row.expect("pool row"))
+            .collect()
+    };
+    assert_eq!(pool_ids, vec![1, 2, 3]);
+}
+
+#[test]
 fn migrate_v25_to_v26_backfills_claude_models_json_from_legacy_mapping() {
     let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
 
@@ -118,6 +289,7 @@ fn ensure_plugin_tables_is_idempotent() {
         "plugin_audit_logs",
         "plugin_market_sources",
         "plugin_runtime_failures",
+        "plugin_hook_execution_reports",
     ] {
         assert!(
             test_has_table(&conn, table),
@@ -135,6 +307,38 @@ fn ensure_plugin_tables_is_idempotent() {
         &conn,
         "plugin_permissions",
         "permissions_json"
+    ));
+    assert!(test_has_index(
+        &conn,
+        "idx_plugin_hook_execution_reports_created_at"
+    ));
+}
+
+#[test]
+fn migrations_create_provider_extension_values_table() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    apply_migrations(&mut conn).expect("apply migrations");
+
+    assert!(test_has_table(&conn, "provider_extension_values"));
+    assert!(test_has_column(
+        &conn,
+        "provider_extension_values",
+        "provider_id"
+    ));
+    assert!(test_has_column(
+        &conn,
+        "provider_extension_values",
+        "plugin_id"
+    ));
+    assert!(test_has_column(
+        &conn,
+        "provider_extension_values",
+        "namespace"
+    ));
+    assert!(test_has_column(
+        &conn,
+        "provider_extension_values",
+        "values_json"
     ));
 }
 
@@ -669,7 +873,7 @@ INSERT INTO providers(
     let user_version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("read user_version");
-    assert_eq!(user_version, 32);
+    assert_eq!(user_version, LATEST_SCHEMA_VERSION);
 
     for column in [
         "auth_mode",
@@ -925,7 +1129,7 @@ INSERT INTO skills(
     let user_version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("read user_version");
-    assert_eq!(user_version, 32);
+    assert_eq!(user_version, LATEST_SCHEMA_VERSION);
 
     assert!(test_has_column(&conn, "workspaces", "cli_key"));
     assert!(test_has_column(&conn, "workspace_active", "workspace_id"));
@@ -1046,7 +1250,7 @@ fn baseline_v25_creates_complete_schema_for_fresh_install() {
     let user_version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("read user_version");
-    assert_eq!(user_version, 32);
+    assert_eq!(user_version, LATEST_SCHEMA_VERSION);
 
     // Verify all tables exist
     let tables: Vec<String> = {
@@ -1065,10 +1269,13 @@ fn baseline_v25_creates_complete_schema_for_fresh_install() {
     assert!(tables.contains(&"skills".to_string()));
     assert!(tables.contains(&"skill_repos".to_string()));
     assert!(tables.contains(&"model_prices".to_string()));
+    assert!(tables.contains(&"provider_pool_order".to_string()));
+    assert!(tables.contains(&"default_route_providers".to_string()));
     assert!(tables.contains(&"sort_modes".to_string()));
     assert!(tables.contains(&"sort_mode_providers".to_string()));
     assert!(tables.contains(&"sort_mode_active".to_string()));
     assert!(tables.contains(&"claude_model_validation_runs".to_string()));
+    assert!(tables.contains(&"plugin_hook_execution_reports".to_string()));
     assert!(tables.contains(&"schema_migrations".to_string()));
 
     // Tables from ensure patches
@@ -1081,6 +1288,7 @@ fn baseline_v25_creates_complete_schema_for_fresh_install() {
     assert!(test_has_column(&conn, "providers", "limit_5h_usd"));
     assert!(test_has_column(&conn, "providers", "limit_daily_usd"));
     assert!(test_has_column(&conn, "providers", "tags_json"));
+    assert!(test_has_column(&conn, "skills", "installed_commit"));
     assert!(test_has_column(&conn, "skills", "installed_content_hash"));
 
     // Verify v25->v26 migration ran (claude_models_json)
@@ -1278,7 +1486,7 @@ PRAGMA user_version = 33;
     let user_version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("read user_version");
-    assert_eq!(user_version, 32);
+    assert_eq!(user_version, LATEST_SCHEMA_VERSION);
 
     assert!(test_has_column(&conn, "providers", "limit_5h_usd"));
     assert!(test_has_column(&conn, "providers", "limit_daily_usd"));
@@ -1288,6 +1496,7 @@ PRAGMA user_version = 33;
     assert!(test_has_column(&conn, "providers", "limit_monthly_usd"));
     assert!(test_has_column(&conn, "providers", "limit_total_usd"));
     assert!(test_has_column(&conn, "skills", "installed_content_hash"));
+    assert!(test_has_table(&conn, "plugin_hook_execution_reports"));
 
     let active_id: i64 = conn
         .query_row(

@@ -14,6 +14,7 @@ pub(super) fn apply_ensure_patches(conn: &mut Connection) -> crate::shared::erro
     ensure_provider_oauth_columns(conn)?;
     ensure_provider_oauth_limit_snapshots(conn)?;
     ensure_sort_mode_providers_enabled(conn)?;
+    ensure_provider_route_order_tables(conn)?;
     ensure_usage_indexes(conn)?;
     ensure_provider_tags(conn)?;
     ensure_provider_note(conn)?;
@@ -24,6 +25,7 @@ pub(super) fn apply_ensure_patches(conn: &mut Connection) -> crate::shared::erro
     ensure_provider_stream_idle_timeout(conn)?;
     ensure_skills_update_columns(conn)?;
     ensure_plugin_tables(conn)?;
+    ensure_provider_extension_values_table(conn)?;
     Ok(())
 }
 
@@ -650,6 +652,84 @@ fn ensure_sort_mode_providers_enabled(conn: &mut Connection) -> Result<(), Strin
 }
 
 // ---------------------------------------------------------------------------
+// ensure_provider_route_order_tables (from v32_to_v33.rs)
+// ---------------------------------------------------------------------------
+fn ensure_provider_route_order_tables(conn: &mut Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS provider_pool_order (
+  cli_key TEXT NOT NULL,
+  provider_id INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(cli_key, provider_id),
+  FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_pool_order_cli_sort_order
+  ON provider_pool_order(cli_key, sort_order);
+CREATE INDEX IF NOT EXISTS idx_provider_pool_order_provider_id
+  ON provider_pool_order(provider_id);
+
+CREATE TABLE IF NOT EXISTS default_route_providers (
+  cli_key TEXT NOT NULL,
+  provider_id INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(cli_key, provider_id),
+  FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_default_route_providers_cli_sort_order
+  ON default_route_providers(cli_key, sort_order);
+CREATE INDEX IF NOT EXISTS idx_default_route_providers_provider_id
+  ON default_route_providers(provider_id);
+"#,
+    )
+    .map_err(|e| format!("failed to ensure provider route order tables: {e}"))?;
+
+    let providers_table_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'providers')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| format!("failed to inspect providers table: {e}"))?
+        != 0;
+
+    if !providers_table_exists {
+        return Ok(());
+    }
+
+    let now = now_unix_seconds();
+    conn.execute(
+        r#"
+INSERT OR IGNORE INTO provider_pool_order(
+  cli_key,
+  provider_id,
+  sort_order,
+  created_at,
+  updated_at
+)
+SELECT
+  cli_key,
+  id,
+  sort_order,
+  ?1,
+  ?1
+FROM providers
+ORDER BY cli_key ASC, sort_order ASC, id DESC
+"#,
+        [now],
+    )
+    .map_err(|e| format!("failed to ensure provider_pool_order rows: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // ensure_usage_indexes (from v29_to_v30_usage_indexes.rs)
 // ---------------------------------------------------------------------------
 fn ensure_usage_indexes(conn: &mut Connection) -> Result<(), String> {
@@ -919,6 +999,20 @@ fn ensure_request_logs_extended_columns(conn: &mut Connection) -> Result<(), Str
             .map_err(|e| format!("failed to ensure request_logs.error_details_json: {e}"))?;
     }
 
+    if !column_exists(conn, "request_logs", "last_activity_ms")? {
+        conn.execute_batch("ALTER TABLE request_logs ADD COLUMN last_activity_ms INTEGER;")
+            .map_err(|e| format!("failed to ensure request_logs.last_activity_ms: {e}"))?;
+        conn.execute_batch(
+            "UPDATE request_logs SET last_activity_ms = created_at_ms WHERE last_activity_ms IS NULL;",
+        )
+        .map_err(|e| format!("failed to backfill request_logs.last_activity_ms: {e}"))?;
+    }
+
+    if !column_exists(conn, "request_logs", "activity_details_json")? {
+        conn.execute_batch("ALTER TABLE request_logs ADD COLUMN activity_details_json TEXT;")
+            .map_err(|e| format!("failed to ensure request_logs.activity_details_json: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -1027,12 +1121,67 @@ CREATE TABLE IF NOT EXISTS plugin_runtime_failures (
 
 CREATE INDEX IF NOT EXISTS idx_plugin_runtime_failures_plugin_created_at
   ON plugin_runtime_failures(plugin_id, created_at);
+
+CREATE TABLE IF NOT EXISTS plugin_hook_execution_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plugin_id TEXT NOT NULL,
+  trace_id TEXT,
+  hook_name TEXT NOT NULL,
+  runtime_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  failure_kind TEXT,
+  error_code TEXT,
+  failure_policy TEXT,
+  circuit_state TEXT,
+  context_budget_json TEXT NOT NULL DEFAULT '{}',
+  output_budget_json TEXT NOT NULL DEFAULT '{}',
+  mutation_summary_json TEXT NOT NULL DEFAULT '{}',
+  replayable INTEGER NOT NULL DEFAULT 0,
+  replay_export_reason TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_plugin_hook_execution_reports_plugin_created_at
+  ON plugin_hook_execution_reports(plugin_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_plugin_hook_execution_reports_created_at
+  ON plugin_hook_execution_reports(created_at);
+CREATE INDEX IF NOT EXISTS idx_plugin_hook_execution_reports_trace_id
+  ON plugin_hook_execution_reports(trace_id);
+CREATE INDEX IF NOT EXISTS idx_plugin_hook_execution_reports_plugin_hook_created_at
+  ON plugin_hook_execution_reports(plugin_id, hook_name, created_at);
 "#,
     )
     .map_err(|e| format!("failed to ensure plugin tables: {e}"))?;
 
     tx.commit()
         .map_err(|e| format!("failed to commit plugin table ensure patch: {e}"))?;
+
+    Ok(())
+}
+
+fn ensure_provider_extension_values_table(
+    conn: &mut Connection,
+) -> crate::shared::error::AppResult<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS provider_extension_values (
+  provider_id INTEGER NOT NULL,
+  plugin_id TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  values_json TEXT NOT NULL DEFAULT '{}',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(provider_id, plugin_id, namespace),
+  FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE,
+  FOREIGN KEY(plugin_id) REFERENCES plugins(plugin_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_extension_values_plugin_namespace
+  ON provider_extension_values(plugin_id, namespace);
+"#,
+    )
+    .map_err(|e| format!("failed to ensure provider extension values table: {e}"))?;
 
     Ok(())
 }

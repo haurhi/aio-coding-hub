@@ -202,4 +202,31 @@ describe("pages/home/hooks/useHomeOverviewFeed", () => {
     expect(ownerRefresh).toHaveBeenCalledTimes(1);
     expect(requestLogsRefresh).not.toHaveBeenCalled();
   });
+
+  it("passes active request snapshots to the home freshness owner watchdog", () => {
+    vi.mocked(useRequestLogsFeed).mockReturnValue({
+      requestLogs: [],
+      activeRequests: [{ trace_id: "trace-active" }],
+      requestLogsLoading: false,
+      requestLogsRefreshing: false,
+      requestLogsAvailable: true,
+      refreshRequestLogs: vi.fn().mockResolvedValue({ error: null }),
+    } as any);
+
+    renderHook(() =>
+      useHomeOverviewFeed({
+        overviewActive: true,
+        foregroundActive: true,
+        overviewUsageSeriesEnabled: true,
+        shouldRefetchOverviewUsageSeries: true,
+        homeUsageWindowDays: 7,
+      })
+    );
+
+    expect(useHomeFreshnessOwner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestActivityPending: true,
+      })
+    );
+  });
 });

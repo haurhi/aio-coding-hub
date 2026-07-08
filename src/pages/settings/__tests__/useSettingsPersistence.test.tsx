@@ -387,7 +387,7 @@ describe("settings/useSettingsPersistence", () => {
     } as any);
 
     vi.mocked(gatewayCheckPortAvailable).mockRejectedValue(
-      new Error("SEC_INVALID_INPUT: invalid settings.json: boom")
+      new Error("SETTINGS_RECOVERY_REQUIRED: invalid settings.json: boom")
     );
 
     const mutation = { mutateAsync: vi.fn() };

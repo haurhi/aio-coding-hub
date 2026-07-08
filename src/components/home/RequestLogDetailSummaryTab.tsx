@@ -10,12 +10,9 @@ import {
   sanitizeTtfbMs,
 } from "../../utils/formatters";
 import { RequestLogErrorObservationCard } from "./RequestLogErrorObservationCard";
-import {
-  buildRequestLogAuditMeta,
-  computeStatusBadge,
-  FastModeBadge,
-  hasPriorityServiceTierSpecialSetting,
-} from "./HomeLogShared";
+import { buildRequestLogAuditMeta, computeStatusBadge } from "./requestLogPresentation";
+import { FastModeBadge } from "./LogBadges";
+import { hasPriorityServiceTierSpecialSetting } from "./requestLogSpecialSettings";
 
 export type RequestLogDetailSummaryTabProps = {
   selectedLog: RequestLogDetail;

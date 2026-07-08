@@ -155,10 +155,11 @@ where
     };
     match ctx.state.plugin_pipeline.run_request_hook(hook_input).await {
         Ok(output) => {
-            crate::gateway::plugins::audit::persist_gateway_plugin_audit_events(
+            crate::gateway::plugins::audit::persist_gateway_plugin_diagnostics(
                 &ctx.state.db,
                 &input.trace_id,
                 output.audit_events.clone(),
+                output.execution_reports.clone(),
             );
             if let Some(blocked) = output.blocked {
                 tracing::warn!(
@@ -343,6 +344,7 @@ async fn handle_url_build_failure<R: tauri::Runtime>(
         decision,
         outcome,
         reason: format!("invalid base_url: {err}"),
+        timeout_secs: None,
     })
     .await
 }
@@ -357,6 +359,7 @@ fn build_attempt_ctx<'a>(
     AttemptCtx {
         attempt_index,
         retry_index,
+        provider_max_attempts: prepared.provider_max_attempts,
         attempt_started_ms,
         attempt_started: Instant::now(),
         circuit_before,
@@ -374,6 +377,7 @@ fn build_provider_ctx(prepared: &PreparedProvider) -> ProviderCtx<'_> {
         provider_base_url_base: &prepared.provider_base_url_base,
         auth_mode: prepared.auth_mode.as_str(),
         provider_index: prepared.provider_index,
+        provider_bridged: prepared.provider_bridged,
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),
@@ -414,6 +418,10 @@ fn emit_started_event<R: tauri::Runtime>(
         circuit_state_after: None,
         circuit_failure_count: Some(circuit_before.failure_count),
         circuit_failure_threshold: Some(circuit_before.failure_threshold),
+        circuit_recover_at_unix: None,
+        circuit_trigger_error_code: None,
+        provider_bridged: Some(prepared.provider_bridged),
+        timeout_secs: None,
     };
     abort_guard.capture_in_flight_attempt(&started_attempt);
     if input.observe_request {

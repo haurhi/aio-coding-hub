@@ -278,6 +278,37 @@ describe("query/gateway", () => {
     ).toBeTruthy();
   });
 
+  it("useGatewaySessionsListQuery pauses polling while the document is hidden", async () => {
+    setTauriRuntime();
+
+    vi.mocked(gatewaySessionsList).mockClear();
+    vi.mocked(gatewaySessionsList).mockResolvedValue([]);
+
+    const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const client = createTestQueryClient();
+      const wrapper = createQueryWrapper(client);
+
+      renderHook(() => useGatewaySessionsListQuery(10, { refetchIntervalMs: 20 }), { wrapper });
+
+      // Initial mount fetch still happens; the interval must not fire while hidden.
+      await waitFor(() => expect(gatewaySessionsList).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(gatewaySessionsList).toHaveBeenCalledTimes(1);
+
+      // Back to visible: polling resumes.
+      visibilitySpy.mockReturnValue("visible");
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => {
+        expect(vi.mocked(gatewaySessionsList).mock.calls.length).toBeGreaterThan(1);
+      });
+    } finally {
+      visibilitySpy.mockRestore();
+    }
+  });
+
   it("useGatewaySessionsListQuery enters error state when service rejects", async () => {
     setTauriRuntime();
 

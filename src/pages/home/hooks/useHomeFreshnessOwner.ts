@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import { gatewayEventNames } from "../../../constants/gatewayEvents";
 import { useCoalescedAsyncRefresh } from "../../../hooks/useCoalescedAsyncRefresh";
 import { useWindowForeground } from "../../../hooks/useWindowForeground";
@@ -7,12 +7,18 @@ import { subscribeGatewayEvent } from "../../../services/gateway/gatewayEventBus
 import { normalizeGatewayRequestSignalEvent } from "../../../services/gateway/gatewayEvents";
 import { isRequestSignalComplete } from "../../../services/gateway/requestLogState";
 
-type RefreshSource = "request_signal.complete" | "foreground" | "manual";
+type RefreshSource =
+  | "request_signal.complete"
+  | "foreground"
+  | "manual"
+  | "request_activity.watchdog";
 
 type UseHomeFreshnessOwnerOptions = {
   overviewActive: boolean;
   foregroundActive: boolean;
+  requestActivityPending?: boolean;
   requestLogsRefreshWindowMs?: number;
+  requestActivityWatchdogIntervalMs?: number | false;
   foregroundThrottleMs?: number;
   onRefreshRequestLogs: () => Promise<unknown>;
 };
@@ -22,32 +28,39 @@ function resolveRequestLogsRefreshWindowMs(input: number | undefined) {
   return Math.max(200, Math.min(2_000, Math.trunc(input)));
 }
 
+function resolveRequestActivityWatchdogIntervalMs(input: number | false | undefined) {
+  if (input === false) return false;
+  if (!Number.isFinite(input) || input == null) return 15_000;
+  return Math.max(5_000, Math.min(60_000, Math.trunc(input)));
+}
+
 export function useHomeFreshnessOwner({
   overviewActive,
   foregroundActive,
+  requestActivityPending = false,
   requestLogsRefreshWindowMs,
+  requestActivityWatchdogIntervalMs,
   foregroundThrottleMs = 1000,
   onRefreshRequestLogs,
 }: UseHomeFreshnessOwnerOptions) {
   const active = overviewActive && foregroundActive;
   const refreshWindowMs = resolveRequestLogsRefreshWindowMs(requestLogsRefreshWindowMs);
-  const previousActiveRef = useRef(active);
-  const {
-    clearQueued: clearQueuedRefresh,
-    flush: flushRequestLogs,
-    schedule: scheduleRequestLogsRefresh,
-  } = useCoalescedAsyncRefresh<RefreshSource, unknown>({
-    enabled: active,
-    delayMs: refreshWindowMs,
-    task: () => onRefreshRequestLogs(),
-    onError: (error, source) => {
-      logToConsole("warn", "首页请求记录刷新失败", {
-        source,
-        error: String(error),
-      });
-      return { error };
-    },
-  });
+  const watchdogIntervalMs = resolveRequestActivityWatchdogIntervalMs(
+    requestActivityWatchdogIntervalMs
+  );
+  const { flush: flushRequestLogs, schedule: scheduleRequestLogsRefresh } =
+    useCoalescedAsyncRefresh<RefreshSource, unknown>({
+      enabled: active,
+      delayMs: refreshWindowMs,
+      task: () => onRefreshRequestLogs(),
+      onError: (error, source) => {
+        logToConsole("warn", "首页请求记录刷新失败", {
+          source,
+          error: String(error),
+        });
+        return { error };
+      },
+    });
 
   const refreshRequestLogsNow = useCallback(() => {
     return flushRequestLogs("manual") ?? Promise.resolve(null);
@@ -62,17 +75,18 @@ export function useHomeFreshnessOwner({
   });
 
   useEffect(() => {
-    const wasActive = previousActiveRef.current;
-    previousActiveRef.current = active;
-    if (!active) {
-      clearQueuedRefresh();
+    if (!active || !requestActivityPending || watchdogIntervalMs === false) {
       return;
     }
 
-    if (!wasActive) {
-      scheduleRequestLogsRefresh("foreground");
-    }
-  }, [active, clearQueuedRefresh, scheduleRequestLogsRefresh]);
+    const intervalId = window.setInterval(() => {
+      scheduleRequestLogsRefresh("request_activity.watchdog");
+    }, watchdogIntervalMs);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [active, requestActivityPending, scheduleRequestLogsRefresh, watchdogIntervalMs]);
 
   useEffect(() => {
     if (!active) {

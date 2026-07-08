@@ -123,6 +123,7 @@ where
 mod tests {
     use super::build_router;
     use crate::app::plugins::{official, runtime_executor::RuntimeGatewayPluginExecutor};
+    use crate::domain::plugin_contributions::PluginContributes;
     use crate::domain::plugins::{
         PluginDetail, PluginHook, PluginHostCompatibility, PluginInstallSource, PluginManifest,
         PluginPermissionRisk, PluginRuntime, PluginStatus, PluginSummary,
@@ -144,9 +145,10 @@ mod tests {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use serde_json::Value;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::ffi::OsString;
     use std::io::Write;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -630,7 +632,7 @@ mod tests {
         base_url: String,
         priority: i64,
     ) -> i64 {
-        providers::upsert(
+        let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
                 provider_id: None,
@@ -657,10 +659,24 @@ mod tests {
                 source_provider_id: None,
                 bridge_type: None,
                 stream_idle_timeout_seconds: None,
+                extension_values: None,
             },
         )
         .expect("insert provider")
-        .id
+        .id;
+        append_default_route_provider(db, cli_key, provider_id);
+        provider_id
+    }
+
+    fn append_default_route_provider(db: &db::Db, cli_key: &str, provider_id: i64) {
+        let mut provider_ids: Vec<i64> = providers::default_route_list(db, cli_key)
+            .expect("list default route")
+            .into_iter()
+            .map(|row| row.provider_id)
+            .collect();
+        provider_ids.push(provider_id);
+        providers::default_route_set_order(db, cli_key, provider_ids)
+            .expect("append default route provider");
     }
 
     fn insert_codex_provider_with_priority(
@@ -716,7 +732,7 @@ mod tests {
     }
 
     fn insert_codex_oauth_provider_with_priority(db: &db::Db, name: &str, priority: i64) -> i64 {
-        providers::upsert(
+        let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
                 provider_id: None,
@@ -743,14 +759,17 @@ mod tests {
                 source_provider_id: None,
                 bridge_type: None,
                 stream_idle_timeout_seconds: None,
+                extension_values: None,
             },
         )
         .expect("insert oauth provider")
-        .id
+        .id;
+        append_default_route_provider(db, "codex", provider_id);
+        provider_id
     }
 
     fn insert_cx2cc_bridge_provider(db: &db::Db, source_provider_id: i64, priority: i64) -> i64 {
-        providers::upsert(
+        let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
                 provider_id: None,
@@ -777,10 +796,13 @@ mod tests {
                 source_provider_id: Some(source_provider_id),
                 bridge_type: Some("cx2cc".to_string()),
                 stream_idle_timeout_seconds: None,
+                extension_values: None,
             },
         )
         .expect("insert cx2cc bridge provider")
-        .id
+        .id;
+        append_default_route_provider(db, "claude", provider_id);
+        provider_id
     }
 
     async fn recv_terminal_request_log(
@@ -833,6 +855,9 @@ mod tests {
             recent_errors: Arc::new(Mutex::new(RecentErrorCache::default())),
             latency_cache: Arc::new(Mutex::new(ProviderBaseUrlPingCache::default())),
             plugin_pipeline: GatewayPluginPipeline::empty_shared(),
+            active_requests: Arc::new(
+                crate::gateway::active_requests::ActiveRequestRegistry::default(),
+            ),
         }
     }
 
@@ -855,7 +880,7 @@ mod tests {
                 name: "Request Rewrite".to_string(),
                 current_version: Some("1.0.0".to_string()),
                 status: PluginStatus::Enabled,
-                runtime: "declarativeRules".to_string(),
+                runtime: "extensionHost".to_string(),
                 permission_risk: PluginPermissionRisk::High,
                 update_available: false,
                 last_error: None,
@@ -867,20 +892,29 @@ mod tests {
                 name: "Request Rewrite".to_string(),
                 version: "1.0.0".to_string(),
                 api_version: "1.0.0".to_string(),
-                runtime: PluginRuntime::DeclarativeRules {
-                    rules: vec!["rules/main.json".to_string()],
+                runtime: PluginRuntime::ExtensionHost {
+                    language: "typescript".to_string(),
                 },
-                hooks: vec![PluginHook {
-                    name: GatewayPluginHookName::RequestAfterBodyRead
-                        .as_str()
-                        .to_string(),
-                    priority: 10,
-                    failure_policy: Some("fail-open".to_string()),
-                }],
-                permissions: vec![
-                    "request.body.read".to_string(),
-                    "request.body.write".to_string(),
-                ],
+                hooks: vec![],
+                permissions: vec![],
+                main: Some("dist/index.js".to_string()),
+                activation_events: vec![],
+                contributes: Some(PluginContributes {
+                    providers: vec![],
+                    protocols: vec![],
+                    protocol_bridges: vec![],
+                    commands: vec![],
+                    gateway_hooks: vec![PluginHook {
+                        name: GatewayPluginHookName::RequestAfterBodyRead
+                            .as_str()
+                            .to_string(),
+                        priority: 10,
+                        failure_policy: Some("fail-open".to_string()),
+                        timeout_ms: None,
+                    }],
+                    ui: BTreeMap::new(),
+                }),
+                capabilities: vec!["gateway.hooks".to_string()],
                 host_compatibility: PluginHostCompatibility {
                     app: ">=0.56.0 <1.0.0".to_string(),
                     plugin_api: "^1.0.0".to_string(),
@@ -908,12 +942,24 @@ mod tests {
             pending_permissions: vec![],
             audit_logs: vec![],
             runtime_failures: vec![],
+            rollback_versions: vec![],
         }
     }
 
     fn fail_closed(mut plugin: PluginDetail) -> PluginDetail {
-        plugin.manifest.hooks[0].failure_policy = Some("fail-closed".to_string());
+        gateway_hook_mut(&mut plugin).failure_policy = Some("fail-closed".to_string());
         plugin
+    }
+
+    fn gateway_hook_mut(plugin: &mut PluginDetail) -> &mut PluginHook {
+        plugin
+            .manifest
+            .contributes
+            .as_mut()
+            .expect("extension host gateway hook contributions")
+            .gateway_hooks
+            .first_mut()
+            .expect("gateway hook")
     }
 
     fn before_send_header_plugin() -> PluginDetail {
@@ -922,14 +968,13 @@ mod tests {
         plugin.summary.name = "Before Send".to_string();
         plugin.manifest.id = "test.before-send".to_string();
         plugin.manifest.name = "Before Send".to_string();
-        plugin.manifest.hooks[0].name = GatewayPluginHookName::RequestBeforeSend
+        gateway_hook_mut(&mut plugin).name = GatewayPluginHookName::RequestBeforeSend
             .as_str()
             .to_string();
-        plugin.manifest.permissions = vec![
+        plugin.granted_permissions = vec![
             "request.meta.read".to_string(),
             "request.header.write".to_string(),
         ];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
         plugin
     }
 
@@ -939,12 +984,12 @@ mod tests {
         plugin.summary.name = "Response After".to_string();
         plugin.manifest.id = "test.response-after".to_string();
         plugin.manifest.name = "Response After".to_string();
-        plugin.manifest.hooks[0].name = GatewayPluginHookName::ResponseAfter.as_str().to_string();
-        plugin.manifest.permissions = vec![
+        gateway_hook_mut(&mut plugin).name =
+            GatewayPluginHookName::ResponseAfter.as_str().to_string();
+        plugin.granted_permissions = vec![
             "response.body.read".to_string(),
             "response.body.write".to_string(),
         ];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
         plugin
     }
 
@@ -954,10 +999,10 @@ mod tests {
         plugin.summary.name = "Stream Chunk".to_string();
         plugin.manifest.id = "test.stream-chunk".to_string();
         plugin.manifest.name = "Stream Chunk".to_string();
-        plugin.manifest.hooks[0].name = GatewayPluginHookName::ResponseChunk.as_str().to_string();
-        plugin.manifest.permissions =
+        gateway_hook_mut(&mut plugin).name =
+            GatewayPluginHookName::ResponseChunk.as_str().to_string();
+        plugin.granted_permissions =
             vec!["stream.inspect".to_string(), "stream.modify".to_string()];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
         plugin
     }
 
@@ -967,17 +1012,15 @@ mod tests {
         plugin.summary.name = "Log Redaction".to_string();
         plugin.manifest.id = "test.log-redaction".to_string();
         plugin.manifest.name = "Log Redaction".to_string();
-        plugin.manifest.hooks[0].name =
+        gateway_hook_mut(&mut plugin).name =
             GatewayPluginHookName::LogBeforePersist.as_str().to_string();
-        plugin.manifest.permissions = vec!["log.redact".to_string()];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
+        plugin.granted_permissions = vec!["log.redact".to_string()];
         plugin
     }
 
     fn official_privacy_filter_for_tests() -> PluginDetail {
         let fixture = official::official_plugin("official.privacy-filter")
             .expect("official privacy filter fixture");
-        let permissions = fixture.manifest.permissions.clone();
         PluginDetail {
             summary: PluginSummary {
                 id: 1,
@@ -985,7 +1028,7 @@ mod tests {
                 name: fixture.manifest.name.clone(),
                 current_version: Some(fixture.manifest.version.clone()),
                 status: PluginStatus::Enabled,
-                runtime: "native:privacyFilter".to_string(),
+                runtime: "extensionHost".to_string(),
                 permission_risk: PluginPermissionRisk::High,
                 update_available: false,
                 last_error: None,
@@ -996,10 +1039,11 @@ mod tests {
             install_source: PluginInstallSource::Official,
             installed_dir: Some(fixture.root_dir.to_string_lossy().to_string()),
             config: fixture.default_config,
-            granted_permissions: permissions,
+            granted_permissions: vec![],
             pending_permissions: vec![],
             audit_logs: vec![],
             runtime_failures: vec![],
+            rollback_versions: vec![],
         }
     }
 
@@ -1009,13 +1053,12 @@ mod tests {
         plugin.summary.name = "Gateway Error".to_string();
         plugin.manifest.id = "test.gateway-error".to_string();
         plugin.manifest.name = "Gateway Error".to_string();
-        plugin.manifest.hooks[0].name = GatewayPluginHookName::Error.as_str().to_string();
-        plugin.manifest.permissions = vec![
+        gateway_hook_mut(&mut plugin).name = GatewayPluginHookName::Error.as_str().to_string();
+        plugin.granted_permissions = vec![
             "response.body.read".to_string(),
             "response.body.write".to_string(),
             "response.header.write".to_string(),
         ];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
         plugin
     }
 
@@ -1057,6 +1100,53 @@ mod tests {
             &plugin.pending_permissions,
         )
         .expect("save plugin detail permissions");
+        repository::save_plugin_config(
+            db,
+            &plugin.summary.plugin_id,
+            plugin.manifest.config_version.unwrap_or(1),
+            &plugin.config,
+            &[],
+        )
+        .expect("save plugin detail config");
+    }
+
+    fn persist_and_reload_plugin_detail(db: &db::Db, plugin: &PluginDetail) -> PluginDetail {
+        persist_plugin_detail(db, plugin);
+        repository::get_plugin(db, &plugin.summary.plugin_id).expect("reload plugin detail")
+    }
+
+    fn write_extension_host_test_entry(
+        source_root: Option<&Path>,
+        root: &Path,
+        manifest: &PluginManifest,
+        source: &str,
+    ) {
+        let main = manifest
+            .main
+            .as_deref()
+            .expect("extension host test manifest main");
+        let entry_path = root.join(main);
+        std::fs::create_dir_all(
+            entry_path
+                .parent()
+                .expect("extension host test entry parent"),
+        )
+        .expect("create extension host test entry parent");
+        std::fs::write(
+            root.join("plugin.json"),
+            serde_json::to_vec_pretty(manifest).expect("serialize extension host test manifest"),
+        )
+        .expect("write extension host test manifest");
+        std::fs::write(entry_path, source).expect("write extension host test entry");
+        if let Some(source_root) = source_root {
+            let source_rules = source_root.join("rules/gitleaks.toml");
+            if source_rules.exists() {
+                let target_rules = root.join("rules/gitleaks.toml");
+                std::fs::create_dir_all(target_rules.parent().expect("rules parent"))
+                    .expect("create rules dir");
+                std::fs::copy(source_rules, target_rules).expect("copy privacy rules");
+            }
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1071,6 +1161,7 @@ mod tests {
         app_settings.upstream_first_byte_timeout_seconds = 1;
         app_settings.failover_max_attempts_per_provider = 1;
         app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 1;
         settings::write(&app_handle, &app_settings).expect("write settings");
 
         let db_dir = tempfile::tempdir().expect("db dir");
@@ -1080,7 +1171,21 @@ mod tests {
         let provider_id = insert_codex_provider(&db, upstream_base_url);
 
         let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
-        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit,
+            Arc::new(session_manager::SessionManager::new()),
+        ));
         let request = Request::builder()
             .method(Method::POST)
             .uri(format!(
@@ -1227,12 +1332,21 @@ mod tests {
 
         let request_log = recv_terminal_request_log(&mut log_rx).await;
         assert_eq!(request_log.status, Some(200));
-        let plugin_detail = repository::get_plugin(&db, &plugin.summary.plugin_id)
-            .expect("read persisted plugin detail");
-        assert!(plugin_detail.audit_logs.iter().any(|audit| {
-            audit.trace_id.as_deref() == Some(request_log.trace_id.as_str())
-                && audit.event_type == "plugin.hook.completed"
-        }));
+        // Audit persistence is fire-and-forget off the request path; poll for it.
+        let mut audit_persisted = false;
+        for _ in 0..40 {
+            let plugin_detail = repository::get_plugin(&db, &plugin.summary.plugin_id)
+                .expect("read persisted plugin detail");
+            audit_persisted = plugin_detail.audit_logs.iter().any(|audit| {
+                audit.trace_id.as_deref() == Some(request_log.trace_id.as_str())
+                    && audit.event_type == "plugin.hook.completed"
+            });
+            if audit_persisted {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(audit_persisted, "plugin audit log should be persisted");
         upstream_task.abort();
     }
 
@@ -1257,7 +1371,6 @@ mod tests {
             .expect("init test db");
         let fixture = official::official_plugin("official.privacy-filter")
             .expect("official privacy filter fixture");
-        let permissions = fixture.manifest.permissions.clone();
         let plugin = PluginDetail {
             summary: PluginSummary {
                 id: 1,
@@ -1265,7 +1378,7 @@ mod tests {
                 name: fixture.manifest.name.clone(),
                 current_version: Some(fixture.manifest.version.clone()),
                 status: PluginStatus::Enabled,
-                runtime: "native:privacyFilter".to_string(),
+                runtime: "extensionHost".to_string(),
                 permission_risk: PluginPermissionRisk::High,
                 update_available: false,
                 last_error: None,
@@ -1276,10 +1389,11 @@ mod tests {
             install_source: PluginInstallSource::Official,
             installed_dir: Some(fixture.root_dir.to_string_lossy().to_string()),
             config: fixture.default_config,
-            granted_permissions: permissions.clone(),
+            granted_permissions: vec![],
             pending_permissions: vec![],
             audit_logs: vec![],
             runtime_failures: vec![],
+            rollback_versions: vec![],
         };
         repository::insert_plugin(
             &db,
@@ -1291,8 +1405,18 @@ mod tests {
             },
         )
         .expect("insert official privacy filter");
-        repository::save_plugin_permissions(&db, &plugin.summary.plugin_id, &permissions, &[])
+        repository::save_plugin_permissions(&db, &plugin.summary.plugin_id, &[], &[])
             .expect("grant official privacy filter permissions");
+        repository::save_plugin_config(
+            &db,
+            &plugin.summary.plugin_id,
+            plugin.manifest.config_version.unwrap_or(1),
+            &plugin.config,
+            &[],
+        )
+        .expect("save official privacy filter config");
+        let plugin = repository::get_plugin(&db, &plugin.summary.plugin_id)
+            .expect("reload official privacy filter");
 
         let (upstream_base_url, captured_rx, upstream_task) =
             spawn_capturing_raw_upstream(r#"{"id":"stub-ok","object":"response","output":[]}"#)
@@ -1300,7 +1424,7 @@ mod tests {
         let provider_id = insert_codex_provider(&db, upstream_base_url);
         let plugin_pipeline = GatewayPluginPipeline::for_tests_shared(
             vec![plugin],
-            Arc::new(RuntimeGatewayPluginExecutor::default()),
+            Arc::new(RuntimeGatewayPluginExecutor::with_db(db.clone())),
             GatewayPluginPipelineConfig::default(),
         );
 
@@ -1378,7 +1502,6 @@ mod tests {
         .expect("init test db");
         let fixture = official::official_plugin("official.privacy-filter")
             .expect("official privacy filter fixture");
-        let permissions = fixture.manifest.permissions.clone();
         let plugin = PluginDetail {
             summary: PluginSummary {
                 id: 1,
@@ -1386,7 +1509,7 @@ mod tests {
                 name: fixture.manifest.name.clone(),
                 current_version: Some(fixture.manifest.version.clone()),
                 status: PluginStatus::Enabled,
-                runtime: "native:privacyFilter".to_string(),
+                runtime: "extensionHost".to_string(),
                 permission_risk: PluginPermissionRisk::High,
                 update_available: false,
                 last_error: None,
@@ -1397,10 +1520,11 @@ mod tests {
             install_source: PluginInstallSource::Official,
             installed_dir: Some(fixture.root_dir.to_string_lossy().to_string()),
             config: fixture.default_config,
-            granted_permissions: permissions.clone(),
+            granted_permissions: vec![],
             pending_permissions: vec![],
             audit_logs: vec![],
             runtime_failures: vec![],
+            rollback_versions: vec![],
         };
         repository::insert_plugin(
             &db,
@@ -1412,8 +1536,18 @@ mod tests {
             },
         )
         .expect("insert official privacy filter");
-        repository::save_plugin_permissions(&db, &plugin.summary.plugin_id, &permissions, &[])
+        repository::save_plugin_permissions(&db, &plugin.summary.plugin_id, &[], &[])
             .expect("grant official privacy filter permissions");
+        repository::save_plugin_config(
+            &db,
+            &plugin.summary.plugin_id,
+            plugin.manifest.config_version.unwrap_or(1),
+            &plugin.config,
+            &[],
+        )
+        .expect("save official privacy filter config");
+        let plugin = repository::get_plugin(&db, &plugin.summary.plugin_id)
+            .expect("reload official privacy filter");
 
         let (upstream_base_url, captured_rx, upstream_task) =
             spawn_capturing_raw_upstream(r#"{"id":"stub-ok","object":"response","output":[]}"#)
@@ -1421,7 +1555,7 @@ mod tests {
         let provider_id = insert_codex_provider(&db, upstream_base_url);
         let plugin_pipeline = GatewayPluginPipeline::for_tests_shared(
             vec![plugin],
-            Arc::new(RuntimeGatewayPluginExecutor::default()),
+            Arc::new(RuntimeGatewayPluginExecutor::with_db(db.clone())),
             GatewayPluginPipelineConfig::default(),
         );
 
@@ -1556,9 +1690,41 @@ mod tests {
         let mut plugin = official_privacy_filter_for_tests();
         plugin
             .manifest
-            .hooks
+            .contributes
+            .as_mut()
+            .expect("official privacy filter gateway contributions")
+            .gateway_hooks
             .retain(|hook| hook.name != "gateway.request.afterBodyRead");
-        persist_plugin_detail(&db, &plugin);
+        let plugin_root = tempfile::tempdir().expect("plugin root");
+        let source_root = plugin.installed_dir.as_deref().map(Path::new);
+        write_extension_host_test_entry(
+            source_root,
+            plugin_root.path(),
+            &plugin.manifest,
+            r#"
+function handleRequestHook(api, payload) {
+  const body =
+    payload && payload.context && payload.context.request
+      ? payload.context.request.body
+      : undefined;
+  if (typeof body !== "string" || body.length === 0) {
+    return { action: "pass" };
+  }
+  const result = api.privacy.redactRequestBody(body, {});
+  return result && result.hit
+    ? { action: "replace", requestBody: result.redacted }
+    : { action: "pass" };
+}
+
+module.exports.activate = function activate(api) {
+  api.gateway.registerHook("gateway.request.beforeSend", function onBeforeSend(payload) {
+    return handleRequestHook(api, payload);
+  });
+};
+"#,
+        );
+        plugin.installed_dir = Some(plugin_root.path().to_string_lossy().to_string());
+        let plugin = persist_and_reload_plugin_detail(&db, &plugin);
 
         let (upstream_base_url, captured_rx, upstream_task) =
             spawn_capturing_raw_upstream(r#"{"id":"stub-ok","object":"response","output":[]}"#)
@@ -1566,7 +1732,7 @@ mod tests {
         let provider_id = insert_codex_provider(&db, upstream_base_url);
         let plugin_pipeline = GatewayPluginPipeline::for_tests_shared(
             vec![plugin],
-            Arc::new(RuntimeGatewayPluginExecutor::default()),
+            Arc::new(RuntimeGatewayPluginExecutor::with_db(db.clone())),
             GatewayPluginPipelineConfig::default(),
         );
 
@@ -1635,11 +1801,10 @@ mod tests {
         let db = db::init_for_tests(&db_dir.path().join("privacy-filter-retry.sqlite"))
             .expect("init test db");
         let mut plugin = before_send_header_plugin();
-        plugin.manifest.permissions = vec![
+        plugin.granted_permissions = vec![
             "request.body.read".to_string(),
             "request.body.write".to_string(),
         ];
-        plugin.granted_permissions = plugin.manifest.permissions.clone();
         persist_plugin_detail(&db, &plugin);
 
         let (upstream_base_url, mut captured_rx, upstream_task) =
@@ -2509,6 +2674,7 @@ mod tests {
         app_settings.upstream_first_byte_timeout_seconds = 1;
         app_settings.failover_max_attempts_per_provider = 1;
         app_settings.failover_max_providers_to_try = 2;
+        app_settings.circuit_breaker_failure_threshold = 1;
         app_settings.provider_cooldown_seconds = 0;
         settings::write(&app_handle, &app_settings).expect("write settings");
         crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
@@ -2526,7 +2692,21 @@ mod tests {
             insert_codex_provider_with_priority(&db, "Success Stub", success_base_url, 1);
 
         let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
-        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit,
+            Arc::new(session_manager::SessionManager::new()),
+        ));
         let request = Request::builder()
             .method(Method::POST)
             .uri("/v1/chat/completions")
@@ -2796,6 +2976,7 @@ mod tests {
         let mut app_settings = settings::AppSettings::default();
         app_settings.failover_max_attempts_per_provider = 1;
         app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 1;
         app_settings.provider_cooldown_seconds = 0;
         settings::write(&app_handle, &app_settings).expect("write settings");
 
@@ -2818,7 +2999,21 @@ mod tests {
             insert_codex_provider_with_priority(&db, "Large Error Stub", upstream_base_url, 0);
 
         let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
-        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit,
+            Arc::new(session_manager::SessionManager::new()),
+        ));
         let request = Request::builder()
             .method(Method::POST)
             .uri(format!(
@@ -4440,5 +4635,145 @@ mod tests {
         );
 
         json_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_claude_compact_request_persists_request_kind_special_setting() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let app_settings = settings::AppSettings::default();
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("gateway-route-compact-kind-test.sqlite"))
+            .expect("init test db");
+        let (upstream_base_url, upstream_task) = spawn_json_upstream(
+            r#"{"id":"msg_compact","type":"message","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"claude-3-5-sonnet","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+        .await;
+        let provider_id =
+            insert_provider_with_priority(&db, "claude", "Compact Stub", upstream_base_url, 0);
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/claude/_aio/provider/{provider_id}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-3-5-sonnet","max_tokens":512,"system":[{"type":"text","text":"You are a helpful AI assistant tasked with summarizing conversations. Follow the instructions."}],"messages":[{"role":"user","content":"Your task is to create a detailed summary of the conversation so far."}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.cli_key, "claude");
+        assert_eq!(log.path, "/v1/messages");
+        assert_eq!(log.status, Some(200));
+
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings json"),
+        )
+        .expect("special settings json parses");
+        let special_settings = special_settings.as_array().expect("special settings array");
+        assert!(special_settings.iter().any(|entry| {
+            entry.get("type").and_then(Value::as_str) == Some("request_kind")
+                && entry.get("kind").and_then(Value::as_str) == Some("compact")
+        }));
+
+        upstream_task.abort();
+    }
+
+    /// Upstream that delays the first response byte, then sends a full JSON
+    /// response (models a provider re-processing a huge compact prompt).
+    async fn spawn_delayed_json_upstream(
+        body: &'static str,
+        first_byte_delay: Duration,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind delayed json upstream stub");
+        let addr = listener.local_addr().expect("delayed json upstream addr");
+        let task = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0_u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                tokio::time::sleep(first_byte_delay).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), task)
+    }
+
+    /// Proves the compact first-byte timeout widening is wired through to the
+    /// actual send path: with a 1s configured first-byte timeout and an
+    /// upstream that stalls 2s before the first byte, a compact request must
+    /// still succeed (widened to 300s). Without the widening this setup times
+    /// out — see `mock_runtime_router_timeout_stub_returns_bad_gateway_and_emits_request_log`,
+    /// which proves the 1s timeout fires on the same send path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_claude_compact_request_survives_first_byte_delay_beyond_configured_timeout(
+    ) {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.upstream_first_byte_timeout_seconds = 1;
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-compact-timeout-test.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, upstream_task) = spawn_delayed_json_upstream(
+            r#"{"id":"msg_compact_slow","type":"message","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"claude-3-5-sonnet","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            Duration::from_secs(2),
+        )
+        .await;
+        let provider_id =
+            insert_provider_with_priority(&db, "claude", "Compact Slow Stub", upstream_base_url, 0);
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/claude/_aio/provider/{provider_id}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-3-5-sonnet","max_tokens":512,"system":[{"type":"text","text":"You are a helpful AI assistant tasked with summarizing conversations. Follow the instructions."}],"messages":[{"role":"user","content":"Your task is to create a detailed summary of the conversation so far."}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        assert_eq!(log.error_code, None);
+
+        upstream_task.abort();
     }
 }

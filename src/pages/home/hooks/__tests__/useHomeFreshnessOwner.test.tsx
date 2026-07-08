@@ -77,7 +77,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
     vi.useRealTimers();
   });
 
-  it("waits for foreground-active state before refreshing after foreground events", async () => {
+  it("waits for foreground-active state before refreshing from foreground events", async () => {
     vi.useFakeTimers();
     const refreshRequestLogs = vi.fn().mockResolvedValue(null);
     let foregroundArgs: { onForeground: () => void } | null = null;
@@ -117,6 +117,10 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
       foregroundActive: true,
     });
 
+    act(() => {
+      foregroundArgs?.onForeground();
+    });
+
     await act(async () => {
       await vi.runOnlyPendingTimersAsync();
       await Promise.resolve();
@@ -134,6 +138,64 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
     });
 
     expect(refreshRequestLogs).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("polls while request activity is pending so stale active snapshots self-correct", async () => {
+    vi.useFakeTimers();
+    const refreshRequestLogs = vi.fn().mockResolvedValue(null);
+
+    const view = renderHook(
+      (props: {
+        overviewActive: boolean;
+        foregroundActive: boolean;
+        requestActivityPending: boolean;
+      }) =>
+        useHomeFreshnessOwner({
+          ...props,
+          requestLogsRefreshWindowMs: 200,
+          requestActivityWatchdogIntervalMs: 5000,
+          onRefreshRequestLogs: refreshRequestLogs,
+        }),
+      {
+        initialProps: {
+          overviewActive: true,
+          foregroundActive: true,
+          requestActivityPending: true,
+        },
+      }
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4999);
+      await Promise.resolve();
+    });
+    expect(refreshRequestLogs).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+    });
+    expect(refreshRequestLogs).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+    });
+    expect(refreshRequestLogs).toHaveBeenCalledTimes(1);
+
+    view.rerender({
+      overviewActive: true,
+      foregroundActive: true,
+      requestActivityPending: false,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5200);
+      await Promise.resolve();
+    });
+
+    expect(refreshRequestLogs).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 

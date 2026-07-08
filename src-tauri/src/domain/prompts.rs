@@ -404,7 +404,7 @@ fn clear_enabled_for_workspace(
 fn normalize_prompt_name(name: &str) -> crate::shared::error::AppResult<String> {
     let normalized = name.trim();
     if normalized.is_empty() {
-        return Err("SEC_INVALID_INPUT: prompt name is required"
+        return Err("PROMPT_NAME_REQUIRED: prompt name is required"
             .to_string()
             .into());
     }
@@ -476,7 +476,7 @@ INSERT INTO prompts(
                     if err.code == rusqlite::ErrorCode::ConstraintViolation =>
                 {
                     crate::shared::error::AppError::new(
-                        "DB_CONSTRAINT",
+                        "PROMPT_NAME_CONFLICT",
                         format!(
                             "prompt already exists for workspace_id={workspace_id}, name={name}"
                         ),
@@ -546,7 +546,7 @@ WHERE id = ?5
             )
             .map_err(|e| match e {
                 rusqlite::Error::SqliteFailure(err, _) if err.code == rusqlite::ErrorCode::ConstraintViolation => {
-                    crate::shared::error::AppError::new("DB_CONSTRAINT", format!("prompt name already exists for workspace_id={workspace_id}, name={name}"))
+                    crate::shared::error::AppError::new("PROMPT_NAME_CONFLICT", format!("prompt name already exists for workspace_id={workspace_id}, name={name}"))
                 }
                 other => db_err!("failed to update prompt: {other}"),
             })?;

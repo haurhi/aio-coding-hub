@@ -130,6 +130,7 @@ impl<R: tauri::Runtime> RequestContext<R> {
             state.db.clone(),
             state.log_tx.clone(),
             state.plugin_pipeline.clone(),
+            state.active_requests.clone(),
             trace_id.clone(),
             cli_key.clone(),
             method_hint.clone(),
@@ -247,6 +248,28 @@ fn duration_from_secs(secs: u32) -> Option<Duration> {
     }
 }
 
+/// Claude Code `/compact` requests invalidate the whole prompt cache upstream,
+/// so the provider must re-process a near-megabyte prompt before the first
+/// byte arrives. The global default (30s) times out far too early, and the
+/// resulting same-provider retries can trip the circuit breaker (2026-07-04
+/// incident). Fixed floor for now; promote to a user-facing setting if one
+/// size turns out not to fit all providers.
+pub(super) const COMPACT_FIRST_BYTE_TIMEOUT_SECS: u32 = 300;
+
+/// Effective first-byte timeout in seconds for a request. Compact requests are
+/// widened to at least `COMPACT_FIRST_BYTE_TIMEOUT_SECS`; `0` (timeout
+/// disabled) is preserved as-is.
+pub(super) fn effective_first_byte_timeout_secs(
+    configured_secs: u32,
+    is_compact_request: bool,
+) -> u32 {
+    if is_compact_request && configured_secs > 0 {
+        configured_secs.max(COMPACT_FIRST_BYTE_TIMEOUT_SECS)
+    } else {
+        configured_secs
+    }
+}
+
 pub(super) struct RequestContextParts<R: tauri::Runtime = tauri::Wry> {
     pub(super) state: GatewayAppState<R>,
     pub(super) cli_key: String,
@@ -291,4 +314,34 @@ pub(super) struct RequestContextParts<R: tauri::Runtime = tauri::Wry> {
     pub(super) enable_response_fixer: bool,
     pub(super) response_fixer_stream_config: response_fixer::ResponseFixerConfig,
     pub(super) response_fixer_non_stream_config: response_fixer::ResponseFixerConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_request_widens_first_byte_timeout_to_floor() {
+        assert_eq!(effective_first_byte_timeout_secs(30, true), 300);
+        assert_eq!(
+            effective_first_byte_timeout_secs(COMPACT_FIRST_BYTE_TIMEOUT_SECS - 1, true),
+            COMPACT_FIRST_BYTE_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn compact_request_keeps_configured_timeout_above_floor() {
+        assert_eq!(effective_first_byte_timeout_secs(400, true), 400);
+    }
+
+    #[test]
+    fn non_compact_request_keeps_configured_timeout() {
+        assert_eq!(effective_first_byte_timeout_secs(30, false), 30);
+        assert_eq!(effective_first_byte_timeout_secs(400, false), 400);
+    }
+
+    #[test]
+    fn disabled_timeout_stays_disabled_for_compact_request() {
+        assert_eq!(effective_first_byte_timeout_secs(0, true), 0);
+    }
 }

@@ -39,6 +39,7 @@ export function useHomeOverviewFeed({
     limit: 50,
     enabled: overviewActive,
   });
+  const activeRequests = requestLogsFeed.activeRequests ?? [];
 
   const refetchUsageHeatmapSilently = useCallback(async () => {
     if (!shouldRefetchOverviewUsageSeries) return null;
@@ -69,6 +70,7 @@ export function useHomeOverviewFeed({
   const { refreshRequestLogsNow } = useHomeFreshnessOwner({
     overviewActive,
     foregroundActive,
+    requestActivityPending: activeRequests.length > 0,
     requestLogsRefreshWindowMs: 1000,
     onRefreshRequestLogs: refetchRequestLogsSilently,
   });
@@ -115,6 +117,7 @@ export function useHomeOverviewFeed({
         : providerLimitQuery.data != null
       : null,
     requestLogs: requestLogsFeed.requestLogs,
+    activeRequests,
     requestLogsLoading: requestLogsFeed.requestLogsLoading,
     requestLogsRefreshing: requestLogsFeed.requestLogsRefreshing,
     requestLogsAvailable: requestLogsFeed.requestLogsAvailable,

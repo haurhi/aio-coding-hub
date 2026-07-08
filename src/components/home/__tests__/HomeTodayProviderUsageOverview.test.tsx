@@ -58,12 +58,18 @@ function createRunningTrace(
         requested_model: null,
         attempt_index: 1,
         provider_id: providerId,
+        session_reuse: null,
         provider_name: providerName,
         base_url: "https://example.com",
         outcome: "started",
         status: null,
         attempt_started_ms: now - 3_000,
         attempt_duration_ms: 3_000,
+        circuit_state_before: null,
+        circuit_state_after: null,
+        circuit_failure_count: null,
+        circuit_failure_threshold: null,
+        claude_model_mapping: null,
       },
     ],
   };
@@ -333,10 +339,10 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(headerTexts).toEqual([
       "供应商（前 3 个）",
       "总Token",
-      "缓存命中率",
       "输入+输出Token",
-      "总花费",
+      "缓存命中率",
       "成功率",
+      "总花费",
     ]);
     expect(totalTokenHeader).toBeTruthy();
     expect(cacheHitRateHeader).toBeTruthy();
@@ -359,10 +365,10 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(rowCellTexts(geminiRow as HTMLElement)).toEqual([
       "Gemini Mirror",
       "10.2K",
-      "20.9%",
       "8.0K",
-      "$0.90",
+      "20.9%",
       "85.7%",
+      "$0.90",
     ]);
     expect(within(geminiRow as HTMLElement).getByText("$0.90")).toBeInTheDocument();
     expect(within(geminiRow as HTMLElement).getByText("85.7%")).toBeInTheDocument();
@@ -370,18 +376,18 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(rowCellTexts(claudeRow as HTMLElement)).toEqual([
       "Claude Main",
       "6.2K",
-      "16.7%",
       "5.0K",
-      "$0.50",
+      "16.7%",
       "100.0%",
+      "$0.50",
     ]);
     expect(rowCellTexts(openaiRow as HTMLElement)).toEqual([
       "OpenAI Primary",
       "5.8K",
-      "31.6%",
       "4.0K",
-      "$0.70",
+      "31.6%",
       "100.0%",
+      "$0.70",
     ]);
   });
 
@@ -458,10 +464,10 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(rowCellTexts(deepseekRow as HTMLElement)).toEqual([
       "DeepSeek Relay",
       "3.5K",
-      "27.6%",
       "2.0K",
-      "—",
+      "27.6%",
       "100.0%",
+      "—",
     ]);
   });
 
@@ -741,10 +747,10 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(rowCellTexts(providerRow as HTMLElement)).toEqual([
       "claude/Runtime Fresh",
       "9.2K",
-      "1.9%",
       "8.0K",
-      "$0.10",
+      "1.9%",
       "100.0%",
+      "$0.10",
     ]);
   });
 
@@ -775,8 +781,8 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(rowCellTexts(providerRow as HTMLElement)).toEqual([
       "Zero Request Relay",
       "1.2K",
-      "—",
       "1.0K",
+      "—",
       "—",
       "—",
     ]);
@@ -921,7 +927,7 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(within(providerRow as HTMLElement).getByLabelText("进行中")).toBeInTheDocument();
   });
 
-  it("keeps running provider hints for long pending traces backed by request logs", () => {
+  it("keeps running provider hints for long pending traces backed by the active registry", () => {
     vi.useFakeTimers();
     const baseTime = 1_700_000_000_000;
     vi.setSystemTime(baseTime);
@@ -947,6 +953,19 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
             created_at_ms: baseTime - 11 * 60 * 1000,
             created_at: Math.floor((baseTime - 11 * 60 * 1000) / 1000),
           }),
+        ]}
+        activeRequests={[
+          {
+            trace_id: longTrace.trace_id,
+            cli_key: "claude",
+            session_id: null,
+            method: "POST",
+            path: "/v1/messages",
+            query: null,
+            requested_model: "claude-3-opus",
+            created_at_ms: baseTime - 11 * 60 * 1000,
+            last_activity_ms: baseTime - 6 * 60 * 1000,
+          },
         ]}
       />
     );

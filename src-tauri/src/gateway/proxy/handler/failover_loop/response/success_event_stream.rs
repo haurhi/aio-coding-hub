@@ -53,6 +53,7 @@ where
         cx2cc_active,
         protocol_bridge_type,
         anthropic_stream_requested: _,
+        ..
     } = attempt_ctx;
     let selection_method = dc::selection_method(provider_index, retry_index, session_reuse);
     let reason_code = dc::success_reason_code(provider_index, retry_index);
@@ -155,6 +156,7 @@ where
                     decision,
                     outcome,
                     reason: format!("first chunk read error (event-stream): {err}"),
+                    timeout_secs: Some(upstream_first_byte_timeout_secs),
                 })
                 .await;
             }
@@ -186,6 +188,7 @@ where
                     decision,
                     outcome,
                     reason: "first byte timeout (event-stream)".to_string(),
+                    timeout_secs: Some(upstream_first_byte_timeout_secs),
                 })
                 .await;
             }
@@ -228,6 +231,7 @@ where
                 decision,
                 outcome,
                 reason: "upstream returned empty event-stream".to_string(),
+                timeout_secs: Some(upstream_first_byte_timeout_secs),
             })
             .await;
         }
@@ -255,6 +259,10 @@ where
             circuit_state_after: None,
             circuit_failure_count: Some(circuit_before.failure_count),
             circuit_failure_threshold: Some(circuit_before.failure_threshold),
+            circuit_recover_at_unix: None,
+            circuit_trigger_error_code: None,
+            provider_bridged: Some(provider_ctx_owned.provider_bridged),
+            timeout_secs: None,
         });
 
         emit_attempt_event_and_log_with_circuit_before(

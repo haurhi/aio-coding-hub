@@ -12,6 +12,8 @@ import {
 } from "../generatedIpc";
 import type { CliKey } from "../providers/providers";
 import { narrowGeneratedStringUnion, type Override } from "../generatedTypeUtils";
+import { AppErrorCodes } from "../../constants/appErrorCodes";
+import { FeValidationError } from "../../utils/errors";
 
 const CLI_KEY_VALUES = ["claude", "codex", "gemini"] as const satisfies readonly CliKey[];
 const DEFAULT_PROMPT_SYNC_ACTION_VALUES = [
@@ -84,7 +86,9 @@ function normalizeOptionalPromptId(promptId: number | null | undefined): number 
 function normalizePromptName(name: string): string {
   const normalized = name.trim();
   if (!normalized) {
-    throw new Error("SEC_INVALID_INPUT: prompt name is required");
+    // Same code the backend emits (domain/prompts.rs) so the save toast maps
+    // this pre-IPC failure to the same friendly message.
+    throw new FeValidationError(`${AppErrorCodes.PROMPT_NAME_REQUIRED}: prompt name is required`);
   }
   return normalized;
 }

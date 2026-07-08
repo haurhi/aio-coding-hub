@@ -142,6 +142,14 @@ pub(super) fn sanitize_log_retention_days(settings: &mut AppSettings) -> bool {
     false
 }
 
+pub(super) fn sanitize_request_log_retention_days(settings: &mut AppSettings) -> bool {
+    if settings.request_log_retention_days > MAX_REQUEST_LOG_RETENTION_DAYS {
+        settings.request_log_retention_days = MAX_REQUEST_LOG_RETENTION_DAYS;
+        return true;
+    }
+    false
+}
+
 pub(super) fn sanitize_provider_cooldown_seconds(settings: &mut AppSettings) -> bool {
     if settings.provider_cooldown_seconds > MAX_PROVIDER_COOLDOWN_SECONDS {
         settings.provider_cooldown_seconds = MAX_PROVIDER_COOLDOWN_SECONDS;
@@ -628,9 +636,21 @@ fn migrate_add_codex_oauth_compatible_proxy_mode(
     )
 }
 
+fn migrate_add_request_log_retention(
+    settings: &mut AppSettings,
+    schema_version_present: bool,
+) -> bool {
+    // v34: Add request-log DB retention days (default 0 = keep forever).
+    migrate_bump_schema_version(
+        settings,
+        schema_version_present,
+        SCHEMA_VERSION_ADD_REQUEST_LOG_RETENTION,
+    )
+}
+
 type SettingsMigration = fn(&mut AppSettings, bool) -> bool;
 
-const SETTINGS_MIGRATIONS: [SettingsMigration; 27] = [
+const SETTINGS_MIGRATIONS: [SettingsMigration; 28] = [
     migrate_disable_upstream_timeouts,
     migrate_add_gateway_rectifiers,
     migrate_add_circuit_breaker_notice,
@@ -658,6 +678,7 @@ const SETTINGS_MIGRATIONS: [SettingsMigration; 27] = [
     migrate_add_upstream_proxy,
     migrate_add_upstream_proxy_credentials,
     migrate_add_codex_oauth_compatible_proxy_mode,
+    migrate_add_request_log_retention,
 ];
 
 fn apply_settings_migrations(settings: &mut AppSettings, schema_version_present: bool) -> bool {
@@ -675,6 +696,7 @@ pub(super) fn repair_settings(
 ) -> AppResult<bool> {
     let mut repaired = apply_settings_migrations(settings, schema_version_present);
     repaired |= sanitize_log_retention_days(settings);
+    repaired |= sanitize_request_log_retention_days(settings);
     repaired |= sanitize_failover_settings(settings);
     repaired |= sanitize_circuit_breaker_settings(settings);
     repaired |= sanitize_provider_cooldown_seconds(settings);

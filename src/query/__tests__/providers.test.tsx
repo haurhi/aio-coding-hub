@@ -98,6 +98,7 @@ function makeProvider(
     bridge_type: partial.bridge_type ?? null,
     stream_idle_timeout_seconds: partial.stream_idle_timeout_seconds ?? null,
     model_mapping: partial.model_mapping ?? {},
+    extension_values: partial.extension_values ?? [],
     api_key_configured: partial.api_key_configured ?? false,
   };
 }

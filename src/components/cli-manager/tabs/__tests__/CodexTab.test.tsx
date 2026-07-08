@@ -810,4 +810,161 @@ describe("components/cli-manager/tabs/CodexTab", () => {
     expect(screen.getByRole("button", { name: "编辑" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "取消" })).not.toBeInTheDocument();
   });
+
+  it("validates, cancels, reloads, and saves raw config.toml edits", async () => {
+    const persistCodexConfigToml = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    vi.mocked(cliManagerCodexConfigTomlValidate)
+      .mockResolvedValueOnce({ ok: true, error: null })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { message: "invalid toml", line: 2, column: 3 },
+      })
+      .mockResolvedValueOnce({ ok: true, error: null })
+      .mockResolvedValueOnce({ ok: true, error: null });
+
+    render(
+      <CliManagerCodexTab
+        codexAvailable="available"
+        codexLoading={false}
+        codexConfigLoading={false}
+        codexConfigSaving={false}
+        codexConfigTomlLoading={false}
+        codexConfigTomlSaving={false}
+        codexInfo={createCodexInfo()}
+        codexConfig={createCodexConfig({ config_path: null })}
+        codexConfigToml={{
+          config_path: "/home/user/.codex/config.toml",
+          exists: true,
+          toml: 'model = "gpt-5"\n',
+        }}
+        refreshCodex={vi.fn()}
+        openCodexConfigDir={vi.fn()}
+        persistCodexConfig={vi.fn()}
+        persistCodexConfigToml={persistCodexConfigToml}
+      />
+    );
+
+    fireEvent.click(screen.getByText("高级配置（config.toml）"));
+    const reloadButton = await screen.findByRole("button", { name: "重新加载" });
+    expect(
+      screen.getByText((_, element) => element?.textContent === "/home/user/.codex/config.toml")
+    ).toBeInTheDocument();
+
+    fireEvent.click(reloadButton);
+    expect(screen.getByLabelText("mock-code-editor")).toHaveValue('model = "gpt-5"\n');
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    await waitFor(() => expect(cliManagerCodexConfigTomlValidate).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("mock-code-editor"), {
+      target: { value: "bad = [" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText("TOML 校验失败")).toBeInTheDocument();
+    expect(screen.getByText("invalid toml")).toBeInTheDocument();
+    expect(screen.getByText("(line 2, column 3)")).toBeInTheDocument();
+    expect(persistCodexConfigToml).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("mock-code-editor"), {
+      target: { value: 'model = "gpt-5.4"\n' },
+    });
+    await waitFor(
+      () => {
+        expect(cliManagerCodexConfigTomlValidate).toHaveBeenCalledWith('model = "gpt-5.4"\n');
+      },
+      { timeout: 1200 }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(persistCodexConfigToml).toHaveBeenCalledWith('model = "gpt-5.4"\n');
+    });
+    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(persistCodexConfigToml).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "编辑" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("mock-code-editor"), {
+      target: { value: 'model = "discarded"\n' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByLabelText("mock-code-editor")).toHaveValue('model = "gpt-5"\n');
+  });
+
+  it("renders loading, missing config, fallback info, and detection error states", async () => {
+    const refreshCodex = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <CliManagerCodexTab
+        codexAvailable="checking"
+        codexLoading={true}
+        codexConfigLoading={true}
+        codexConfigSaving={false}
+        codexConfigTomlLoading={false}
+        codexConfigTomlSaving={false}
+        codexInfo={null}
+        codexConfig={null}
+        codexConfigToml={null}
+        refreshCodex={refreshCodex}
+        openCodexConfigDir={vi.fn()}
+        persistCodexConfig={vi.fn()}
+        persistCodexConfigToml={vi.fn().mockResolvedValue(false)}
+      />
+    );
+
+    expect(screen.getByText("加载中...")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeDisabled();
+    expect(screen.getByText("暂无配置，请尝试刷新")).toBeInTheDocument();
+
+    rerender(
+      <CliManagerCodexTab
+        codexAvailable="available"
+        codexLoading={false}
+        codexConfigLoading={false}
+        codexConfigSaving={false}
+        codexConfigTomlLoading={false}
+        codexConfigTomlSaving={false}
+        codexInfo={createCodexInfo({
+          found: false,
+          version: null,
+          executable_path: null,
+          resolved_via: null,
+          shell: null,
+          error: "codex boom",
+        })}
+        codexConfig={createCodexConfig({
+          exists: false,
+          executable_path: undefined,
+          resolved_via: undefined,
+          config_dir: "",
+          config_path: "",
+          user_home_default_dir: "",
+          follow_codex_home_dir: "",
+          approval_policy: null,
+          sandbox_mode: null,
+          model: null,
+          model_reasoning_effort: null,
+          plan_mode_reasoning_effort: null,
+          web_search: null,
+          personality: "  ",
+        })}
+        codexConfigToml={null}
+        refreshCodex={refreshCodex}
+        openCodexConfigDir={vi.fn()}
+        persistCodexConfig={vi.fn()}
+        persistCodexConfigToml={vi.fn().mockResolvedValue(false)}
+      />
+    );
+
+    expect(screen.getByText("未检测到")).toBeInTheDocument();
+    expect(screen.getByText("不存在（将自动创建）")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.getByText("检测失败：")).toBeInTheDocument();
+    expect(screen.getByText("codex boom")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(refreshCodex).toHaveBeenCalled());
+  });
 });

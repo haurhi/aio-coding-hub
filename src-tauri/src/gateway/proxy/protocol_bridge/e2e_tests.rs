@@ -1271,6 +1271,42 @@ mod tests {
         assert_eq!(anthropic_resp["usage"]["output_tokens"], 2);
     }
 
+    #[test]
+    fn acceptance_cx2cc_round_trip_preserves_requested_model_and_usage() {
+        let bridge = get_bridge("cx2cc").unwrap();
+        let ctx = cx2cc_ctx();
+
+        let anthropic_req = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "Hello"}
+            ]
+        });
+
+        let translated_req = bridge.translate_request(anthropic_req, &ctx).unwrap();
+        assert_eq!(translated_req.target_path, "/v1/responses");
+
+        let openai_resp = json!({
+            "id": "resp_acceptance",
+            "model": translated_req.body["model"],
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hi"}]
+                }
+            ],
+            "usage": {"input_tokens": 13, "output_tokens": 5}
+        });
+
+        let anthropic_resp = bridge.translate_response(openai_resp, &ctx).unwrap();
+        assert_eq!(anthropic_resp["model"], "claude-sonnet-4-20250514");
+        assert_eq!(anthropic_resp["usage"]["input_tokens"], 13);
+        assert_eq!(anthropic_resp["usage"]["output_tokens"], 5);
+    }
+
     // ── Model mapping ───────────────────────────────────────────────────
 
     #[test]
@@ -1344,8 +1380,8 @@ mod tests {
         );
 
         // When inactive, should pass through unchanged — verify via direct poll
-        let waker = std::task::Waker::from(std::sync::Arc::new(NoopWaker));
-        let mut cx = Context::from_waker(&waker);
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
         let mut stream = stream;
         match Pin::new(&mut stream).poll_next(&mut cx) {
             Poll::Ready(Some(Ok(chunk))) => {
@@ -1353,11 +1389,6 @@ mod tests {
             }
             other => panic!("expected Ready(Some(Ok)), got {other:?}"),
         }
-    }
-
-    struct NoopWaker;
-    impl std::task::Wake for NoopWaker {
-        fn wake(self: std::sync::Arc<Self>) {}
     }
 
     // ── Cache token preservation ────────────────────────────────────────

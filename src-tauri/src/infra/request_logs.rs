@@ -390,6 +390,118 @@ pub fn spawn_write_through<R: tauri::Runtime>(
     true
 }
 
+pub(crate) fn touch_activity(
+    db: &db::Db,
+    trace_id: &str,
+    cli_key: &str,
+    last_activity_ms: i64,
+    details: Option<String>,
+) -> AppResult<usize> {
+    validate_cli_key(cli_key).map_err(crate::shared::error::AppError::from)?;
+    let last_activity_ms = last_activity_ms.max(0);
+    let conn = db.open_connection()?;
+    conn.execute(
+        r#"
+UPDATE request_logs
+SET
+  last_activity_ms = CASE
+    WHEN last_activity_ms IS NULL OR ?3 > last_activity_ms THEN ?3
+    ELSE last_activity_ms
+  END,
+  activity_details_json = CASE
+    WHEN last_activity_ms IS NULL OR ?3 >= last_activity_ms THEN COALESCE(?4, activity_details_json)
+    ELSE activity_details_json
+  END
+WHERE trace_id = ?1
+  AND cli_key = ?2
+  AND status IS NULL
+  AND error_code IS NULL
+"#,
+        params![trace_id, cli_key, last_activity_ms, details],
+    )
+    .map_err(|e| db_err!("failed to touch request log activity: {e}"))
+}
+
+const RETENTION_PURGE_BATCH_SIZE: usize = 1000;
+const RETENTION_PURGE_BATCH_PAUSE_MS: u64 = 50;
+const RETENTION_TASK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Deletes request logs older than `retention_days`, in small batches so the
+/// write lock is never held long (WAL-friendly). `retention_days == 0` means
+/// retention is disabled (keep forever) and nothing is deleted.
+pub fn purge_expired(db: &db::Db, retention_days: u32, now_unix: i64) -> AppResult<u64> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let cutoff = now_unix.saturating_sub(i64::from(retention_days).saturating_mul(24 * 60 * 60));
+    let mut total: u64 = 0;
+    loop {
+        // Re-acquire per batch so the pooled connection (pool max is small) is
+        // not held across the inter-batch pauses of a long purge.
+        let conn = db.open_connection()?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM request_logs WHERE id IN (
+                   SELECT id FROM request_logs WHERE created_at < ?1 LIMIT ?2
+                 )",
+                params![cutoff, RETENTION_PURGE_BATCH_SIZE as i64],
+            )
+            .map_err(|e| db_err!("failed to purge expired request_logs: {e}"))?;
+        drop(conn);
+        total = total.saturating_add(deleted as u64);
+        if deleted < RETENTION_PURGE_BATCH_SIZE {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(RETENTION_PURGE_BATCH_PAUSE_MS));
+    }
+    Ok(total)
+}
+
+/// Spawns the daily request-log retention job (idempotent). Reads the setting
+/// fresh on each tick — fail-open to disabled — so changes apply without a
+/// restart. Lives at app level, not in the gateway: retention must not depend
+/// on the gateway running.
+pub(crate) fn spawn_retention_task(app: tauri::AppHandle, db: db::Db) {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        run_retention_once(&app, &db).await;
+
+        let mut interval = tokio::time::interval(RETENTION_TASK_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // First tick is immediate; skip it so we don't run twice at startup.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            run_retention_once(&app, &db).await;
+        }
+    });
+}
+
+async fn run_retention_once(app: &tauri::AppHandle, db: &db::Db) {
+    let app = app.clone();
+    let db = db.clone();
+    let result = crate::blocking::run("request_log_retention", move || {
+        let retention_days = crate::settings::request_log_retention_days_fail_open(&app);
+        if retention_days == 0 {
+            return Ok::<u64, crate::shared::error::AppError>(0);
+        }
+        let deleted = purge_expired(&db, retention_days, now_unix_seconds())?;
+        if deleted > 0 {
+            tracing::info!(retention_days, deleted, "purged expired request logs");
+        }
+        Ok(deleted)
+    })
+    .await;
+
+    if let Err(err) = result {
+        tracing::warn!("request-log retention task failed: {}", err);
+    }
+}
+
 pub(crate) fn reconcile_unresolved_pending(
     db: &db::Db,
     reason: RequestLogReconcileReason,
@@ -543,11 +655,13 @@ fn insert_batch_once(
 		  cost_usd_femto,
 		  cost_multiplier,
 		  created_at_ms,
+		  last_activity_ms,
+		  activity_details_json,
 		  created_at,
 		  final_provider_id,
 		  provider_chain_json,
 		  error_details_json
-		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
 		ON CONFLICT(trace_id) DO UPDATE SET
 		  method = excluded.method,
 		  path = excluded.path,
@@ -575,10 +689,21 @@ fn insert_batch_once(
 		    WHEN request_logs.created_at_ms = 0 THEN excluded.created_at_ms
 		    ELSE request_logs.created_at_ms
 		  END,
+		  last_activity_ms = CASE
+		    WHEN request_logs.last_activity_ms IS NULL THEN excluded.last_activity_ms
+		    WHEN excluded.last_activity_ms > request_logs.last_activity_ms THEN excluded.last_activity_ms
+		    ELSE request_logs.last_activity_ms
+		  END,
+		  activity_details_json = COALESCE(request_logs.activity_details_json, excluded.activity_details_json),
 		  created_at = CASE WHEN request_logs.created_at = 0 THEN excluded.created_at ELSE request_logs.created_at END,
 		  final_provider_id = excluded.final_provider_id,
 		  provider_chain_json = excluded.provider_chain_json,
 		  error_details_json = excluded.error_details_json
+		WHERE NOT (
+		  (request_logs.status IS NOT NULL OR request_logs.error_code IS NOT NULL)
+		  AND excluded.status IS NULL
+		  AND excluded.error_code IS NULL
+		)
 		"#,
             )
             .map_err(|e| DbWriteError::from_rusqlite("failed to prepare insert", e))?;
@@ -706,6 +831,8 @@ fn insert_batch_once(
                 cost_usd_femto,
                 cost_multiplier,
                 item.created_at_ms,
+                item.last_activity_ms.unwrap_or(item.created_at_ms),
+                item.activity_details_json,
                 item.created_at,
                 final_provider_id_db,
                 item.provider_chain_json,
@@ -811,10 +938,10 @@ GROUP BY cli_key, session_id
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_cx2cc_cost_basis, reconcile_unresolved_pending, try_acquire_write_through_permit,
-        writer_loop, InsertBatchCache, RequestLogInsert, RequestLogReconcileReason,
-        COST_MULTIPLIER_CACHE_MAX_ENTRIES, EFFECTIVE_COST_MULTIPLIER_SQL,
-        MODEL_PRICE_CACHE_MAX_ENTRIES, WRITE_BATCH_MAX,
+        insert_batch_once, parse_cx2cc_cost_basis, purge_expired, reconcile_unresolved_pending,
+        touch_activity, try_acquire_write_through_permit, writer_loop, InsertBatchCache,
+        RequestLogInsert, RequestLogReconcileReason, COST_MULTIPLIER_CACHE_MAX_ENTRIES,
+        EFFECTIVE_COST_MULTIPLIER_SQL, MODEL_PRICE_CACHE_MAX_ENTRIES, WRITE_BATCH_MAX,
     };
     use rusqlite::{params, Connection};
     use std::sync::Arc;
@@ -848,6 +975,8 @@ mod tests {
             provider_chain_json: None,
             error_details_json: None,
             created_at_ms: 1_770_000_000_000,
+            last_activity_ms: None,
+            activity_details_json: None,
             created_at: 1_770_000_000,
         }
     }
@@ -975,6 +1104,336 @@ WHERE trace_id = ?1
         drop(first);
         assert!(try_acquire_write_through_permit(limiter).is_some());
         drop(second);
+    }
+
+    #[test]
+    fn purge_expired_deletes_only_rows_older_than_retention() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        let now_unix = 1_770_000_000_i64;
+        let day_secs = 24 * 60 * 60;
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[
+                RequestLogInsert {
+                    created_at: now_unix - 10 * day_secs,
+                    created_at_ms: (now_unix - 10 * day_secs) * 1000,
+                    ..request_log_insert("trace-purge-old")
+                },
+                RequestLogInsert {
+                    created_at: now_unix - day_secs / 2,
+                    created_at_ms: (now_unix - day_secs / 2) * 1000,
+                    ..request_log_insert("trace-purge-recent")
+                },
+            ],
+            &mut cache,
+        )
+        .expect("insert rows");
+
+        let deleted = purge_expired(&db, 7, now_unix).expect("purge");
+        assert_eq!(deleted, 1);
+        assert_eq!(count_request_logs(&db), 1);
+
+        let conn = db.open_connection().expect("open connection");
+        let remaining: String = conn
+            .query_row("SELECT trace_id FROM request_logs", [], |row| row.get(0))
+            .expect("remaining row");
+        assert_eq!(remaining, "trace-purge-recent");
+    }
+
+    #[test]
+    fn purge_expired_is_disabled_when_retention_is_zero() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        let now_unix = 1_770_000_000_i64;
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                created_at: now_unix - 400 * 24 * 60 * 60,
+                created_at_ms: (now_unix - 400 * 24 * 60 * 60) * 1000,
+                ..request_log_insert("trace-purge-disabled")
+            }],
+            &mut cache,
+        )
+        .expect("insert row");
+
+        let deleted = purge_expired(&db, 0, now_unix).expect("purge disabled");
+        assert_eq!(deleted, 0);
+        assert_eq!(count_request_logs(&db), 1);
+    }
+
+    #[test]
+    fn purge_expired_drains_multiple_batches() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        let now_unix = 1_770_000_000_i64;
+        let old_created_at = now_unix - 30 * 24 * 60 * 60;
+
+        // More rows than one purge batch (batch size 1000) to cover the loop.
+        let rows: Vec<RequestLogInsert> = (0..1100)
+            .map(|index| RequestLogInsert {
+                created_at: old_created_at,
+                created_at_ms: old_created_at * 1000,
+                ..request_log_insert(&format!("trace-purge-batch-{index}"))
+            })
+            .collect();
+        for chunk in rows.chunks(WRITE_BATCH_MAX) {
+            insert_batch_once(&app_handle, &db, chunk, &mut cache).expect("insert chunk");
+        }
+
+        let deleted = purge_expired(&db, 7, now_unix).expect("purge batches");
+        assert_eq!(deleted, 1100);
+        assert_eq!(count_request_logs(&db), 0);
+    }
+
+    #[test]
+    fn request_log_insert_initializes_last_activity_from_created_at() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                status: None,
+                error_code: None,
+                ..request_log_insert("trace-activity-init")
+            }],
+            &mut cache,
+        )
+        .expect("insert placeholder");
+
+        let conn = db.open_connection().expect("open connection");
+        let value: i64 = conn
+            .query_row(
+                "SELECT last_activity_ms FROM request_logs WHERE trace_id = ?1",
+                ["trace-activity-init"],
+                |row| row.get(0),
+            )
+            .expect("read last activity");
+        assert_eq!(value, 1_770_000_000_000);
+    }
+
+    #[test]
+    fn touch_activity_only_updates_pending_rows_and_never_moves_backwards() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                status: None,
+                error_code: None,
+                ..request_log_insert("trace-touch")
+            }],
+            &mut cache,
+        )
+        .expect("insert pending");
+
+        touch_activity(
+            &db,
+            "trace-touch",
+            "claude",
+            1_770_000_030_000,
+            Some(r#"{"chunk_count":1}"#.to_string()),
+        )
+        .expect("touch newer");
+        touch_activity(
+            &db,
+            "trace-touch",
+            "claude",
+            1_770_000_010_000,
+            Some(r#"{"chunk_count":0}"#.to_string()),
+        )
+        .expect("older touch ignored");
+
+        let conn = db.open_connection().expect("open connection");
+        let row: (i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_activity_ms, activity_details_json FROM request_logs WHERE trace_id = ?1",
+                ["trace-touch"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read activity");
+        assert_eq!(row.0, 1_770_000_030_000);
+        assert_eq!(row.1.as_deref(), Some(r#"{"chunk_count":1}"#));
+        drop(conn);
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[request_log_insert("trace-touch")],
+            &mut cache,
+        )
+        .expect("finalize");
+        let changed = touch_activity(&db, "trace-touch", "claude", 1_770_000_060_000, None)
+            .expect("touch completed row");
+        assert_eq!(changed, 0);
+    }
+
+    #[test]
+    fn request_log_finalize_preserves_newer_last_activity_from_insert_payload() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                status: None,
+                error_code: None,
+                ..request_log_insert("trace-final-activity")
+            }],
+            &mut cache,
+        )
+        .expect("insert pending");
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                last_activity_ms: Some(1_770_000_090_000),
+                activity_details_json: Some(r#"{"terminal_signal":"completed"}"#.to_string()),
+                ..request_log_insert("trace-final-activity")
+            }],
+            &mut cache,
+        )
+        .expect("finalize");
+
+        let conn = db.open_connection().expect("open connection");
+        let row: (i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_activity_ms, activity_details_json FROM request_logs WHERE trace_id = ?1",
+                ["trace-final-activity"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read activity");
+        assert_eq!(row.0, 1_770_000_090_000);
+        assert_eq!(row.1.as_deref(), Some(r#"{"terminal_signal":"completed"}"#));
+    }
+
+    #[test]
+    fn late_placeholder_does_not_downgrade_terminal_request_log() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let mut cache = InsertBatchCache::default();
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                attempts_json: r#"[{"outcome":"success"}]"#.to_string(),
+                input_tokens: Some(12),
+                output_tokens: Some(34),
+                total_tokens: Some(46),
+                usage_json: Some(r#"{"input_tokens":12,"output_tokens":34}"#.to_string()),
+                requested_model: Some("claude-sonnet-4".to_string()),
+                provider_chain_json: Some(r#"[{"provider":"anthropic"}]"#.to_string()),
+                ..request_log_insert("trace-late-placeholder")
+            }],
+            &mut cache,
+        )
+        .expect("insert terminal");
+
+        insert_batch_once(
+            &app_handle,
+            &db,
+            &[RequestLogInsert {
+                status: None,
+                error_code: None,
+                duration_ms: 0,
+                ttfb_ms: None,
+                attempts_json: "[]".to_string(),
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                usage_json: None,
+                requested_model: None,
+                provider_chain_json: None,
+                error_details_json: None,
+                ..request_log_insert("trace-late-placeholder")
+            }],
+            &mut cache,
+        )
+        .expect("insert late placeholder");
+
+        struct TerminalRow {
+            status: Option<i64>,
+            error_code: Option<String>,
+            duration_ms: i64,
+            ttfb_ms: Option<i64>,
+            input_tokens: Option<i64>,
+            output_tokens: Option<i64>,
+            total_tokens: Option<i64>,
+            attempts_json: String,
+            usage_json: Option<String>,
+            requested_model: Option<String>,
+            provider_chain_json: Option<String>,
+        }
+
+        let conn = db.open_connection().expect("open connection");
+        let row = conn
+            .query_row(
+                r#"
+SELECT
+  status,
+  error_code,
+  duration_ms,
+  ttfb_ms,
+  input_tokens,
+  output_tokens,
+  total_tokens,
+  attempts_json,
+  usage_json,
+  requested_model,
+  provider_chain_json
+FROM request_logs
+WHERE trace_id = ?1
+"#,
+                ["trace-late-placeholder"],
+                |row| {
+                    Ok(TerminalRow {
+                        status: row.get(0)?,
+                        error_code: row.get(1)?,
+                        duration_ms: row.get(2)?,
+                        ttfb_ms: row.get(3)?,
+                        input_tokens: row.get(4)?,
+                        output_tokens: row.get(5)?,
+                        total_tokens: row.get(6)?,
+                        attempts_json: row.get(7)?,
+                        usage_json: row.get(8)?,
+                        requested_model: row.get(9)?,
+                        provider_chain_json: row.get(10)?,
+                    })
+                },
+            )
+            .expect("read request log");
+
+        assert_eq!(row.status, Some(200));
+        assert_eq!(row.error_code, None);
+        assert_eq!(row.duration_ms, 10);
+        assert_eq!(row.ttfb_ms, Some(5));
+        assert_eq!(row.input_tokens, Some(12));
+        assert_eq!(row.output_tokens, Some(34));
+        assert_eq!(row.total_tokens, Some(46));
+        assert_eq!(row.attempts_json, r#"[{"outcome":"success"}]"#);
+        assert_eq!(
+            row.usage_json.as_deref(),
+            Some(r#"{"input_tokens":12,"output_tokens":34}"#)
+        );
+        assert_eq!(row.requested_model.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(
+            row.provider_chain_json.as_deref(),
+            Some(r#"[{"provider":"anthropic"}]"#)
+        );
     }
 
     #[test]

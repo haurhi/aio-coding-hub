@@ -1,11 +1,11 @@
 // Usage:
 // - 链路 tooltip 的富文本内容组件，展示请求路径概览 + 每个 provider 的尝试详情。
-// - 由 `buildRequestRouteMeta` 在 HomeLogShared.tsx 中调用。
+// - 由 `buildRequestRouteMeta` 在 requestLogPresentation.ts 中调用。
 // - skipped 的 provider 不在 hops 中，仅通过标签 [跳过*N] 提示。
 
 import type { RequestLogRouteHop } from "../../services/gateway/requestLogs";
 import { cn } from "../../utils/cn";
-import { getErrorCodeLabel } from "./HomeLogShared";
+import { getErrorCodeLabel } from "./requestLogErrorLabels";
 
 type RouteTooltipContentProps = {
   hops: RequestLogRouteHop[];
@@ -44,7 +44,10 @@ export function RouteTooltipContent({
           {hops.map((hop, idx) => {
             const name = resolveProviderName(hop.provider_name);
             return (
-              <span key={idx} className="flex items-center gap-1">
+              <span
+                key={`${hop.provider_id}-${hop.status ?? "pending"}-${hop.error_code ?? "ok"}-${name}`}
+                className="flex items-center gap-1"
+              >
                 {idx > 0 && <span className="text-muted-foreground">→</span>}
                 <span className="text-white">{name}</span>
               </span>
@@ -58,7 +61,7 @@ export function RouteTooltipContent({
       <div className="flex flex-col gap-1.5">
         {hops.map((hop, idx) => (
           <RouteHopRow
-            key={`${hop.provider_id}-${idx}`}
+            key={`${hop.provider_id}-${hop.status ?? "pending"}-${hop.error_code ?? "ok"}-${idx}`}
             hop={hop}
             isLast={idx === hops.length - 1}
             finalStatus={finalStatus}

@@ -47,6 +47,8 @@ function requestEvent(
     input_tokens: opts.input,
     cache_read_input_tokens: opts.read,
     cache_creation_input_tokens: opts.create,
+    // claude + non-bridged provider: backend sends effective == raw input.
+    effective_input_tokens: opts.input,
   } as any;
 }
 

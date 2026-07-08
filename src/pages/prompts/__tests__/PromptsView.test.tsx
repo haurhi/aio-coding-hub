@@ -88,7 +88,7 @@ describe("pages/prompts/PromptsView", () => {
 
     const upsertMutation = { isPending: false, mutateAsync: vi.fn() };
     upsertMutation.mutateAsync.mockRejectedValue(
-      new Error("SEC_INVALID_INPUT: prompt name is required")
+      new Error("PROMPT_NAME_REQUIRED: prompt name is required")
     );
     vi.mocked(usePromptUpsertMutation).mockReturnValue(upsertMutation as any);
     vi.mocked(usePromptSetEnabledMutation).mockReturnValue({
@@ -117,7 +117,7 @@ describe("pages/prompts/PromptsView", () => {
     );
   });
 
-  it("covers tauri-only / db constraint / content required save toasts", async () => {
+  it("covers tauri-only / name conflict / db constraint save toasts", async () => {
     vi.mocked(usePromptsListQuery).mockReturnValue({
       data: [],
       isFetching: false,
@@ -127,8 +127,9 @@ describe("pages/prompts/PromptsView", () => {
     const upsertMutation = { isPending: false, mutateAsync: vi.fn() };
     upsertMutation.mutateAsync
       .mockResolvedValueOnce(null)
-      .mockRejectedValueOnce(new Error("DB_CONSTRAINT: prompt name=dup"))
-      .mockRejectedValueOnce(new Error("SEC_INVALID_INPUT: prompt content is required"))
+      .mockRejectedValueOnce(
+        new Error("PROMPT_NAME_CONFLICT: prompt already exists for workspace_id=1, name=dup")
+      )
       .mockRejectedValueOnce(new Error("DB_CONSTRAINT: other"));
     vi.mocked(usePromptUpsertMutation).mockReturnValue(upsertMutation as any);
     vi.mocked(usePromptSetEnabledMutation).mockReturnValue({
@@ -156,14 +157,6 @@ describe("pages/prompts/PromptsView", () => {
     await waitFor(() =>
       expect(vi.mocked(toast)).toHaveBeenCalledWith(
         expect.stringContaining("保存失败：名称重复（同一工作区下名称必须唯一）")
-      )
-    );
-
-    vi.mocked(toast).mockClear();
-    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(vi.mocked(toast)).toHaveBeenCalledWith(
-        expect.stringContaining("保存失败：内容不能为空")
       )
     );
 

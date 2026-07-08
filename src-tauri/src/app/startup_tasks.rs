@@ -56,6 +56,8 @@ async fn run(app_handle: tauri::AppHandle) {
         }
     }
 
+    crate::request_logs::spawn_retention_task(app_handle.clone(), db.clone());
+
     set_startup_stage(&app_handle, AppStartupStage::ReadingSettings);
     let settings = match crate::app::startup_settings::read(&app_handle).await {
         Ok(settings) => settings,

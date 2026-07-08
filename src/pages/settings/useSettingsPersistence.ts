@@ -16,14 +16,14 @@ export function useSettingsPersistence(options: {
 
   const settingsQuery = useSettingsQuery();
   const settingsSetMutation = useSettingsSetMutation();
-  const { draft, applySnapshot, setField, revertKeys, reconcileSettledKeys } =
-    useSettingsFormController();
   const {
     settingsReady,
     settingsReadErrorMessage,
     settingsWriteBlocked,
     setSettingsReadErrorMessage,
     reportSettingsReadFailure,
+    appliedSettings,
+    appliedSettingsVersion,
     persistedSettingsRef,
     desiredSettingsRef,
   } = useSettingsPersistenceReadState({
@@ -34,7 +34,10 @@ export function useSettingsPersistence(options: {
       error: settingsQuery.error,
       dataUpdatedAt: settingsQuery.dataUpdatedAt,
     },
-    applySnapshot,
+  });
+  const { draft, setField, revertKeys, reconcileSettledKeys } = useSettingsFormController({
+    snapshot: appliedSettings,
+    snapshotVersion: appliedSettingsVersion,
   });
 
   const { settingsSaving, requestPersist, commitNumberField } = useSettingsPersistRunner({
@@ -107,6 +110,12 @@ export function useSettingsPersistence(options: {
     },
     [setField]
   );
+  const setRequestLogRetentionDays = useCallback(
+    (next: number) => {
+      setField("request_log_retention_days", next);
+    },
+    [setField]
+  );
   const setEnableDebugLog = useCallback(
     (next: boolean) => {
       setField("enable_debug_log", next);
@@ -138,6 +147,8 @@ export function useSettingsPersistence(options: {
     setTrayEnabled,
     logRetentionDays: draft.log_retention_days,
     setLogRetentionDays,
+    requestLogRetentionDays: draft.request_log_retention_days,
+    setRequestLogRetentionDays,
     enableDebugLog: draft.enable_debug_log,
     setEnableDebugLog,
 

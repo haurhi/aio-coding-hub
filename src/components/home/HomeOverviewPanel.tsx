@@ -2,7 +2,15 @@
 // - Used by `src/pages/HomePage.tsx` to render the "概览" tab content.
 // - This module is intentionally kept thin: it composes smaller, cohesive sub-components.
 
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { useNowUnix } from "../../hooks/useNowUnix";
 import type { OpenCircuitRow } from "../ProviderCircuitBadge";
 import type { GatewayActiveSession } from "../../services/gateway/gateway";
@@ -16,6 +24,7 @@ import { getOrderedClis } from "../../services/cli/cliPriorityOrder";
 import type { CliKey } from "../../services/providers/providers";
 import type { ProviderLimitUsageRow } from "../../services/providers/providerLimitUsage";
 import type { RequestLogSummary } from "../../services/gateway/requestLogs";
+import type { ActiveRequestSnapshotItem } from "../../services/gateway/requestActivityProjection";
 import type { SortModeSummary } from "../../services/providers/sortModes";
 import type { TraceSession } from "../../services/gateway/traceStore";
 import type { UsageHourlyRow } from "../../services/usage/usage";
@@ -31,7 +40,7 @@ import type { HomeOAuthQuotaRow } from "./homeOAuthQuotaTypes";
 import { HomeRequestLogsPanel } from "./HomeRequestLogsPanel";
 import { HomeTodayProviderUsageOverview } from "./HomeTodayProviderUsageOverview";
 import { HomeUsageSection } from "./HomeUsageSection";
-import type { HomeCliWorkspaceConfig } from "./homeWorkspaceConfigTypes";
+import type { HomeCliWorkspaceConfig, HomeWorkspaceConfigItem } from "./homeWorkspaceConfigTypes";
 
 export type HomeOverviewUsageView = "summary" | "usageChart";
 
@@ -251,6 +260,16 @@ function didKeysChange(current: string[], previous: string[]) {
   );
 }
 
+type SessionsTabState = {
+  tab: HomeOverviewTabKey;
+  openCircuitKeys: string[] | null;
+};
+
+type HomeOverviewTabItem = {
+  key: HomeOverviewTabKey;
+  label: string;
+};
+
 function OverviewPanelFallback() {
   return (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -261,177 +280,259 @@ function OverviewPanelFallback() {
     </div>
   );
 }
-export type HomeOverviewPanelProps = {
-  showCustomTooltip: boolean;
-  devPreviewEnabled?: boolean;
-  showHomeHeatmap: boolean;
-  showHomeUsage?: boolean;
-  cliPriorityOrder?: CliKey[];
 
-  usageWindowDays: number;
-  usageHeatmapRows: UsageHourlyRow[];
-  usageHeatmapLoading: boolean;
-  onRefreshUsageHeatmap: () => void;
+function CircuitProvidersPanel({
+  rows,
+  nowUnix,
+  previewActive,
+  resettingProviderIds,
+  onResetProvider,
+}: {
+  rows: OpenCircuitRow[];
+  nowUnix: number;
+  previewActive: boolean;
+  resettingProviderIds: Set<number>;
+  onResetProvider: (providerId: number) => void;
+}) {
+  if (rows.length === 0) {
+    return <EmptyState title="当前没有熔断中的 Provider" />;
+  }
 
-  sortModes: SortModeSummary[];
-  sortModesLoading: boolean;
-  sortModesAvailable: boolean | null;
-  activeModeByCli: Record<CliKey, number | null>;
-  activeModeToggling: Record<CliKey, boolean>;
-  onSetCliActiveMode: (cliKey: CliKey, modeId: number | null) => void;
+  return (
+    <div className="h-full overflow-y-auto pr-1 scrollbar-overlay">
+      <div className="space-y-3">
+        {rows.map((row) => {
+          const remaining =
+            row.open_until != null && Number.isFinite(row.open_until)
+              ? formatCountdownSeconds(row.open_until - nowUnix)
+              : "—";
+          const isResetting = resettingProviderIds.has(row.provider_id);
 
-  activeSessions: GatewayActiveSession[];
-  activeSessionsLoading: boolean;
-  activeSessionsAvailable: boolean | null;
+          return (
+            <div
+              key={`${row.cli_key}:${row.provider_id}`}
+              className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/70 px-3 py-2 dark:border-border dark:bg-secondary/50"
+            >
+              <div className="min-w-0 flex flex-1 items-center gap-2.5">
+                <CliBrandIcon
+                  cliKey={row.cli_key as CliKey}
+                  className="h-4 w-4 shrink-0 rounded-[4px] object-contain"
+                />
+                <div
+                  className="truncate text-sm font-medium text-foreground"
+                  title={row.provider_name}
+                >
+                  {row.provider_name || "未知"}
+                </div>
+              </div>
+              <div className="shrink-0 font-mono text-xs text-muted-foreground">{remaining}</div>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isResetting || previewActive}
+                onClick={() => {
+                  if (previewActive) return;
+                  onResetProvider(row.provider_id);
+                }}
+              >
+                {isResetting ? "解除中..." : "解除熔断"}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-  workspaceConfigs: HomeCliWorkspaceConfig[];
-
-  providerLimitRows: ProviderLimitUsageRow[];
-  providerLimitLoading: boolean;
-  providerLimitAvailable: boolean | null;
-  providerLimitRefreshing: boolean;
-  onRefreshProviderLimit: () => void;
-  oauthQuotaRows: HomeOAuthQuotaRow[];
-  oauthQuotaVisible: boolean;
-  oauthQuotaRefreshing: boolean;
-  oauthQuotaHasRefreshed: boolean;
-  onRefreshOAuthQuota: () => Promise<void>;
-  onRefreshOAuthQuotaRow: (providerId: number) => Promise<void>;
-  onResetOAuthQuotaRow?: (providerId: number) => Promise<void>;
-
-  openCircuits: OpenCircuitRow[];
-  onResetCircuitProvider: (providerId: number) => void;
-  resettingCircuitProviderIds: Set<number>;
-
-  traces: TraceSession[];
-
-  requestLogs: RequestLogSummary[];
-  requestLogsLoading: boolean;
-  requestLogsRefreshing: boolean;
-  requestLogsAvailable: boolean | null;
-  onRefreshRequestLogs: () => void;
-
-  selectedLogId: number | null;
-  onSelectLogId: (id: number | null) => void;
-  personalizedUsageView: HomeOverviewUsageView;
+type ActiveSessionsPanelState = {
+  sessions: GatewayActiveSession[];
+  loading: boolean;
+  available: boolean | null;
 };
 
-const PREVIEW_WORKSPACE_CONFIGS: HomeCliWorkspaceConfig[] = [
-  {
-    cliKey: "claude",
-    cliLabel: "Claude",
-    workspaceId: 1001,
-    workspaceName: "工作区 Alpha",
-    loading: false,
-    items: [
-      { id: "prompt:1001", type: "prompts", label: "Prompt", name: "PR Review" },
-      { id: "mcp:1001", type: "mcp", label: "MCP", name: "filesystem" },
-      { id: "mcp:1002", type: "mcp", label: "MCP", name: "browser-tools" },
-      { id: "skill:1001", type: "skills", label: "Skill", name: "repo-auditor" },
-      { id: "skill:1002", type: "skills", label: "Skill", name: "incident-helper" },
-    ],
-  },
-  {
-    cliKey: "codex",
-    cliLabel: "Codex",
-    workspaceId: 1002,
-    workspaceName: "Default",
-    loading: false,
-    items: [
-      { id: "prompt:1002", type: "prompts", label: "Prompt", name: "Fix First" },
-      { id: "mcp:1003", type: "mcp", label: "MCP", name: "filesystem" },
-      { id: "mcp:1004", type: "mcp", label: "MCP", name: "github" },
-      { id: "skill:1002", type: "skills", label: "Skill", name: "code-review" },
-      { id: "skill:1003", type: "skills", label: "Skill", name: "test-writer" },
-    ],
-  },
-  {
-    cliKey: "gemini",
-    cliLabel: "Gemini",
-    workspaceId: 1003,
-    workspaceName: "工作区 Beta",
-    loading: false,
-    items: [
-      { id: "mcp:1005", type: "mcp", label: "MCP", name: "browser-tools" },
-      { id: "mcp:1006", type: "mcp", label: "MCP", name: "figma" },
-      { id: "skill:1004", type: "skills", label: "Skill", name: "ux-auditor" },
-      { id: "skill:1005", type: "skills", label: "Skill", name: "spec-writer" },
-    ],
-  },
-];
+type WorkspaceConfigPanelState = {
+  configs: HomeCliWorkspaceConfig[];
+  selectedCliKey: CliKey | null;
+  onSelectCliKey: (cliKey: CliKey) => void;
+  headerAddon: ReactNode;
+  showQuickToggle: boolean;
+  togglingItemIds: Set<string>;
+  switchingWorkspaceKey: string | null;
+  onSwitchWorkspace?: (cliKey: CliKey, workspaceId: number) => void;
+  onToggleItemEnabled?: (
+    workspaceId: number,
+    item: HomeWorkspaceConfigItem,
+    enabled: boolean
+  ) => void;
+};
 
-export function HomeOverviewPanel({
-  showCustomTooltip,
-  devPreviewEnabled = false,
-  showHomeHeatmap,
-  showHomeUsage = true,
-  cliPriorityOrder,
-  usageWindowDays,
-  usageHeatmapRows,
-  usageHeatmapLoading,
-  onRefreshUsageHeatmap,
-  sortModes,
-  sortModesLoading,
-  sortModesAvailable,
-  activeModeByCli,
-  activeModeToggling,
-  onSetCliActiveMode,
+type ProviderLimitPanelState = {
+  rows: ProviderLimitUsageRow[];
+  loading: boolean;
+  available: boolean | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+};
+
+type CircuitPanelState = {
+  rows: OpenCircuitRow[];
+  nowUnix: number;
+  previewActive: boolean;
+  resettingProviderIds: Set<number>;
+  onResetProvider: (providerId: number) => void;
+};
+
+function WorkspaceConfigPanelSlot({ workspace }: { workspace: WorkspaceConfigPanelState }) {
+  return (
+    <Suspense fallback={<OverviewPanelFallback />}>
+      <LazyHomeWorkspaceConfigPanel
+        configs={workspace.configs}
+        selectedCliKey={workspace.selectedCliKey}
+        onSelectCliKey={workspace.onSelectCliKey}
+        headerAddon={workspace.headerAddon}
+        showQuickToggle={workspace.showQuickToggle}
+        togglingItemIds={workspace.togglingItemIds}
+        switchingWorkspaceKey={workspace.switchingWorkspaceKey}
+        onSwitchWorkspace={workspace.onSwitchWorkspace}
+        onToggleItemEnabled={workspace.onToggleItemEnabled}
+      />
+    </Suspense>
+  );
+}
+
+function OverviewInfoPanel({
+  tabs,
+  tab,
+  onTabChange,
   activeSessions,
-  activeSessionsLoading,
-  activeSessionsAvailable,
+  workspace,
+  providerLimit,
+  oauthQuotaPanelContent,
+  circuit,
+}: {
+  tabs: HomeOverviewTabItem[];
+  tab: HomeOverviewTabKey;
+  onTabChange: (tab: HomeOverviewTabKey) => void;
+  activeSessions: ActiveSessionsPanelState;
+  workspace: WorkspaceConfigPanelState;
+  providerLimit: ProviderLimitPanelState;
+  oauthQuotaPanelContent: ReactNode;
+  circuit: CircuitPanelState;
+}) {
+  const tabValue = tabs.some((item) => item.key === tab) ? tab : "workspaceConfig";
+
+  return (
+    <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="shrink-0 overflow-x-auto scrollbar-none">
+        <TabList
+          ariaLabel="概览状态切换"
+          items={tabs}
+          value={tabValue}
+          onChange={onTabChange}
+          size="sm"
+          className="w-max min-w-full"
+          buttonClassName="whitespace-nowrap flex-1 text-xs font-semibold md:text-sm px-2.5 md:px-3"
+        />
+      </div>
+
+      <div className="flex-1 min-h-0 mt-3">
+        {tab === "sessions" ? (
+          <Suspense fallback={<OverviewPanelFallback />}>
+            <LazyHomeActiveSessionsCardContent
+              activeSessions={activeSessions.sessions}
+              activeSessionsLoading={activeSessions.loading}
+              activeSessionsAvailable={activeSessions.available}
+            />
+          </Suspense>
+        ) : tab === "workspaceConfig" ? (
+          <WorkspaceConfigPanelSlot workspace={workspace} />
+        ) : tab === "providerLimit" ? (
+          <Suspense fallback={<OverviewPanelFallback />}>
+            <LazyHomeProviderLimitPanelContent
+              rows={providerLimit.rows}
+              loading={providerLimit.loading}
+              available={providerLimit.available}
+              onRefresh={providerLimit.onRefresh}
+              refreshing={providerLimit.refreshing}
+            />
+          </Suspense>
+        ) : tab === "oauthQuota" ? (
+          oauthQuotaPanelContent
+        ) : (
+          <CircuitProvidersPanel
+            rows={circuit.rows}
+            nowUnix={circuit.nowUnix}
+            previewActive={circuit.previewActive}
+            resettingProviderIds={circuit.resettingProviderIds}
+            onResetProvider={circuit.onResetProvider}
+          />
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function LogsPrimaryInfoPanel({
+  tabs,
+  tab,
+  onTabChange,
+  workspace,
+  oauthQuotaPanelContent,
+  circuit,
+}: {
+  tabs: HomeOverviewTabItem[];
+  tab: HomeOverviewTabKey;
+  onTabChange: (tab: HomeOverviewTabKey) => void;
+  workspace: WorkspaceConfigPanelState;
+  oauthQuotaPanelContent: ReactNode;
+  circuit: CircuitPanelState;
+}) {
+  const tabValue = tabs.some((item) => item.key === tab) ? tab : "workspaceConfig";
+
+  return (
+    <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="shrink-0 overflow-x-auto scrollbar-none">
+        <TabList
+          ariaLabel="新布局信息切换"
+          items={tabs}
+          value={tabValue}
+          onChange={onTabChange}
+          size="sm"
+          className="w-max min-w-full"
+          buttonClassName="whitespace-nowrap flex-1 text-xs font-semibold md:text-sm px-2.5 md:px-3"
+        />
+      </div>
+
+      <div className="mt-3 min-h-0 flex-1">
+        {tab === "circuit" ? (
+          <CircuitProvidersPanel
+            rows={circuit.rows}
+            nowUnix={circuit.nowUnix}
+            previewActive={circuit.previewActive}
+            resettingProviderIds={circuit.resettingProviderIds}
+            onResetProvider={circuit.onResetProvider}
+          />
+        ) : tab === "oauthQuota" ? (
+          oauthQuotaPanelContent
+        ) : (
+          <WorkspaceConfigPanelSlot workspace={workspace} />
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function useDisplayedWorkspaceConfigs({
+  cliPriorityOrder,
+  devPreviewEnabled,
   workspaceConfigs,
-  providerLimitRows,
-  providerLimitLoading,
-  providerLimitAvailable,
-  providerLimitRefreshing,
-  onRefreshProviderLimit,
-  oauthQuotaRows,
-  oauthQuotaVisible,
-  oauthQuotaRefreshing,
-  oauthQuotaHasRefreshed,
-  onRefreshOAuthQuota,
-  onRefreshOAuthQuotaRow,
-  onResetOAuthQuotaRow,
-  openCircuits,
-  onResetCircuitProvider,
-  resettingCircuitProviderIds,
-  traces,
-  requestLogs,
-  requestLogsLoading,
-  requestLogsRefreshing,
-  requestLogsAvailable,
-  onRefreshRequestLogs,
-  selectedLogId,
-  onSelectLogId,
-  personalizedUsageView,
-}: HomeOverviewPanelProps) {
-  const [sessionsTabsOrder] = useState<HomeOverviewTabKey[]>(() =>
-    readHomeOverviewTabOrderFromStorage()
-  );
-  const [logsPrimaryLayout] = useState(() => readHomeOverviewLogsPrimaryLayoutFromStorage());
-  const [sessionsTab, setSessionsTab] = useState<HomeOverviewTabKey>(
-    () => sessionsTabsOrder[0] ?? "workspaceConfig"
-  );
-  const [selectedWorkspaceConfigCliKey, setSelectedWorkspaceConfigCliKey] = useState<CliKey | null>(
-    null
-  );
-  const previousOpenCircuitKeysRef = useRef<string[] | null>(null);
-  const circuitPreviewActive = openCircuits.length === 0 && devPreviewEnabled;
-  const displayedCircuits = circuitPreviewActive ? PREVIEW_CIRCUITS : openCircuits;
-  const displayedActiveSessions =
-    devPreviewEnabled && activeSessions.length === 0 ? PREVIEW_ACTIVE_SESSIONS : activeSessions;
-  const displayedProviderLimitRows =
-    devPreviewEnabled && providerLimitRows.length === 0
-      ? PREVIEW_PROVIDER_LIMIT_ROWS
-      : providerLimitRows;
-  const oauthQuotaPreviewActive = devPreviewEnabled;
-  const displayedOAuthQuotaRows = oauthQuotaPreviewActive
-    ? PREVIEW_OAUTH_QUOTA_ROWS
-    : oauthQuotaRows;
-  const displayedOAuthQuotaVisible = oauthQuotaPreviewActive || oauthQuotaVisible;
-  const displayedOAuthQuotaHasRefreshed = oauthQuotaPreviewActive ? true : oauthQuotaHasRefreshed;
-  const displayedOAuthQuotaRefreshing = oauthQuotaPreviewActive ? false : oauthQuotaRefreshing;
-  const displayedWorkspaceConfigs = useMemo(() => {
+}: {
+  cliPriorityOrder?: CliKey[];
+  devPreviewEnabled: boolean;
+  workspaceConfigs: HomeCliWorkspaceConfig[];
+}) {
+  return useMemo(() => {
     let nextConfigs: HomeCliWorkspaceConfig[];
     if (workspaceConfigs.length === 0) {
       nextConfigs = devPreviewEnabled ? PREVIEW_WORKSPACE_CONFIGS : [];
@@ -469,24 +570,133 @@ export function HomeOverviewPanel({
       .map((cliKey) => configByCli.get(cliKey))
       .filter((config): config is HomeCliWorkspaceConfig => config != null);
   }, [cliPriorityOrder, devPreviewEnabled, workspaceConfigs]);
-  const circuitNowUnix = useNowUnix(sessionsTab === "circuit" && displayedCircuits.length > 0);
-  const showUsageRow = showHomeHeatmap || showHomeUsage;
-  const sessionsTabs = useMemo(() => {
+}
+
+function useWorkspaceConfigPanelState({
+  activeModeByCli,
+  activeModeToggling,
+  displayedWorkspaceConfigs,
+  selectedWorkspaceConfigCliKey,
+  setSelectedWorkspaceConfigCliKey,
+  showQuickToggle,
+  sortModes,
+  sortModesAvailable,
+  sortModesLoading,
+  togglingItemIds,
+  switchingWorkspaceKey,
+  onSetCliActiveMode,
+  onSwitchWorkspace,
+  onToggleItemEnabled,
+}: {
+  activeModeByCli: Record<CliKey, number | null>;
+  activeModeToggling: Record<CliKey, boolean>;
+  displayedWorkspaceConfigs: HomeCliWorkspaceConfig[];
+  selectedWorkspaceConfigCliKey: CliKey | null;
+  setSelectedWorkspaceConfigCliKey: Dispatch<SetStateAction<CliKey | null>>;
+  showQuickToggle: boolean;
+  sortModes: SortModeSummary[];
+  sortModesAvailable: boolean | null;
+  sortModesLoading: boolean;
+  togglingItemIds: Set<string>;
+  switchingWorkspaceKey: string | null;
+  onSetCliActiveMode: (cliKey: CliKey, modeId: number | null) => void;
+  onSwitchWorkspace?: (cliKey: CliKey, workspaceId: number) => void;
+  onToggleItemEnabled?: (
+    workspaceId: number,
+    item: HomeWorkspaceConfigItem,
+    enabled: boolean
+  ) => void;
+}): WorkspaceConfigPanelState {
+  let effectiveSelectedCliKey =
+    selectedWorkspaceConfigCliKey ?? displayedWorkspaceConfigs[0]?.cliKey ?? null;
+  if (
+    effectiveSelectedCliKey != null &&
+    !displayedWorkspaceConfigs.some((config) => config.cliKey === effectiveSelectedCliKey)
+  ) {
+    effectiveSelectedCliKey = displayedWorkspaceConfigs[0]?.cliKey ?? null;
+    setSelectedWorkspaceConfigCliKey(effectiveSelectedCliKey);
+  }
+
+  const effectiveConfig = useMemo(
+    () =>
+      displayedWorkspaceConfigs.find((config) => config.cliKey === effectiveSelectedCliKey) ??
+      displayedWorkspaceConfigs[0] ??
+      null,
+    [displayedWorkspaceConfigs, effectiveSelectedCliKey]
+  );
+  const headerAddon = useMemo(
+    () =>
+      effectiveConfig ? (
+        <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-secondary/70 px-2.5 py-1 text-sm dark:border-border dark:bg-secondary/50">
+          <span className="shrink-0 font-medium text-muted-foreground">路由策略：</span>
+          <HomeCliRouteStrategyControl
+            cliKey={effectiveConfig.cliKey}
+            cliLabel={effectiveConfig.cliLabel}
+            sortModes={sortModes}
+            sortModesLoading={sortModesLoading}
+            sortModesAvailable={sortModesAvailable}
+            activeModeByCli={activeModeByCli}
+            activeModeToggling={activeModeToggling}
+            onSetCliActiveMode={onSetCliActiveMode}
+            orientation="horizontal"
+            className="min-w-0 flex-1"
+            selectClassName="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-sm font-semibold text-secondary-foreground shadow-none outline-none focus:border-transparent focus:bg-transparent focus:ring-0 focus:ring-offset-0 disabled:bg-transparent dark:bg-transparent dark:text-foreground dark:disabled:bg-transparent"
+          />
+        </div>
+      ) : null,
+    [
+      activeModeByCli,
+      activeModeToggling,
+      effectiveConfig,
+      onSetCliActiveMode,
+      sortModes,
+      sortModesAvailable,
+      sortModesLoading,
+    ]
+  );
+
+  return {
+    configs: displayedWorkspaceConfigs,
+    selectedCliKey: effectiveSelectedCliKey,
+    onSelectCliKey: setSelectedWorkspaceConfigCliKey,
+    headerAddon,
+    showQuickToggle,
+    togglingItemIds,
+    switchingWorkspaceKey,
+    onSwitchWorkspace,
+    onToggleItemEnabled,
+  };
+}
+
+function useHomeOverviewTabs({
+  displayedOAuthQuotaVisible,
+  logsPrimaryLayout,
+  openCircuits,
+  sessionsTabState,
+  sessionsTabsOrder,
+  setSessionsTabState,
+}: {
+  displayedOAuthQuotaVisible: boolean;
+  logsPrimaryLayout: boolean;
+  openCircuits: OpenCircuitRow[];
+  sessionsTabState: SessionsTabState;
+  sessionsTabsOrder: HomeOverviewTabKey[];
+  setSessionsTabState: Dispatch<SetStateAction<SessionsTabState>>;
+}) {
+  const legacySessionsTabs = useMemo(() => {
     const labelByKey = new Map(HOME_OVERVIEW_TABS.map((item) => [item.key, item.label]));
     return sessionsTabsOrder.map((key) => ({ key, label: labelByKey.get(key) ?? key }));
   }, [sessionsTabsOrder]);
-  const legacySessionsTabs = sessionsTabs;
   const logsPrimaryTabs = useMemo(
     () =>
-      sessionsTabs.filter(
+      legacySessionsTabs.filter(
         (item) =>
           item.key === "workspaceConfig" ||
           item.key === "circuit" ||
           (item.key === "oauthQuota" && displayedOAuthQuotaVisible)
       ),
-    [displayedOAuthQuotaVisible, sessionsTabs]
+    [displayedOAuthQuotaVisible, legacySessionsTabs]
   );
-
   const openCircuitKeys = useMemo(
     () =>
       openCircuits
@@ -495,75 +705,501 @@ export function HomeOverviewPanel({
     [openCircuits]
   );
 
-  useEffect(() => {
-    if (displayedWorkspaceConfigs.some((config) => config.cliKey === selectedWorkspaceConfigCliKey))
-      return;
-    const fallbackCliKey = displayedWorkspaceConfigs[0]?.cliKey;
-    if (fallbackCliKey) setSelectedWorkspaceConfigCliKey(fallbackCliKey);
-  }, [displayedWorkspaceConfigs, selectedWorkspaceConfigCliKey]);
-  const effectiveSelectedWorkspaceConfigCliKey =
-    selectedWorkspaceConfigCliKey ?? displayedWorkspaceConfigs[0]?.cliKey ?? null;
-  const effectiveSelectedWorkspaceConfig = useMemo(
-    () =>
-      displayedWorkspaceConfigs.find(
-        (config) => config.cliKey === effectiveSelectedWorkspaceConfigCliKey
-      ) ??
-      displayedWorkspaceConfigs[0] ??
-      null,
-    [displayedWorkspaceConfigs, effectiveSelectedWorkspaceConfigCliKey]
-  );
-  const legacyWorkspaceRouteStrategyControl = effectiveSelectedWorkspaceConfig ? (
-    <HomeCliRouteStrategyControl
-      cliKey={effectiveSelectedWorkspaceConfig.cliKey}
-      cliLabel={effectiveSelectedWorkspaceConfig.cliLabel}
-      sortModes={sortModes}
-      sortModesLoading={sortModesLoading}
-      sortModesAvailable={sortModesAvailable}
-      activeModeByCli={activeModeByCli}
-      activeModeToggling={activeModeToggling}
-      onSetCliActiveMode={onSetCliActiveMode}
-      orientation="horizontal"
+  const visibleTabs = logsPrimaryLayout ? logsPrimaryTabs : legacySessionsTabs;
+  let effectiveSessionsTabState = sessionsTabState;
+  const openCircuitChanged =
+    sessionsTabState.openCircuitKeys != null &&
+    didKeysChange(openCircuitKeys, sessionsTabState.openCircuitKeys);
+
+  if (openCircuitChanged) {
+    effectiveSessionsTabState = {
+      tab: openCircuitKeys.length === 0 ? "workspaceConfig" : "circuit",
+      openCircuitKeys,
+    };
+    setSessionsTabState(effectiveSessionsTabState);
+  } else if (!visibleTabs.some((tab) => tab.key === sessionsTabState.tab)) {
+    effectiveSessionsTabState = {
+      tab: "workspaceConfig",
+      openCircuitKeys,
+    };
+    setSessionsTabState(effectiveSessionsTabState);
+  } else if (sessionsTabState.openCircuitKeys !== openCircuitKeys) {
+    effectiveSessionsTabState = {
+      ...sessionsTabState,
+      openCircuitKeys,
+    };
+    setSessionsTabState(effectiveSessionsTabState);
+  }
+
+  const sessionsTab = effectiveSessionsTabState.tab;
+  return {
+    legacySessionsTabs,
+    logsPrimaryTabs,
+    sessionsTab,
+    setSessionsTab: (tab: HomeOverviewTabKey) => {
+      setSessionsTabState((current) => ({ ...current, tab }));
+    },
+  };
+}
+
+function HomeOverviewUsageStrip({
+  devPreviewEnabled,
+  showHeatmap,
+  showUsageChart,
+  usageWindowDays,
+  usageHeatmapRows,
+  usageHeatmapLoading,
+  onRefreshUsageHeatmap,
+}: {
+  devPreviewEnabled: boolean;
+  showHeatmap: boolean;
+  showUsageChart: boolean;
+  usageWindowDays: number;
+  usageHeatmapRows: UsageHourlyRow[];
+  usageHeatmapLoading: boolean;
+  onRefreshUsageHeatmap: () => void;
+}) {
+  if (!showHeatmap && !showUsageChart) return null;
+
+  const usageSection = (
+    <HomeUsageSection
+      devPreviewEnabled={devPreviewEnabled}
+      showHeatmap={showHeatmap}
+      showUsageChart={showUsageChart}
+      usageWindowDays={usageWindowDays}
+      usageHeatmapRows={usageHeatmapRows}
+      usageHeatmapLoading={usageHeatmapLoading}
+      onRefreshUsageHeatmap={onRefreshUsageHeatmap}
     />
-  ) : null;
+  );
 
-  useEffect(() => {
-    const previousOpenCircuitKeys = previousOpenCircuitKeysRef.current;
+  if (showHeatmap && showUsageChart) {
+    return (
+      <div className="shrink-0">
+        <div className="space-y-4">
+          <div className="flex">{usageSection}</div>
+        </div>
+      </div>
+    );
+  }
 
-    if (previousOpenCircuitKeys == null) {
-      previousOpenCircuitKeysRef.current = openCircuitKeys;
-      return;
-    }
+  return (
+    <div className="shrink-0">
+      <div className="flex">{usageSection}</div>
+    </div>
+  );
+}
 
-    const openCircuitChanged = didKeysChange(openCircuitKeys, previousOpenCircuitKeys);
+function HomeOverviewContentLayout({
+  activeSessions,
+  devPreviewEnabled,
+  logsPrimaryInfoPanel,
+  logsPrimaryLayout,
+  overviewInfoPanel,
+  personalizedUsageView,
+  requestLogs,
+  activeRequests,
+  requestLogsPanel,
+  traces,
+  usageWindowDays,
+  usageHeatmapRows,
+  usageHeatmapLoading,
+  onRefreshUsageHeatmap,
+}: {
+  activeSessions: GatewayActiveSession[];
+  devPreviewEnabled: boolean;
+  logsPrimaryInfoPanel: ReactNode;
+  logsPrimaryLayout: boolean;
+  overviewInfoPanel: ReactNode;
+  personalizedUsageView: HomeOverviewUsageView;
+  requestLogs: RequestLogSummary[];
+  activeRequests: ActiveRequestSnapshotItem[];
+  requestLogsPanel: ReactNode;
+  traces: TraceSession[];
+  usageWindowDays: number;
+  usageHeatmapRows: UsageHourlyRow[];
+  usageHeatmapLoading: boolean;
+  onRefreshUsageHeatmap: () => void;
+}) {
+  if (logsPrimaryLayout) {
+    return (
+      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-12">
+        <div className="flex min-h-0 lg:col-span-4">{logsPrimaryInfoPanel}</div>
+        <div className="flex min-h-0 flex-col gap-4 lg:col-span-8">
+          <div className="shrink-0">
+            {personalizedUsageView === "summary" ? (
+              <div className="space-y-4">
+                <HomeTodayProviderUsageOverview
+                  devPreviewEnabled={devPreviewEnabled}
+                  activeSessions={activeSessions}
+                  requestLogs={requestLogs}
+                  activeRequests={activeRequests}
+                  traces={traces}
+                />
+              </div>
+            ) : (
+              <HomeUsageSection
+                devPreviewEnabled={devPreviewEnabled}
+                showHeatmap={false}
+                showUsageChart={true}
+                usageWindowDays={usageWindowDays}
+                usageHeatmapRows={usageHeatmapRows}
+                usageHeatmapLoading={usageHeatmapLoading}
+                onRefreshUsageHeatmap={onRefreshUsageHeatmap}
+              />
+            )}
+          </div>
+          <div className="min-h-0 flex-1">{requestLogsPanel}</div>
+        </div>
+      </div>
+    );
+  }
 
-    previousOpenCircuitKeysRef.current = openCircuitKeys;
+  return (
+    <div className="grid gap-4 lg:grid-cols-12 flex-1 min-h-0">
+      <div className="flex min-h-0 lg:col-span-5">{overviewInfoPanel}</div>
+      <div className="lg:col-span-7 min-h-0">{requestLogsPanel}</div>
+    </div>
+  );
+}
 
-    if (openCircuitChanged) {
-      if (openCircuitKeys.length === 0) {
-        setSessionsTab("workspaceConfig");
-      } else {
-        setSessionsTab("circuit");
-      }
-    }
-  }, [openCircuitKeys]);
+export type HomeOverviewDisplayOptions = {
+  customTooltip: boolean;
+  heatmap: boolean;
+  usage: boolean;
+  workspaceConfigQuickToggle: boolean;
+};
 
-  useEffect(() => {
-    const visibleTabs = logsPrimaryLayout ? logsPrimaryTabs : legacySessionsTabs;
-    if (visibleTabs.some((tab) => tab.key === sessionsTab)) return;
-    setSessionsTab("workspaceConfig");
-  }, [legacySessionsTabs, logsPrimaryLayout, logsPrimaryTabs, sessionsTab]);
+export type HomeOverviewPanelProps = {
+  displayOptions: HomeOverviewDisplayOptions;
+  devPreviewEnabled?: boolean;
+  cliPriorityOrder?: CliKey[];
+
+  usageWindowDays: number;
+  usageHeatmapRows: UsageHourlyRow[];
+  usageHeatmapLoading: boolean;
+  onRefreshUsageHeatmap: () => void;
+
+  sortModes: SortModeSummary[];
+  sortModesLoading: boolean;
+  sortModesAvailable: boolean | null;
+  activeModeByCli: Record<CliKey, number | null>;
+  activeModeToggling: Record<CliKey, boolean>;
+  onSetCliActiveMode: (cliKey: CliKey, modeId: number | null) => void;
+
+  activeSessions: GatewayActiveSession[];
+  activeSessionsLoading: boolean;
+  activeSessionsAvailable: boolean | null;
+
+  workspaceConfigs: HomeCliWorkspaceConfig[];
+  togglingWorkspaceConfigItemIds?: Set<string>;
+  switchingWorkspaceKey?: string | null;
+  onSwitchWorkspace?: (cliKey: CliKey, workspaceId: number) => void;
+  onToggleWorkspaceConfigItemEnabled?: (
+    workspaceId: number,
+    item: HomeWorkspaceConfigItem,
+    enabled: boolean
+  ) => void;
+
+  providerLimitRows: ProviderLimitUsageRow[];
+  providerLimitLoading: boolean;
+  providerLimitAvailable: boolean | null;
+  providerLimitRefreshing: boolean;
+  onRefreshProviderLimit: () => void;
+  oauthQuotaRows: HomeOAuthQuotaRow[];
+  oauthQuotaVisible: boolean;
+  oauthQuotaRefreshing: boolean;
+  oauthQuotaHasRefreshed: boolean;
+  onRefreshOAuthQuota: () => Promise<void>;
+  onRefreshOAuthQuotaRow: (providerId: number) => Promise<void>;
+  onResetOAuthQuotaRow?: (providerId: number) => Promise<void>;
+
+  openCircuits: OpenCircuitRow[];
+  onResetCircuitProvider: (providerId: number) => void;
+  resettingCircuitProviderIds: Set<number>;
+
+  traces: TraceSession[];
+
+  requestLogs: RequestLogSummary[];
+  activeRequests?: ActiveRequestSnapshotItem[];
+  requestLogsLoading: boolean;
+  requestLogsRefreshing: boolean;
+  requestLogsAvailable: boolean | null;
+  onRefreshRequestLogs: () => void;
+
+  selectedLogId: number | null;
+  onSelectLogId: (id: number | null) => void;
+  personalizedUsageView: HomeOverviewUsageView;
+};
+
+const PREVIEW_WORKSPACE_CONFIGS: HomeCliWorkspaceConfig[] = [
+  {
+    cliKey: "claude",
+    cliLabel: "Claude",
+    workspaceId: 1001,
+    workspaceName: "工作区 Alpha",
+    workspaces: [{ id: 1001, name: "工作区 Alpha", isActive: true }],
+    loading: false,
+    items: [
+      {
+        id: "prompt:1001",
+        resourceId: 1001,
+        type: "prompts",
+        label: "Prompt",
+        name: "PR Review",
+        enabled: true,
+      },
+      {
+        id: "mcp:1001",
+        resourceId: 1001,
+        type: "mcp",
+        label: "MCP",
+        name: "filesystem",
+        enabled: true,
+      },
+      {
+        id: "mcp:1002",
+        resourceId: 1002,
+        type: "mcp",
+        label: "MCP",
+        name: "browser-tools",
+        enabled: false,
+      },
+      {
+        id: "skill:1001",
+        resourceId: 1001,
+        type: "skills",
+        label: "Skill",
+        name: "repo-auditor",
+        enabled: true,
+      },
+      {
+        id: "skill:1002",
+        resourceId: 1002,
+        type: "skills",
+        label: "Skill",
+        name: "incident-helper",
+        enabled: false,
+      },
+    ],
+  },
+  {
+    cliKey: "codex",
+    cliLabel: "Codex",
+    workspaceId: 1002,
+    workspaceName: "Default",
+    workspaces: [{ id: 1002, name: "Default", isActive: true }],
+    loading: false,
+    items: [
+      {
+        id: "prompt:1002",
+        resourceId: 1002,
+        type: "prompts",
+        label: "Prompt",
+        name: "Fix First",
+        enabled: true,
+      },
+      {
+        id: "mcp:1003",
+        resourceId: 1003,
+        type: "mcp",
+        label: "MCP",
+        name: "filesystem",
+        enabled: true,
+      },
+      {
+        id: "mcp:1004",
+        resourceId: 1004,
+        type: "mcp",
+        label: "MCP",
+        name: "github",
+        enabled: true,
+      },
+      {
+        id: "skill:1002",
+        resourceId: 1002,
+        type: "skills",
+        label: "Skill",
+        name: "code-review",
+        enabled: true,
+      },
+      {
+        id: "skill:1003",
+        resourceId: 1003,
+        type: "skills",
+        label: "Skill",
+        name: "test-writer",
+        enabled: true,
+      },
+    ],
+  },
+  {
+    cliKey: "gemini",
+    cliLabel: "Gemini",
+    workspaceId: 1003,
+    workspaceName: "工作区 Beta",
+    workspaces: [{ id: 1003, name: "工作区 Beta", isActive: true }],
+    loading: false,
+    items: [
+      {
+        id: "mcp:1005",
+        resourceId: 1005,
+        type: "mcp",
+        label: "MCP",
+        name: "browser-tools",
+        enabled: true,
+      },
+      {
+        id: "mcp:1006",
+        resourceId: 1006,
+        type: "mcp",
+        label: "MCP",
+        name: "figma",
+        enabled: false,
+      },
+      {
+        id: "skill:1004",
+        resourceId: 1004,
+        type: "skills",
+        label: "Skill",
+        name: "ux-auditor",
+        enabled: true,
+      },
+      {
+        id: "skill:1005",
+        resourceId: 1005,
+        type: "skills",
+        label: "Skill",
+        name: "spec-writer",
+        enabled: false,
+      },
+    ],
+  },
+];
+
+export function HomeOverviewPanel({
+  displayOptions,
+  devPreviewEnabled = false,
+  cliPriorityOrder,
+  usageWindowDays,
+  usageHeatmapRows,
+  usageHeatmapLoading,
+  onRefreshUsageHeatmap,
+  sortModes,
+  sortModesLoading,
+  sortModesAvailable,
+  activeModeByCli,
+  activeModeToggling,
+  onSetCliActiveMode,
+  activeSessions,
+  activeSessionsLoading,
+  activeSessionsAvailable,
+  workspaceConfigs,
+  togglingWorkspaceConfigItemIds = new Set<string>(),
+  switchingWorkspaceKey = null,
+  onSwitchWorkspace,
+  onToggleWorkspaceConfigItemEnabled,
+  providerLimitRows,
+  providerLimitLoading,
+  providerLimitAvailable,
+  providerLimitRefreshing,
+  onRefreshProviderLimit,
+  oauthQuotaRows,
+  oauthQuotaVisible,
+  oauthQuotaRefreshing,
+  oauthQuotaHasRefreshed,
+  onRefreshOAuthQuota,
+  onRefreshOAuthQuotaRow,
+  onResetOAuthQuotaRow,
+  openCircuits,
+  onResetCircuitProvider,
+  resettingCircuitProviderIds,
+  traces,
+  requestLogs,
+  activeRequests = [],
+  requestLogsLoading,
+  requestLogsRefreshing,
+  requestLogsAvailable,
+  onRefreshRequestLogs,
+  selectedLogId,
+  onSelectLogId,
+  personalizedUsageView,
+}: HomeOverviewPanelProps) {
+  const showCustomTooltip = displayOptions.customTooltip;
+  const showHomeHeatmap = displayOptions.heatmap;
+  const showHomeUsage = displayOptions.usage;
+  const showWorkspaceConfigQuickToggle = displayOptions.workspaceConfigQuickToggle;
+  const [sessionsTabsOrder] = useState<HomeOverviewTabKey[]>(() =>
+    readHomeOverviewTabOrderFromStorage()
+  );
+  const [logsPrimaryLayout] = useState(() => readHomeOverviewLogsPrimaryLayoutFromStorage());
+  const [sessionsTabState, setSessionsTabState] = useState<SessionsTabState>(() => ({
+    tab: sessionsTabsOrder[0] ?? "workspaceConfig",
+    openCircuitKeys: null,
+  }));
+  const [selectedWorkspaceConfigCliKey, setSelectedWorkspaceConfigCliKey] = useState<CliKey | null>(
+    null
+  );
+  const circuitPreviewActive = openCircuits.length === 0 && devPreviewEnabled;
+  const displayedCircuits = circuitPreviewActive ? PREVIEW_CIRCUITS : openCircuits;
+  const displayedActiveSessions =
+    devPreviewEnabled && activeSessions.length === 0 ? PREVIEW_ACTIVE_SESSIONS : activeSessions;
+  const displayedProviderLimitRows =
+    devPreviewEnabled && providerLimitRows.length === 0
+      ? PREVIEW_PROVIDER_LIMIT_ROWS
+      : providerLimitRows;
+  const oauthQuotaPreviewActive = devPreviewEnabled;
+  const displayedOAuthQuotaRows = oauthQuotaPreviewActive
+    ? PREVIEW_OAUTH_QUOTA_ROWS
+    : oauthQuotaRows;
+  const displayedOAuthQuotaVisible = oauthQuotaPreviewActive || oauthQuotaVisible;
+  const displayedOAuthQuotaHasRefreshed = oauthQuotaPreviewActive ? true : oauthQuotaHasRefreshed;
+  const displayedOAuthQuotaRefreshing = oauthQuotaPreviewActive ? false : oauthQuotaRefreshing;
+  const displayedWorkspaceConfigs = useDisplayedWorkspaceConfigs({
+    cliPriorityOrder,
+    devPreviewEnabled,
+    workspaceConfigs,
+  });
+  const { legacySessionsTabs, logsPrimaryTabs, sessionsTab, setSessionsTab } = useHomeOverviewTabs({
+    displayedOAuthQuotaVisible,
+    logsPrimaryLayout,
+    openCircuits,
+    sessionsTabState,
+    sessionsTabsOrder,
+    setSessionsTabState,
+  });
+  const workspacePanelState = useWorkspaceConfigPanelState({
+    activeModeByCli,
+    activeModeToggling,
+    displayedWorkspaceConfigs,
+    selectedWorkspaceConfigCliKey,
+    setSelectedWorkspaceConfigCliKey,
+    showQuickToggle: showWorkspaceConfigQuickToggle,
+    sortModes,
+    sortModesAvailable,
+    sortModesLoading,
+    togglingItemIds: togglingWorkspaceConfigItemIds,
+    switchingWorkspaceKey,
+    onSetCliActiveMode,
+    onSwitchWorkspace,
+    onToggleItemEnabled: onToggleWorkspaceConfigItemEnabled,
+  });
+  const circuitNowUnix = useNowUnix(sessionsTab === "circuit" && displayedCircuits.length > 0);
 
   const requestLogsPanel = (
     <HomeRequestLogsPanel
-      showCustomTooltip={showCustomTooltip}
+      displayOptions={{
+        customTooltip: showCustomTooltip,
+        summaryText: false,
+        openLogsPageButton: false,
+        refreshButton: !logsPrimaryLayout,
+        compactModeToggle: !logsPrimaryLayout,
+      }}
       devPreviewEnabled={devPreviewEnabled}
-      showSummaryText={false}
-      showOpenLogsPageButton={false}
-      showRefreshButton={!logsPrimaryLayout}
-      showCompactModeToggle={!logsPrimaryLayout}
       compactModeOverride={logsPrimaryLayout ? true : undefined}
       traces={traces}
       requestLogs={requestLogs}
+      activeRequests={activeRequests}
       requestLogsLoading={requestLogsLoading}
       requestLogsRefreshing={requestLogsRefreshing}
       requestLogsAvailable={requestLogsAvailable}
@@ -597,260 +1233,80 @@ export function HomeOverviewPanel({
     </Suspense>
   );
 
+  const activeSessionsPanelState: ActiveSessionsPanelState = {
+    sessions: displayedActiveSessions,
+    loading: activeSessionsLoading,
+    available: activeSessionsAvailable,
+  };
+  const providerLimitPanelState: ProviderLimitPanelState = {
+    rows: displayedProviderLimitRows,
+    loading: providerLimitLoading,
+    available: providerLimitAvailable,
+    refreshing: providerLimitRefreshing,
+    onRefresh: onRefreshProviderLimit,
+  };
+  const circuitPanelState: CircuitPanelState = {
+    rows: displayedCircuits,
+    nowUnix: circuitNowUnix,
+    previewActive: circuitPreviewActive,
+    resettingProviderIds: resettingCircuitProviderIds,
+    onResetProvider: onResetCircuitProvider,
+  };
+
   const overviewInfoPanel = (
-    <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="shrink-0 overflow-x-auto scrollbar-none">
-        <TabList
-          ariaLabel="概览状态切换"
-          items={legacySessionsTabs}
-          value={
-            legacySessionsTabs.some((item) => item.key === sessionsTab)
-              ? sessionsTab
-              : "workspaceConfig"
-          }
-          onChange={setSessionsTab}
-          size="sm"
-          className="w-max min-w-full"
-          buttonClassName="whitespace-nowrap flex-1 text-xs font-semibold md:text-sm px-2.5 md:px-3"
-        />
-      </div>
-
-      <div className="flex-1 min-h-0 mt-3">
-        {sessionsTab === "sessions" ? (
-          <Suspense fallback={<OverviewPanelFallback />}>
-            <LazyHomeActiveSessionsCardContent
-              activeSessions={displayedActiveSessions}
-              activeSessionsLoading={activeSessionsLoading}
-              activeSessionsAvailable={activeSessionsAvailable}
-            />
-          </Suspense>
-        ) : sessionsTab === "workspaceConfig" ? (
-          <Suspense fallback={<OverviewPanelFallback />}>
-            <LazyHomeWorkspaceConfigPanel
-              configs={displayedWorkspaceConfigs}
-              selectedCliKey={effectiveSelectedWorkspaceConfigCliKey}
-              onSelectCliKey={setSelectedWorkspaceConfigCliKey}
-              headerAddon={legacyWorkspaceRouteStrategyControl}
-            />
-          </Suspense>
-        ) : sessionsTab === "providerLimit" ? (
-          <Suspense fallback={<OverviewPanelFallback />}>
-            <LazyHomeProviderLimitPanelContent
-              rows={displayedProviderLimitRows}
-              loading={providerLimitLoading}
-              available={providerLimitAvailable}
-              onRefresh={onRefreshProviderLimit}
-              refreshing={providerLimitRefreshing}
-            />
-          </Suspense>
-        ) : sessionsTab === "oauthQuota" ? (
-          oauthQuotaPanelContent
-        ) : displayedCircuits.length === 0 ? (
-          <EmptyState title="当前没有熔断中的 Provider" />
-        ) : (
-          <div className="h-full overflow-y-auto pr-1 scrollbar-overlay">
-            <div className="space-y-3">
-              {displayedCircuits.map((row) => {
-                const remaining =
-                  row.open_until != null && Number.isFinite(row.open_until)
-                    ? formatCountdownSeconds(row.open_until - circuitNowUnix)
-                    : "—";
-                const isResetting = resettingCircuitProviderIds.has(row.provider_id);
-
-                return (
-                  <div
-                    key={`${row.cli_key}:${row.provider_id}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/70 px-3 py-2 dark:border-border dark:bg-secondary/50"
-                  >
-                    <div className="min-w-0 flex flex-1 items-center gap-2.5">
-                      <CliBrandIcon
-                        cliKey={row.cli_key as CliKey}
-                        className="h-4 w-4 shrink-0 rounded-[4px] object-contain"
-                      />
-                      <div
-                        className="truncate text-sm font-medium text-foreground"
-                        title={row.provider_name}
-                      >
-                        {row.provider_name || "未知"}
-                      </div>
-                    </div>
-                    <div className="shrink-0 font-mono text-xs text-muted-foreground">
-                      {remaining}
-                    </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={isResetting || circuitPreviewActive}
-                      onClick={() => {
-                        if (circuitPreviewActive) return;
-                        onResetCircuitProvider(row.provider_id);
-                      }}
-                    >
-                      {isResetting ? "解除中..." : "解除熔断"}
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </Card>
+    <OverviewInfoPanel
+      tabs={legacySessionsTabs}
+      tab={sessionsTab}
+      onTabChange={setSessionsTab}
+      activeSessions={activeSessionsPanelState}
+      workspace={workspacePanelState}
+      providerLimit={providerLimitPanelState}
+      oauthQuotaPanelContent={oauthQuotaPanelContent}
+      circuit={circuitPanelState}
+    />
   );
 
   const logsPrimaryInfoPanel = (
-    <Card padding="sm" className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="shrink-0 overflow-x-auto scrollbar-none">
-        <TabList
-          ariaLabel="新布局信息切换"
-          items={logsPrimaryTabs}
-          value={
-            logsPrimaryTabs.some((item) => item.key === sessionsTab)
-              ? sessionsTab
-              : "workspaceConfig"
-          }
-          onChange={(next) => setSessionsTab(next as HomeOverviewTabKey)}
-          size="sm"
-          className="w-max min-w-full"
-          buttonClassName="whitespace-nowrap flex-1 text-xs font-semibold md:text-sm px-2.5 md:px-3"
-        />
-      </div>
-
-      <div className="mt-3 min-h-0 flex-1">
-        {sessionsTab === "circuit" ? (
-          displayedCircuits.length === 0 ? (
-            <EmptyState title="当前没有熔断中的 Provider" />
-          ) : (
-            <div className="h-full overflow-y-auto pr-1 scrollbar-overlay">
-              <div className="space-y-3">
-                {displayedCircuits.map((row) => {
-                  const remaining =
-                    row.open_until != null && Number.isFinite(row.open_until)
-                      ? formatCountdownSeconds(row.open_until - circuitNowUnix)
-                      : "—";
-                  const isResetting = resettingCircuitProviderIds.has(row.provider_id);
-
-                  return (
-                    <div
-                      key={`${row.cli_key}:${row.provider_id}`}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/70 px-3 py-2 dark:border-border dark:bg-secondary/50"
-                    >
-                      <div className="min-w-0 flex flex-1 items-center gap-2.5">
-                        <CliBrandIcon
-                          cliKey={row.cli_key as CliKey}
-                          className="h-4 w-4 shrink-0 rounded-[4px] object-contain"
-                        />
-                        <div
-                          className="truncate text-sm font-medium text-foreground"
-                          title={row.provider_name}
-                        >
-                          {row.provider_name || "未知"}
-                        </div>
-                      </div>
-                      <div className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {remaining}
-                      </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={isResetting || circuitPreviewActive}
-                        onClick={() => {
-                          if (circuitPreviewActive) return;
-                          onResetCircuitProvider(row.provider_id);
-                        }}
-                      >
-                        {isResetting ? "解除中..." : "解除熔断"}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )
-        ) : sessionsTab === "oauthQuota" ? (
-          oauthQuotaPanelContent
-        ) : (
-          <Suspense fallback={<OverviewPanelFallback />}>
-            <LazyHomeWorkspaceConfigPanel
-              configs={displayedWorkspaceConfigs}
-              selectedCliKey={effectiveSelectedWorkspaceConfigCliKey}
-              onSelectCliKey={setSelectedWorkspaceConfigCliKey}
-            />
-          </Suspense>
-        )}
-      </div>
-    </Card>
+    <LogsPrimaryInfoPanel
+      tabs={logsPrimaryTabs}
+      tab={sessionsTab}
+      onTabChange={setSessionsTab}
+      workspace={workspacePanelState}
+      oauthQuotaPanelContent={oauthQuotaPanelContent}
+      circuit={circuitPanelState}
+    />
   );
 
   return (
     <div className="flex flex-col h-full gap-4">
-      {!logsPrimaryLayout && showUsageRow ? (
-        <div className="shrink-0">
-          {showHomeHeatmap && showHomeUsage ? (
-            <div className="space-y-4">
-              <div className="flex">
-                <HomeUsageSection
-                  devPreviewEnabled={devPreviewEnabled}
-                  showHeatmap={true}
-                  showUsageChart={true}
-                  usageWindowDays={usageWindowDays}
-                  usageHeatmapRows={usageHeatmapRows}
-                  usageHeatmapLoading={usageHeatmapLoading}
-                  onRefreshUsageHeatmap={onRefreshUsageHeatmap}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex">
-              <HomeUsageSection
-                devPreviewEnabled={devPreviewEnabled}
-                showHeatmap={showHomeHeatmap}
-                showUsageChart={showHomeUsage}
-                usageWindowDays={usageWindowDays}
-                usageHeatmapRows={usageHeatmapRows}
-                usageHeatmapLoading={usageHeatmapLoading}
-                onRefreshUsageHeatmap={onRefreshUsageHeatmap}
-              />
-            </div>
-          )}
-        </div>
+      {!logsPrimaryLayout ? (
+        <HomeOverviewUsageStrip
+          devPreviewEnabled={devPreviewEnabled}
+          showHeatmap={showHomeHeatmap}
+          showUsageChart={showHomeUsage}
+          usageWindowDays={usageWindowDays}
+          usageHeatmapRows={usageHeatmapRows}
+          usageHeatmapLoading={usageHeatmapLoading}
+          onRefreshUsageHeatmap={onRefreshUsageHeatmap}
+        />
       ) : null}
 
-      {logsPrimaryLayout ? (
-        <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-12">
-          <div className="flex min-h-0 lg:col-span-4">{logsPrimaryInfoPanel}</div>
-          <div className="flex min-h-0 flex-col gap-4 lg:col-span-8">
-            <div className="shrink-0">
-              {personalizedUsageView === "summary" ? (
-                <div className="space-y-4">
-                  <HomeTodayProviderUsageOverview
-                    devPreviewEnabled={devPreviewEnabled}
-                    activeSessions={displayedActiveSessions}
-                    requestLogs={requestLogs}
-                    traces={traces}
-                  />
-                </div>
-              ) : (
-                <HomeUsageSection
-                  devPreviewEnabled={devPreviewEnabled}
-                  showHeatmap={false}
-                  showUsageChart={true}
-                  usageWindowDays={usageWindowDays}
-                  usageHeatmapRows={usageHeatmapRows}
-                  usageHeatmapLoading={usageHeatmapLoading}
-                  onRefreshUsageHeatmap={onRefreshUsageHeatmap}
-                />
-              )}
-            </div>
-            <div className="min-h-0 flex-1">{requestLogsPanel}</div>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-12 flex-1 min-h-0">
-          <div className="flex min-h-0 lg:col-span-5">{overviewInfoPanel}</div>
-          <div className="lg:col-span-7 min-h-0">{requestLogsPanel}</div>
-        </div>
-      )}
+      <HomeOverviewContentLayout
+        activeSessions={displayedActiveSessions}
+        devPreviewEnabled={devPreviewEnabled}
+        logsPrimaryInfoPanel={logsPrimaryInfoPanel}
+        logsPrimaryLayout={logsPrimaryLayout}
+        overviewInfoPanel={overviewInfoPanel}
+        personalizedUsageView={personalizedUsageView}
+        requestLogs={requestLogs}
+        activeRequests={activeRequests}
+        requestLogsPanel={requestLogsPanel}
+        traces={traces}
+        usageWindowDays={usageWindowDays}
+        usageHeatmapRows={usageHeatmapRows}
+        usageHeatmapLoading={usageHeatmapLoading}
+        onRefreshUsageHeatmap={onRefreshUsageHeatmap}
+      />
     </div>
   );
 }

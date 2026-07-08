@@ -4,7 +4,7 @@ use super::{MiddlewareAction, ProxyContext};
 use crate::gateway::proxy::handler::early_error::{
     build_early_error_log_ctx, early_error_contract, force_provider_if_requested,
     push_special_setting, respond_early_error_with_enqueue, respond_invalid_cli_key_with_spawn,
-    EarlyErrorKind,
+    respond_provider_selection_failed_with_spawn, EarlyErrorKind,
 };
 use crate::gateway::proxy::handler::provider_selection::{
     resolve_session_bound_provider_id, resolve_session_routing_decision,
@@ -30,21 +30,45 @@ impl ProviderResolutionMiddleware {
         ctx.allow_session_reuse = decision.allow_session_reuse;
 
         // --- provider selection ---
-        let selection = match select_providers_with_session_binding(
-            &ctx.state,
-            &ctx.cli_key,
-            ctx.session_id.as_deref(),
-            ctx.created_at,
-        ) {
+        // Runs rusqlite queries; keep them off the async worker via the bounded
+        // blocking pool (pool.get can block up to 5s under DB contention).
+        let selection_result = {
+            let state = ctx.state.clone();
+            let cli_key = ctx.cli_key.clone();
+            let session_id = ctx.session_id.clone();
+            let created_at = ctx.created_at;
+            crate::blocking::run("gateway_provider_selection", move || {
+                select_providers_with_session_binding(
+                    &state,
+                    &cli_key,
+                    session_id.as_deref(),
+                    created_at,
+                )
+            })
+            .await
+        };
+        let selection = match selection_result {
             Ok(s) => s,
             Err(err) => {
                 let log_ctx = build_early_error_log_ctx(&ctx);
-                let resp = respond_invalid_cli_key_with_spawn(
-                    &log_ctx,
-                    ctx.session_id.clone(),
-                    ctx.requested_model.clone(),
-                    err.to_string(),
-                );
+                // A rejected cli key is the caller's fault (400); everything
+                // else here is infrastructure (DB pool / blocking pool) and
+                // must not be misfiled as a client error.
+                let resp = if err.code() == "SEC_INVALID_INPUT" {
+                    respond_invalid_cli_key_with_spawn(
+                        &log_ctx,
+                        ctx.session_id.clone(),
+                        ctx.requested_model.clone(),
+                        err.to_string(),
+                    )
+                } else {
+                    respond_provider_selection_failed_with_spawn(
+                        &log_ctx,
+                        ctx.session_id.clone(),
+                        ctx.requested_model.clone(),
+                        err.to_string(),
+                    )
+                };
                 return MiddlewareAction::ShortCircuit(resp);
             }
         };

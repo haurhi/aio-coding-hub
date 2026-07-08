@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
-import { cliBadgeTone, cliShortLabel } from "../../constants/clis";
+import { cliLongLabel } from "../../constants/clis";
 import { useNowUnix } from "../../hooks/useNowUnix";
 import { OAuthQuotaUsageInline } from "../providers/OAuthQuotaUsageInline";
 import { Card } from "../../ui/Card";
@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Spinner } from "../../ui/Spinner";
 import { cn } from "../../utils/cn";
+import { CliBrandIcon } from "./CliBrandIcon";
 import {
   hasHomeOAuthQuotaText,
   hasInsufficientHomeOAuthQuota,
@@ -61,25 +62,21 @@ function OAuthQuotaProviderCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2 text-xs text-secondary-foreground">
             <span
-              className={cn(
-                "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                cliBadgeTone(row.cliKey)
-              )}
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-secondary-foreground"
+              title={cliLongLabel(row.cliKey)}
             >
-              {cliShortLabel(row.cliKey)}
+              <CliBrandIcon
+                cliKey={row.cliKey}
+                className="h-3.5 w-3.5 rounded-[3px] object-contain"
+              />
             </span>
             <span className="truncate font-medium">{row.providerName}</span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             {!row.enabled ? (
-              <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-secondary dark:text-muted-foreground">
+              <span className="whitespace-nowrap rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-secondary dark:text-muted-foreground">
                 已禁用
-              </span>
-            ) : null}
-            {row.state === "error" ? (
-              <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
-                刷新失败
               </span>
             ) : null}
             {onRefreshRow ? (
@@ -105,29 +102,40 @@ function OAuthQuotaProviderCard({
             刷新中...
           </div>
         ) : row.state === "error" ? (
-          <>
+          <div className="space-y-1.5" data-testid={`oauth-quota-status-${row.providerId}`}>
             <div className="flex items-start gap-2 text-xs text-rose-600 dark:text-rose-400">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>刷新失败，请重试</span>
             </div>
             {hasQuotaDisplay ? (
-              <OAuthQuotaUsageInline
-                cliKey={row.cliKey}
-                limits={row.limits}
-                nowUnix={nowUnix}
-                className="text-xs"
-                resetCreditDisabled={!canResetCredit || !onRequestReset}
-                resetCreditLoading={row.resetting}
-                onResetCreditClick={showResetCredit && onRequestReset ? requestReset : undefined}
-              />
-            ) : null}
-          </>
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <OAuthQuotaUsageInline
+                  cliKey={row.cliKey}
+                  limits={row.limits}
+                  nowUnix={nowUnix}
+                  resetCreditDisabled={!canResetCredit || !onRequestReset}
+                  resetCreditLoading={row.resetting}
+                  onResetCreditClick={showResetCredit && onRequestReset ? requestReset : undefined}
+                />
+                <span className="shrink-0 whitespace-nowrap rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                  刷新失败
+                </span>
+              </div>
+            ) : (
+              <span className="inline-flex shrink-0 whitespace-nowrap rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                刷新失败
+              </span>
+            )}
+          </div>
         ) : row.state === "idle" ? (
           <div className="text-xs text-muted-foreground">点击右上角刷新获取 OAuth 配额</div>
         ) : !hasQuotaDisplay ? (
           <div className="text-xs text-muted-foreground">暂无 OAuth 配额信息</div>
         ) : (
-          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <div
+            className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+            data-testid={`oauth-quota-status-${row.providerId}`}
+          >
             <OAuthQuotaUsageInline
               cliKey={row.cliKey}
               limits={row.limits}

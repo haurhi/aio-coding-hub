@@ -60,6 +60,7 @@ where
     let attempt_ctx = AttemptCtx {
         attempt_index: indices.attempt_index,
         retry_index: indices.retry_index,
+        provider_max_attempts: prepared.provider_max_attempts,
         attempt_started_ms: timing.attempt_started_ms,
         attempt_started: timing.attempt_started,
         circuit_before: &circuit_before,
@@ -74,6 +75,7 @@ where
         provider_base_url_base: &prepared.provider_base_url_base,
         auth_mode: prepared.auth_mode.as_str(),
         provider_index: prepared.provider_index,
+        provider_bridged: prepared.provider_bridged,
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),
@@ -160,6 +162,7 @@ where
     let attempt_ctx = AttemptCtx {
         attempt_index: indices.attempt_index,
         retry_index: indices.retry_index,
+        provider_max_attempts: prepared.provider_max_attempts,
         attempt_started_ms: timing.attempt_started_ms,
         attempt_started: timing.attempt_started,
         circuit_before: &circuit_before,
@@ -174,6 +177,7 @@ where
         provider_base_url_base: &prepared.provider_base_url_base,
         auth_mode: prepared.auth_mode.as_str(),
         provider_index: prepared.provider_index,
+        provider_bridged: prepared.provider_bridged,
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),

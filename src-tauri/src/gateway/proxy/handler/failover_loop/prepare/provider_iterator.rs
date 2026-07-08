@@ -17,6 +17,9 @@ pub(super) struct PreparedProvider {
     pub(super) provider_base_url_display: String,
     pub(super) auth_mode: String,
     pub(super) provider_index: u32,
+    // Bridged (cx2cc) input semantics for this provider; threaded into
+    // FailoverAttempt so the request event can compute effective_input_tokens.
+    pub(super) provider_bridged: bool,
     pub(super) session_reuse: Option<bool>,
     pub(super) effective_credential: String,
     pub(super) provider_max_attempts: u32,
@@ -137,6 +140,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
 
     let provider_max_attempts = provider_max_attempts_for_request(
         input.max_attempts_per_provider,
+        gate_allow.circuit_after.failure_threshold,
         provider.auth_mode == "oauth",
         codex_request_has_previous_response_id(input),
     );
@@ -356,6 +360,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         provider_base_url_base: &provider_base_url_base,
         auth_mode: provider.auth_mode.as_str(),
         provider_index,
+        provider_bridged: is_cx2cc_bridge,
         session_reuse,
         stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
         claude_model_mapping: None,
@@ -412,6 +417,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         provider_base_url_display,
         auth_mode: provider.auth_mode.clone(),
         provider_index,
+        provider_bridged: is_cx2cc_bridge,
         session_reuse,
         effective_credential,
         provider_max_attempts,
@@ -457,12 +463,15 @@ fn codex_body_has_previous_response_id(cli_key: &str, body: &[u8]) -> bool {
 
 fn provider_max_attempts_for_request(
     configured_max_attempts: u32,
+    circuit_failure_threshold: u32,
     needs_oauth_reactive_refresh_retry: bool,
     needs_codex_previous_response_id_retry: bool,
 ) -> u32 {
     let required_internal_retries = u32::from(needs_oauth_reactive_refresh_retry)
         + u32::from(needs_codex_previous_response_id_retry);
-    configured_max_attempts.max(1 + required_internal_retries)
+    configured_max_attempts
+        .max(circuit_failure_threshold.max(1))
+        .max(1 + required_internal_retries)
 }
 
 fn is_responses_request_path(path: &str) -> bool {
@@ -554,11 +563,18 @@ mod tests {
 
     #[test]
     fn provider_max_attempts_reserves_budget_for_internal_retries() {
-        assert_eq!(provider_max_attempts_for_request(1, false, false), 1);
-        assert_eq!(provider_max_attempts_for_request(1, true, false), 2);
-        assert_eq!(provider_max_attempts_for_request(1, false, true), 2);
-        assert_eq!(provider_max_attempts_for_request(1, true, true), 3);
-        assert_eq!(provider_max_attempts_for_request(5, true, true), 5);
+        assert_eq!(provider_max_attempts_for_request(1, 1, false, false), 1);
+        assert_eq!(provider_max_attempts_for_request(1, 1, true, false), 2);
+        assert_eq!(provider_max_attempts_for_request(1, 1, false, true), 2);
+        assert_eq!(provider_max_attempts_for_request(1, 1, true, true), 3);
+        assert_eq!(provider_max_attempts_for_request(5, 1, true, true), 5);
+    }
+
+    #[test]
+    fn provider_max_attempts_respects_circuit_failure_threshold() {
+        assert_eq!(provider_max_attempts_for_request(1, 5, false, false), 5);
+        assert_eq!(provider_max_attempts_for_request(3, 5, true, true), 5);
+        assert_eq!(provider_max_attempts_for_request(10, 5, false, false), 10);
     }
 
     #[test]

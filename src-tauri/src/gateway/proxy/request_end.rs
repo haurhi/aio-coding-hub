@@ -3,6 +3,7 @@
 use super::logging::enqueue_request_log_with_backpressure_and_plugins;
 use super::status_override;
 use super::{spawn_enqueue_request_log_with_backpressure, RequestLogEnqueueArgs};
+use crate::gateway::active_requests::{ActiveRequestFinishReason, ActiveRequestRegistry};
 use crate::gateway::events::{emit_request_event, ClaudeModelMapping, FailoverAttempt};
 use crate::gateway::plugins::pipeline::GatewayPluginPipeline;
 use crate::{db, request_logs};
@@ -19,6 +20,7 @@ pub(super) struct RequestEndDeps<'a, R: tauri::Runtime = tauri::Wry> {
     pub(super) db: &'a db::Db,
     pub(super) log_tx: &'a tokio::sync::mpsc::Sender<request_logs::RequestLogInsert>,
     pub(super) plugin_pipeline: &'a Arc<GatewayPluginPipeline>,
+    pub(super) active_requests: &'a Arc<ActiveRequestRegistry>,
 }
 
 impl<'a, R: tauri::Runtime> RequestEndDeps<'a, R> {
@@ -27,12 +29,14 @@ impl<'a, R: tauri::Runtime> RequestEndDeps<'a, R> {
         db: &'a db::Db,
         log_tx: &'a tokio::sync::mpsc::Sender<request_logs::RequestLogInsert>,
         plugin_pipeline: &'a Arc<GatewayPluginPipeline>,
+        active_requests: &'a Arc<ActiveRequestRegistry>,
     ) -> Self {
         Self {
             app,
             db,
             log_tx,
             plugin_pipeline,
+            active_requests,
         }
     }
 }
@@ -224,6 +228,8 @@ struct RequestEndPayloadParts {
     attempts_json: Option<String>,
     requested_model: Option<String>,
     created_at_ms: i64,
+    last_activity_ms: Option<i64>,
+    activity_details_json: Option<String>,
     created_at: i64,
     usage_metrics: Option<crate::usage::UsageMetrics>,
     usage: Option<crate::usage::UsageExtract>,
@@ -592,6 +598,8 @@ fn build_request_end_payload(
         attempts_json,
         requested_model,
         created_at_ms,
+        last_activity_ms,
+        activity_details_json,
         created_at,
         usage_metrics,
         usage,
@@ -619,6 +627,8 @@ fn build_request_end_payload(
         attempts_json,
         requested_model,
         created_at_ms,
+        last_activity_ms,
+        activity_details_json,
         created_at,
         usage_metrics,
         usage,
@@ -673,6 +683,8 @@ impl RequestLogEnqueueArgs {
             attempts_json: None,
             requested_model,
             created_at_ms,
+            last_activity_ms: None,
+            activity_details_json: None,
             created_at,
             usage_metrics,
             usage,
@@ -699,6 +711,8 @@ impl RequestLogEnqueueArgs {
         attempts_json: String,
         requested_model: Option<String>,
         created_at_ms: i64,
+        last_activity_ms: Option<i64>,
+        activity_details_json: Option<String>,
         created_at: i64,
         usage: Option<crate::usage::UsageExtract>,
     ) -> (Self, Vec<FailoverAttempt>) {
@@ -720,6 +734,8 @@ impl RequestLogEnqueueArgs {
             attempts_json: Some(attempts_json),
             requested_model,
             created_at_ms,
+            last_activity_ms,
+            activity_details_json,
             created_at,
             usage_metrics: None,
             usage,
@@ -793,6 +809,17 @@ fn prepare_request_end<R: tauri::Runtime>(
     }
 }
 
+fn active_request_finish_reason(
+    status: Option<u16>,
+    error_code: Option<&'static str>,
+) -> ActiveRequestFinishReason {
+    if error_code.is_some() || status.is_some_and(|value| value >= 400) {
+        ActiveRequestFinishReason::Failed
+    } else {
+        ActiveRequestFinishReason::Completed
+    }
+}
+
 pub(super) async fn emit_request_event_and_enqueue_request_log<R: tauri::Runtime>(
     args: RequestEndArgs<'_, R>,
 ) {
@@ -820,6 +847,11 @@ pub(super) async fn emit_request_event_and_enqueue_request_log<R: tauri::Runtime
         usage_metrics,
         log_args,
     } = prepare_request_end(args);
+
+    deps.active_requests.finish(
+        log_args.trace_id.as_str(),
+        active_request_finish_reason(log_args.status, log_args.error_code),
+    );
 
     log_args.emit_gateway_request_event(
         deps.app,
@@ -867,6 +899,11 @@ pub(super) fn emit_request_event_and_spawn_request_log<R: tauri::Runtime>(
         log_args,
     } = prepare_request_end(args);
 
+    deps.active_requests.finish(
+        log_args.trace_id.as_str(),
+        active_request_finish_reason(log_args.status, log_args.error_code),
+    );
+
     log_args.emit_gateway_request_event(
         deps.app,
         error_category,
@@ -887,8 +924,10 @@ pub(super) fn emit_request_event_and_spawn_request_log<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::active_requests::{ActiveRequestRegistry, ActiveRequestStart};
     use crate::gateway::proxy::{ErrorCategory, GatewayErrorCode};
     use serde_json::json;
+    use std::sync::Arc;
 
     fn sample_attempt() -> FailoverAttempt {
         FailoverAttempt {
@@ -912,6 +951,10 @@ mod tests {
             circuit_state_after: None,
             circuit_failure_count: None,
             circuit_failure_threshold: None,
+            circuit_recover_at_unix: None,
+            circuit_trigger_error_code: None,
+            provider_bridged: Some(false),
+            timeout_secs: None,
         }
     }
 
@@ -941,6 +984,10 @@ mod tests {
             circuit_state_after: Some("OPEN"),
             circuit_failure_count: Some(5),
             circuit_failure_threshold: Some(5),
+            circuit_recover_at_unix: None,
+            circuit_trigger_error_code: None,
+            provider_bridged: Some(false),
+            timeout_secs: Some(1),
         }
     }
 
@@ -949,6 +996,59 @@ mod tests {
             .get(key)
             .and_then(serde_json::Value::as_str)
             .map(|text| text.chars().count())
+    }
+
+    fn active_request_start(trace_id: &str) -> ActiveRequestStart {
+        ActiveRequestStart {
+            trace_id: trace_id.to_string(),
+            cli_key: "claude".to_string(),
+            method: "POST".to_string(),
+            path: "/v1/messages".to_string(),
+            query: None,
+            session_id: Some("session-active".to_string()),
+            requested_model: Some("claude-sonnet-4".to_string()),
+            created_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn observed_proxy_request_end_finishes_active_request() {
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = crate::db::init_for_tests(&db_dir.path().join("request-end.db")).expect("init db");
+        let (log_tx, _log_rx) = tokio::sync::mpsc::channel(1);
+        let active_requests = Arc::new(ActiveRequestRegistry::default());
+        active_requests.register(active_request_start("trace-active-end"));
+
+        emit_request_event_and_spawn_request_log(
+            RequestEndArgs::from_context(RequestEndContextArgs {
+                deps: RequestEndDeps::new(
+                    &app_handle,
+                    &db,
+                    &log_tx,
+                    &GatewayPluginPipeline::empty_shared(),
+                    &active_requests,
+                ),
+                trace_id: "trace-active-end",
+                cli_key: "claude",
+                method: "POST",
+                path: "/v1/messages",
+                observe: true,
+                query: None,
+                excluded_from_stats: false,
+                duration_ms: 10,
+                attempts: &[],
+                special_settings_json: None,
+                session_id: Some("session-active".to_string()),
+                requested_model: Some("claude-sonnet-4".to_string()),
+                created_at_ms: 1_700_000_000_000,
+                created_at: 1_700_000_000,
+            })
+            .with_completion(RequestCompletion::success(200, None, None, None, None)),
+        );
+
+        assert!(active_requests.snapshot().is_empty());
     }
 
     #[test]
@@ -983,6 +1083,30 @@ mod tests {
         assert_eq!(log_args.attempts_json, expected_attempts_json);
         assert_eq!(cloned_attempts.len(), 1);
         assert_eq!(cloned_attempts[0].provider_id, 7);
+    }
+
+    #[test]
+    fn serialize_attempts_encodes_timeout_secs_only_for_timeout_attempts() {
+        let mut timeout = timeout_attempt(10, 1, Some(true));
+        timeout.timeout_secs = Some(30);
+        let attempts = vec![timeout, sample_attempt()];
+
+        let json = serialize_attempts(&attempts);
+        assert!(json.contains("\"timeout_secs\":30"));
+
+        let encoded: Vec<serde_json::Value> = serde_json::from_str(&json).expect("attempts json");
+        assert_eq!(
+            encoded[0]
+                .get("timeout_secs")
+                .and_then(serde_json::Value::as_u64),
+            Some(30)
+        );
+        // Non-timeout attempts serialize an explicit null (gateway event
+        // payloads must not use skip_serializing_if).
+        assert_eq!(
+            encoded[1].get("timeout_secs"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     #[test]
@@ -1271,6 +1395,8 @@ mod tests {
             "[{\"cached\":true}]".to_string(),
             Some("gpt-5".to_string()),
             300,
+            None,
+            None,
             400,
             None,
         );

@@ -31,6 +31,7 @@ pub(crate) struct ProviderUpsertInput {
     pub source_provider_id: Option<i64>,
     pub bridge_type: Option<String>,
     pub stream_idle_timeout_seconds: Option<u32>,
+    pub extension_values: Option<Vec<providers::ProviderExtensionValuesInput>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -152,6 +153,7 @@ pub(crate) async fn provider_upsert(
         source_provider_id,
         bridge_type,
         stream_idle_timeout_seconds,
+        extension_values,
     } = input;
 
     let is_create = provider_id.is_none();
@@ -199,6 +201,7 @@ pub(crate) async fn provider_upsert(
                 source_provider_id,
                 bridge_type,
                 stream_idle_timeout_seconds,
+                extension_values,
             },
         )?;
 
@@ -253,8 +256,10 @@ pub(crate) async fn provider_duplicate(
 ) -> Result<providers::ProviderSummary, String> {
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
     let result = blocking::run("provider_duplicate", move || {
-        let conn = db.open_connection()?;
-        let source = providers::get_by_id(&conn, provider_id)?;
+        let source = {
+            let conn = db.open_connection()?;
+            providers::get_by_id(&conn, provider_id)?
+        };
         let siblings = providers::list_by_cli(&db, &source.cli_key)?;
         let api_key = if source.auth_mode == "api_key" && source.source_provider_id.is_none() {
             Some(providers::get_api_key_plaintext(&db, provider_id)?)
@@ -262,8 +267,9 @@ pub(crate) async fn provider_duplicate(
             None
         };
 
-        providers::upsert(
+        providers::duplicate(
             &db,
+            source.id,
             providers::ProviderUpsertParams {
                 provider_id: None,
                 cli_key: source.cli_key.clone(),
@@ -292,6 +298,7 @@ pub(crate) async fn provider_duplicate(
                 source_provider_id: source.source_provider_id,
                 bridge_type: source.bridge_type.clone(),
                 stream_idle_timeout_seconds: source.stream_idle_timeout_seconds,
+                extension_values: None,
             },
         )
     })
@@ -398,14 +405,51 @@ pub(crate) async fn providers_reorder(
     .map_err(Into::into);
 
     if let Ok(ref providers) = result {
-        // Provider order changes must invalidate session-bound provider_order (default TTL=300s).
-        let cleared = app_gateway_clear_cli_route_runtime_state(&app, &cli_key_for_log);
         tracing::info!(
             cli_key = %cli_key_for_log,
             count = providers.len(),
+            "provider pool display order updated"
+        );
+    }
+
+    result
+}
+
+pub(crate) async fn default_route_providers_list(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    cli_key: String,
+) -> Result<Vec<providers::ProviderRouteRow>, String> {
+    let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    blocking::run("default_route_providers_list", move || {
+        providers::default_route_list(&db, &cli_key)
+    })
+    .await
+    .map_err(Into::into)
+}
+
+pub(crate) async fn default_route_providers_set_order(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    cli_key: String,
+    ordered_provider_ids: Vec<i64>,
+) -> Result<Vec<providers::ProviderRouteRow>, String> {
+    let cli_key_for_log = cli_key.clone();
+    let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let result = blocking::run("default_route_providers_set_order", move || {
+        providers::default_route_set_order(&db, &cli_key, ordered_provider_ids)
+    })
+    .await
+    .map_err(Into::into);
+
+    if let Ok(ref rows) = result {
+        let cleared = app_gateway_clear_cli_route_runtime_state(&app, &cli_key_for_log);
+        tracing::info!(
+            cli_key = %cli_key_for_log,
+            count = rows.len(),
             cleared_sessions = cleared.cleared_sessions,
             cleared_recent_errors = cleared.cleared_recent_errors,
-            "providers reordered"
+            "default route provider order updated"
         );
     }
 
@@ -513,6 +557,7 @@ mod tests {
             source_provider_id: None,
             bridge_type: None,
             stream_idle_timeout_seconds: None,
+            extension_values: vec![],
             api_key_configured: true,
         };
 
@@ -598,6 +643,7 @@ mod tests {
             source_provider_id: None,
             bridge_type: None,
             stream_idle_timeout_seconds: None,
+            extension_values: vec![],
             api_key_configured: true,
         };
 

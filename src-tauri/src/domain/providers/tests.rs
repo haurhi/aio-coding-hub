@@ -1,3 +1,4 @@
+use super::queries::pool_order_set;
 use super::*;
 use rusqlite::OptionalExtension;
 
@@ -437,7 +438,156 @@ fn default_provider_params(name: &str) -> ProviderUpsertParams {
         source_provider_id: None,
         bridge_type: None,
         stream_idle_timeout_seconds: None,
+        extension_values: None,
     }
+}
+
+fn seed_plugin(db: &crate::db::Db, plugin_id: &str) {
+    let conn = db.open_connection().expect("open db connection");
+    conn.execute(
+        r#"
+INSERT INTO plugins(
+  plugin_id,
+  name,
+  install_source,
+  status,
+  manifest_json,
+  config_json,
+  granted_permissions_json,
+  created_at,
+  updated_at
+) VALUES (?1, ?1, 'dev', 'enabled', '{}', '{}', '[]', 1, 1)
+"#,
+        rusqlite::params![plugin_id],
+    )
+    .expect("insert plugin");
+}
+
+#[test]
+fn provider_upsert_replaces_extension_values_when_submitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("provider_extension_values_replace.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+    seed_plugin(&db, "plugin.alpha");
+
+    let mut params = default_provider_params("extension-values-preserve");
+    params.extension_values = Some(vec![
+        ProviderExtensionValuesInput {
+            plugin_id: "plugin.alpha".to_string(),
+            namespace: "first".to_string(),
+            values: serde_json::json!({ "enabled": true }),
+        },
+        ProviderExtensionValuesInput {
+            plugin_id: "plugin.alpha".to_string(),
+            namespace: "second".to_string(),
+            values: serde_json::json!({ "threshold": 2 }),
+        },
+    ]);
+
+    let saved = upsert(&db, params).expect("save provider extension values");
+    assert_eq!(saved.extension_values.len(), 2);
+
+    let mut preserve_update = default_provider_params("extension-values-preserve-updated");
+    preserve_update.provider_id = Some(saved.id);
+    preserve_update.extension_values = None;
+
+    let preserved = upsert(&db, preserve_update).expect("update provider without extension values");
+
+    assert_eq!(preserved.extension_values.len(), 2);
+    assert!(preserved.extension_values.iter().any(|value| {
+        value.plugin_id == "plugin.alpha"
+            && value.namespace == "first"
+            && value.values == serde_json::json!({ "enabled": true })
+    }));
+    assert!(preserved.extension_values.iter().any(|value| {
+        value.plugin_id == "plugin.alpha"
+            && value.namespace == "second"
+            && value.values == serde_json::json!({ "threshold": 2 })
+    }));
+
+    let mut clear_update = default_provider_params("extension-values-clear");
+    clear_update.provider_id = Some(saved.id);
+    clear_update.extension_values = Some(vec![]);
+
+    let cleared = upsert(&db, clear_update).expect("clear provider extension values");
+    assert!(cleared.extension_values.is_empty());
+
+    let mut replace_update = default_provider_params("extension-values-one");
+    replace_update.provider_id = Some(saved.id);
+    replace_update.extension_values = Some(vec![ProviderExtensionValuesInput {
+        plugin_id: "plugin.alpha".to_string(),
+        namespace: "first".to_string(),
+        values: serde_json::json!({ "enabled": false }),
+    }]);
+
+    let replaced = upsert(&db, replace_update).expect("replace provider extension values");
+    assert_eq!(replaced.extension_values.len(), 1);
+    assert_eq!(replaced.extension_values[0].plugin_id, "plugin.alpha");
+    assert_eq!(replaced.extension_values[0].namespace, "first");
+    assert_eq!(
+        replaced.extension_values[0].values,
+        serde_json::json!({ "enabled": false })
+    );
+}
+
+#[test]
+fn provider_duplicate_copies_extension_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("provider_extension_values_duplicate.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+    seed_plugin(&db, "plugin.alpha");
+
+    let mut source_params = default_provider_params("extension-values-source");
+    source_params.extension_values = Some(vec![ProviderExtensionValuesInput {
+        plugin_id: "plugin.alpha".to_string(),
+        namespace: "routing".to_string(),
+        values: serde_json::json!({ "mode": "sticky" }),
+    }]);
+    let source = upsert(&db, source_params).expect("save source provider");
+
+    let source_summary = {
+        let conn = db.open_connection().expect("open db connection");
+        get_by_id(&conn, source.id).expect("get source provider")
+    };
+    let duplicated = duplicate(
+        &db,
+        source.id,
+        ProviderUpsertParams {
+            provider_id: None,
+            cli_key: source_summary.cli_key.clone(),
+            name: "extension-values-duplicate".to_string(),
+            base_urls: source_summary.base_urls.clone(),
+            base_url_mode: source_summary.base_url_mode,
+            auth_mode: Some(ProviderAuthMode::ApiKey),
+            api_key: Some("sk-test".to_string()),
+            enabled: source_summary.enabled,
+            cost_multiplier: source_summary.cost_multiplier,
+            priority: None,
+            claude_models: Some(source_summary.claude_models.clone()),
+            limit_5h_usd: source_summary.limit_5h_usd,
+            limit_daily_usd: source_summary.limit_daily_usd,
+            daily_reset_mode: Some(source_summary.daily_reset_mode),
+            daily_reset_time: Some(source_summary.daily_reset_time.clone()),
+            limit_weekly_usd: source_summary.limit_weekly_usd,
+            limit_monthly_usd: source_summary.limit_monthly_usd,
+            limit_total_usd: source_summary.limit_total_usd,
+            tags: Some(source_summary.tags.clone()),
+            note: Some(source_summary.note.clone()),
+            source_provider_id: source_summary.source_provider_id,
+            bridge_type: source_summary.bridge_type.clone(),
+            stream_idle_timeout_seconds: source_summary.stream_idle_timeout_seconds,
+            extension_values: None,
+        },
+    )
+    .expect("duplicate provider");
+
+    assert_eq!(duplicated.extension_values.len(), 1);
+    assert_eq!(duplicated.extension_values[0].plugin_id, "plugin.alpha");
+    assert_eq!(duplicated.extension_values[0].namespace, "routing");
+    assert_eq!(
+        duplicated.extension_values[0].values,
+        serde_json::json!({ "mode": "sticky" })
+    );
 }
 
 #[test]
@@ -464,6 +614,58 @@ fn upsert_rejects_unicode_note_over_character_limit() {
 
     let err = upsert(&db, params).expect_err("note over limit");
     assert!(err.to_string().contains("note must be at most"));
+}
+
+#[test]
+fn upsert_accepts_claude_model_name_at_character_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_model_name_limit.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("model-name-at-limit");
+    params.claude_models = Some(ClaudeModels {
+        main_model: Some("m".repeat(MAX_MODEL_NAME_LEN)),
+        ..ClaudeModels::default()
+    });
+
+    let saved = upsert(&db, params).expect("save provider");
+    let main_model = saved.claude_models.main_model.expect("main model");
+    assert_eq!(main_model.chars().count(), MAX_MODEL_NAME_LEN);
+}
+
+#[test]
+fn upsert_rejects_claude_model_name_over_character_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_model_name_over_limit.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("model-name-over-limit");
+    params.claude_models = Some(ClaudeModels {
+        main_model: Some("m".repeat(MAX_MODEL_NAME_LEN + 1)),
+        ..ClaudeModels::default()
+    });
+
+    let err = upsert(&db, params).expect_err("model name over limit");
+    assert!(err.to_string().contains("main_model must be at most"));
+}
+
+#[test]
+fn upsert_update_rejects_claude_model_name_over_character_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_model_name_update_over_limit.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let saved = upsert(&db, default_provider_params("model-name-update")).expect("save provider");
+
+    let mut params = default_provider_params("model-name-update");
+    params.provider_id = Some(saved.id);
+    params.claude_models = Some(ClaudeModels {
+        reasoning_model: Some("模".repeat(MAX_MODEL_NAME_LEN + 1)),
+        ..ClaudeModels::default()
+    });
+
+    let err = upsert(&db, params).expect_err("model name over limit on update");
+    assert!(err.to_string().contains("reasoning_model must be at most"));
 }
 
 #[test]
@@ -599,6 +801,70 @@ fn reorder_rejects_invalid_duplicate_and_oversized_provider_ids() {
         .contains("ordered_provider_ids must contain at most"));
 }
 
+#[test]
+fn pool_order_is_independent_from_default_route_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_pool_order.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let (p1_id, p2_id, p3_id) = {
+        let p1 = upsert(&db, default_provider_params("pool-p1")).expect("save p1");
+        let p2 = upsert(&db, default_provider_params("pool-p2")).expect("save p2");
+        let p3 = upsert(&db, default_provider_params("pool-p3")).expect("save p3");
+        (p1.id, p2.id, p3.id)
+    };
+
+    default_route_set_order(&db, "claude", vec![p1_id, p2_id]).expect("set default route");
+    pool_order_set(&db, "claude", vec![p3_id, p1_id]).expect("set pool order");
+
+    let pool_ids: Vec<i64> = list_by_cli(&db, "claude")
+        .expect("list providers")
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(pool_ids, vec![p3_id, p1_id, p2_id]);
+
+    let default_ids: Vec<i64> = default_route_list(&db, "claude")
+        .expect("list default route")
+        .into_iter()
+        .map(|row| row.provider_id)
+        .collect();
+    assert_eq!(default_ids, vec![p1_id, p2_id]);
+}
+
+#[test]
+fn default_route_gateway_uses_membership_and_global_enabled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_default_route_gateway.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let (p1_id, p2_id, p3_enabled) = {
+        let p1 = upsert(&db, default_provider_params("default-p1")).expect("save p1");
+        let mut p2_params = default_provider_params("default-p2");
+        p2_params.enabled = false;
+        let p2 = upsert(&db, p2_params).expect("save p2");
+        let p3 = upsert(&db, default_provider_params("default-p3")).expect("save p3");
+        (p1.id, p2.id, p3.enabled)
+    };
+
+    default_route_set_order(&db, "claude", vec![p2_id, p1_id]).expect("set default route");
+
+    let selection =
+        list_enabled_for_gateway_using_active_mode(&db, "claude").expect("list gateway providers");
+    assert_eq!(selection.sort_mode_id, None);
+    assert_eq!(
+        selection
+            .providers
+            .into_iter()
+            .map(|provider| provider.id)
+            .collect::<Vec<_>>(),
+        vec![p1_id]
+    );
+
+    // p3 remains globally enabled but is not a Default member, so it is not routed.
+    assert!(p3_enabled);
+}
+
 fn seed_usage_request_log(db: &crate::db::Db, trace_id: &str, provider_id: i64) {
     let conn = db.open_connection().expect("open db connection");
     conn.execute(
@@ -685,6 +951,7 @@ fn create_oauth_provider_for_cas_test(db: &crate::db::Db, name: &str) -> i64 {
             source_provider_id: None,
             bridge_type: None,
             stream_idle_timeout_seconds: None,
+            extension_values: None,
         },
     )
     .expect("create oauth provider")

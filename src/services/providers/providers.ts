@@ -5,6 +5,7 @@ import {
   type ProviderAuthMode as GeneratedProviderAuthMode,
   type ProviderAvailabilityResult,
   type ProviderBaseUrlMode as GeneratedProviderBaseUrlMode,
+  type ProviderExtensionValuesInput,
   type ProviderOAuthDeviceCodeCancelResult as GeneratedProviderOAuthDeviceCodeCancelResult,
   type ProviderOAuthDeviceCodePollResult as GeneratedProviderOAuthDeviceCodePollResult,
   type ProviderOAuthDeviceCodeStartResult as GeneratedProviderOAuthDeviceCodeStartResult,
@@ -29,9 +30,11 @@ import {
   type Override,
 } from "../generatedTypeUtils";
 import { createRiskyIpcConfirm } from "../ipcConfirm";
+import { FeValidationError } from "../../utils/errors";
 
 export type {
   ProviderAvailabilityResult,
+  ProviderExtensionValuesInput,
   GeneratedProviderOAuthDeviceCodePollResult as ProviderOAuthDeviceCodePollResult,
   GeneratedProviderOAuthDeviceCodeStartResult as ProviderOAuthDeviceCodeStartResult,
   GeneratedProviderOAuthDeviceCodeCancelResult as ProviderOAuthDeviceCodeCancelResult,
@@ -67,6 +70,10 @@ export type ProviderSummary = Override<
   }
 >;
 
+export type ProviderRouteRow = {
+  provider_id: number;
+};
+
 type ProviderDeleteCommandArgs = Parameters<typeof commands.providerDelete>;
 
 export type ProviderDeleteOptions = {
@@ -98,6 +105,7 @@ type ProviderUpsertFieldMap = {
   sourceProviderId: "sourceProviderId";
   bridgeType: "bridgeType";
   streamIdleTimeoutSeconds: "streamIdleTimeoutSeconds";
+  extensionValues: "extensionValues";
 };
 
 type ProviderUpsertAuthority = RemapGeneratedKeys<
@@ -135,7 +143,7 @@ export function validateProviderCliKey(cliKey: string): CliKey {
   if ((CLI_KEY_VALUES as readonly string[]).includes(normalizedCliKey)) {
     return normalizedCliKey as CliKey;
   }
-  throw new Error(`SEC_INVALID_INPUT: invalid cliKey=${cliKey}`);
+  throw new FeValidationError(`SEC_INVALID_INPUT: invalid cliKey=${cliKey}`);
 }
 
 function toProviderAuthMode(value: string, label: string): ProviderAuthMode {
@@ -193,7 +201,8 @@ function toProviderUpsertPayload(input: ProviderUpsertInput): ProviderUpsertTran
     note: input.note ?? null,
     sourceProviderId,
     bridgeType: input.bridgeType ?? null,
-  };
+    extensionValues: input.extensionValues ?? null,
+  } satisfies Omit<GeneratedProviderUpsertInput, "streamIdleTimeoutSeconds">;
 
   if (Object.prototype.hasOwnProperty.call(input, "streamIdleTimeoutSeconds")) {
     return {
@@ -313,6 +322,35 @@ export async function providersReorder(
         await commands.providersReorder(normalizedCliKey, orderedProviderIds),
         (rows) => rows.map(toProviderSummary)
       ),
+  });
+}
+
+export async function defaultRouteProvidersList(cliKey: CliKey) {
+  const normalizedCliKey = validateProviderCliKey(cliKey);
+
+  return invokeGeneratedIpc<ProviderRouteRow[]>({
+    title: "读取 Default 调用顺序失败",
+    cmd: "default_route_providers_list",
+    args: { cliKey: normalizedCliKey },
+    invoke: () =>
+      commands.defaultRouteProvidersList(normalizedCliKey) as Promise<
+        GeneratedCommandResult<ProviderRouteRow[]>
+      >,
+  });
+}
+
+export async function defaultRouteProvidersSetOrder(cliKey: CliKey, orderedProviderIds: number[]) {
+  const normalizedCliKey = validateProviderCliKey(cliKey);
+  validateOrderedProviderIds(orderedProviderIds);
+
+  return invokeGeneratedIpc<ProviderRouteRow[]>({
+    title: "更新 Default 调用顺序失败",
+    cmd: "default_route_providers_set_order",
+    args: { cliKey: normalizedCliKey, orderedProviderIds },
+    invoke: () =>
+      commands.defaultRouteProvidersSetOrder(normalizedCliKey, orderedProviderIds) as Promise<
+        GeneratedCommandResult<ProviderRouteRow[]>
+      >,
   });
 }
 

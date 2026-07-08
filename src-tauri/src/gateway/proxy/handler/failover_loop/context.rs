@@ -187,6 +187,7 @@ pub(super) struct ProviderCtx<'a> {
     pub(super) provider_base_url_base: &'a String,
     pub(super) auth_mode: &'a str,
     pub(super) provider_index: u32,
+    pub(super) provider_bridged: bool,
     pub(super) session_reuse: Option<bool>,
     pub(super) stream_idle_timeout_seconds: Option<u32>,
     pub(super) claude_model_mapping: Option<&'a ClaudeModelMapping>,
@@ -198,6 +199,7 @@ pub(super) struct ProviderCtxOwned {
     pub(super) provider_base_url_base: String,
     pub(super) auth_mode: String,
     pub(super) provider_index: u32,
+    pub(super) provider_bridged: bool,
     pub(super) session_reuse: Option<bool>,
     pub(super) stream_idle_timeout_seconds: Option<u32>,
 }
@@ -210,6 +212,7 @@ impl<'a> From<ProviderCtx<'a>> for ProviderCtxOwned {
             provider_base_url_base: ctx.provider_base_url_base.clone(),
             auth_mode: ctx.auth_mode.to_string(),
             provider_index: ctx.provider_index,
+            provider_bridged: ctx.provider_bridged,
             session_reuse: ctx.session_reuse,
             stream_idle_timeout_seconds: ctx.stream_idle_timeout_seconds,
         }
@@ -259,6 +262,14 @@ pub(super) fn build_stream_finalize_ctx<R: tauri::Runtime>(
         auth_mode: provider_ctx.auth_mode.clone(),
         fake_200_detected: false,
         fake_200_quota_exhausted: false,
+        activity: Arc::new(Mutex::new(
+            crate::gateway::streams::StreamActivityTracker::new(
+                &ctx.trace_id,
+                &ctx.cli_key,
+                ctx.created_at_ms,
+            ),
+        )),
+        active_requests: ctx.state.active_requests.clone(),
     }
 }
 
@@ -266,6 +277,7 @@ pub(super) fn build_stream_finalize_ctx<R: tauri::Runtime>(
 pub(super) struct AttemptCtx<'a> {
     pub(super) attempt_index: u32,
     pub(super) retry_index: u32,
+    pub(super) provider_max_attempts: u32,
     pub(super) attempt_started_ms: u128,
     pub(super) attempt_started: Instant,
     pub(super) circuit_before: &'a circuit_breaker::CircuitSnapshot,

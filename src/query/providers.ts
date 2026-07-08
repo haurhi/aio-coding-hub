@@ -1,6 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useState } from "react";
 import {
+  defaultRouteProvidersList,
+  defaultRouteProvidersSetOrder,
   providerClaudeTerminalLaunchCommand,
   providerUpsert,
   providerDuplicate,
@@ -16,6 +19,7 @@ import {
   type OAuthLimitsResult,
   type ProviderOAuthResetCodexQuotaResult,
   type ProviderAvailabilityResult,
+  type ProviderRouteRow,
   type ProviderUpsertInput,
   type ProviderSummary,
   validateProviderCliKey,
@@ -34,6 +38,18 @@ export function useProvidersListQuery(cliKey: CliKey, options?: { enabled?: bool
     queryFn: () => providersList(normalizedCliKey),
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useDefaultRouteProvidersQuery(cliKey: CliKey, options?: { enabled?: boolean }) {
+  const normalizedCliKey = validateProviderCliKey(cliKey);
+
+  return useQuery({
+    queryKey: providersKeys.defaultRoute(normalizedCliKey),
+    queryFn: () => defaultRouteProvidersList(normalizedCliKey),
+    enabled: options?.enabled ?? true,
+    placeholderData: keepPreviousData,
+    retry: false,
   });
 }
 
@@ -260,6 +276,50 @@ export function useProvidersReorderMutation() {
   });
 }
 
+export function useDefaultRouteProvidersSetOrderMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    ProviderRouteRow[] | null,
+    Error,
+    {
+      cliKey: CliKey;
+      orderedProviderIds: number[];
+      optimisticRows?: ProviderRouteRow[];
+    },
+    { previousRows: ProviderRouteRow[] | null | undefined }
+  >({
+    mutationFn: (input) =>
+      defaultRouteProvidersSetOrder(validateProviderCliKey(input.cliKey), input.orderedProviderIds),
+    onMutate: async (input) => {
+      const cliKey = validateProviderCliKey(input.cliKey);
+      await queryClient.cancelQueries({ queryKey: providersKeys.defaultRoute(cliKey) });
+      const previousRows = queryClient.getQueryData<ProviderRouteRow[] | null>(
+        providersKeys.defaultRoute(cliKey)
+      );
+      if (input.optimisticRows) {
+        queryClient.setQueryData(providersKeys.defaultRoute(cliKey), input.optimisticRows);
+      }
+      return { previousRows };
+    },
+    onError: (_error, input, context) => {
+      if (context?.previousRows !== undefined) {
+        const cliKey = validateProviderCliKey(input.cliKey);
+        queryClient.setQueryData(providersKeys.defaultRoute(cliKey), context.previousRows);
+      }
+    },
+    onSuccess: (next, input) => {
+      if (!next) return;
+      const cliKey = validateProviderCliKey(input.cliKey);
+      queryClient.setQueryData(providersKeys.defaultRoute(cliKey), next);
+    },
+    onSettled: (_data, _error, input) => {
+      const cliKey = validateProviderCliKey(input.cliKey);
+      void queryClient.invalidateQueries({ queryKey: providersKeys.defaultRoute(cliKey) });
+    },
+  });
+}
+
 export function useProviderDuplicateMutation() {
   const queryClient = useQueryClient();
 
@@ -322,10 +382,17 @@ export function useProviderDuplicateMutation() {
 }
 
 export function useProviderClaudeTerminalLaunchCommandMutation() {
-  return useMutation({
-    mutationFn: (input: { providerId: number }) =>
-      providerClaudeTerminalLaunchCommand(input.providerId),
-  });
+  const [isPending, setIsPending] = useState(false);
+  const mutateAsync = useCallback(async (input: { providerId: number }) => {
+    setIsPending(true);
+    try {
+      return await providerClaudeTerminalLaunchCommand(input.providerId);
+    } finally {
+      setIsPending(false);
+    }
+  }, []);
+
+  return useMemo(() => ({ isPending, mutateAsync }), [isPending, mutateAsync]);
 }
 
 export function useOAuthLimitsQuery(providerId: number, enabled: boolean) {
@@ -345,7 +412,13 @@ export function useOAuthLimitsQuery(providerId: number, enabled: boolean) {
 }
 
 export function useProviderTestAvailabilityMutation() {
+  const queryClient = useQueryClient();
+
   return useMutation<ProviderAvailabilityResult | null, Error, { providerId: number }>({
     mutationFn: (input) => providerTestAvailability(input.providerId),
+    onSuccess: (result) => {
+      if (!result) return;
+      queryClient.invalidateQueries({ queryKey: gatewayKeys.circuits() });
+    },
   });
 }

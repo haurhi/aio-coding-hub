@@ -388,6 +388,7 @@ where
         cx2cc_active,
         protocol_bridge_type,
         anthropic_stream_requested,
+        ..
     } = attempt_ctx;
     let selection_method = dc::selection_method(provider_index, retry_index, session_reuse);
     let reason_code = dc::success_reason_code(provider_index, retry_index);
@@ -434,6 +435,10 @@ where
                     circuit_state_after: None,
                     circuit_failure_count: Some(circuit_before.failure_count),
                     circuit_failure_threshold: Some(circuit_before.failure_threshold),
+                    circuit_recover_at_unix: None,
+                    circuit_trigger_error_code: None,
+                    provider_bridged: Some(provider_ctx_owned.provider_bridged),
+                    timeout_secs: None,
                 });
 
                 emit_attempt_event_and_log_with_circuit_before(
@@ -522,6 +527,10 @@ where
                     circuit_state_after: None,
                     circuit_failure_count: Some(circuit_before.failure_count),
                     circuit_failure_threshold: Some(circuit_before.failure_threshold),
+                    circuit_recover_at_unix: None,
+                    circuit_trigger_error_code: None,
+                    provider_bridged: Some(provider_ctx_owned.provider_bridged),
+                    timeout_secs: None,
                 });
 
                 emit_attempt_event_and_log_with_circuit_before(
@@ -650,6 +659,7 @@ where
                 decision,
                 outcome,
                 reason: kind.reason(MAX_NON_SSE_BODY_BYTES),
+                timeout_secs: None,
             })
             .await;
         }
@@ -678,6 +688,10 @@ where
         circuit_state_after: None,
         circuit_failure_count: Some(circuit_before.failure_count),
         circuit_failure_threshold: Some(circuit_before.failure_threshold),
+        circuit_recover_at_unix: None,
+        circuit_trigger_error_code: None,
+        provider_bridged: Some(provider_ctx_owned.provider_bridged),
+        timeout_secs: None,
     });
 
     emit_attempt_event_and_log_with_circuit_before(
@@ -732,6 +746,7 @@ where
                     decision,
                     outcome,
                     reason: format!("cx2cc event-stream aggregation failed: {err}"),
+                    timeout_secs: None,
                 })
                 .await;
             }
@@ -887,6 +902,7 @@ where
                 decision,
                 outcome,
                 reason: format!("cx2cc response translation failed: {err}"),
+                timeout_secs: None,
             })
             .await;
         }
@@ -1009,6 +1025,7 @@ where
                     &state.db,
                     &state.log_tx,
                     &state.plugin_pipeline,
+                    &state.active_requests,
                 ),
                 trace_id: common.trace_id.as_str(),
                 cli_key: common.cli_key.as_str(),
@@ -1061,10 +1078,11 @@ where
     };
     match state.plugin_pipeline.run_response_hook(hook_input).await {
         Ok(output) => {
-            crate::gateway::plugins::audit::persist_gateway_plugin_audit_events(
+            crate::gateway::plugins::audit::persist_gateway_plugin_diagnostics(
                 &state.db,
                 &common.trace_id,
                 output.audit_events.clone(),
+                output.execution_reports.clone(),
             );
             if let Some(blocked) = output.blocked {
                 tracing::warn!(
@@ -1178,7 +1196,13 @@ where
     let duration_ms = started.elapsed().as_millis();
     emit_request_event_and_enqueue_request_log(
         RequestEndArgs::from_context(RequestEndContextArgs {
-            deps: RequestEndDeps::new(&state.app, &state.db, &state.log_tx, &state.plugin_pipeline),
+            deps: RequestEndDeps::new(
+                &state.app,
+                &state.db,
+                &state.log_tx,
+                &state.plugin_pipeline,
+                &state.active_requests,
+            ),
             trace_id: common.trace_id.as_str(),
             cli_key: common.cli_key.as_str(),
             method: common.method_hint.as_str(),

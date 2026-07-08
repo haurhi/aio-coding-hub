@@ -121,13 +121,12 @@ export function createProviderEditorDialogSchema(options: {
     });
 }
 
-export const providerEditorDialogSchemaCreate = createProviderEditorDialogSchema({
-  mode: "create",
-});
-export type ProviderEditorDialogFormInput = z.input<typeof providerEditorDialogSchemaCreate>;
-export type ProviderEditorDialogFormOutput = z.output<typeof providerEditorDialogSchemaCreate>;
+type ProviderEditorDialogSchema = ReturnType<typeof createProviderEditorDialogSchema>;
+export type ProviderEditorDialogFormInput = z.input<ProviderEditorDialogSchema>;
+export type ProviderEditorDialogFormOutput = z.output<ProviderEditorDialogSchema>;
 
-const MAX_MODEL_NAME_LEN = 200;
+// Mirrors src-tauri/src/domain/providers/types.rs MAX_MODEL_NAME_LEN (guarded by crossLayerContracts.test.ts).
+export const MAX_MODEL_NAME_LEN = 200;
 
 export function validateProviderClaudeModels(input: {
   main_model?: string | null;

@@ -31,7 +31,9 @@ pub(super) use runtime_settings_reader::RuntimeSettingsMiddleware;
 pub(super) use warmup_interceptor::WarmupInterceptorMiddleware;
 
 use crate::gateway::proxy::request_body::GatewayRequestBody;
-use crate::gateway::proxy::request_context::RequestContextParts;
+use crate::gateway::proxy::request_context::{
+    effective_first_byte_timeout_secs, RequestContextParts,
+};
 use crate::gateway::runtime::GatewayAppState;
 use crate::gateway::util::RequestedModelLocation;
 use crate::providers;
@@ -79,6 +81,9 @@ pub(super) struct ProxyContext<R: tauri::Runtime = tauri::Wry> {
     // -- model inference results --
     pub(super) requested_model: Option<String>,
     pub(super) requested_model_location: Option<RequestedModelLocation>,
+
+    // -- request kind classification --
+    pub(super) is_compact_request: bool,
 
     // -- runtime settings (populated after settings read) --
     pub(super) runtime_settings: Option<super::runtime_settings::HandlerRuntimeSettings>,
@@ -142,7 +147,13 @@ impl<R: tauri::Runtime> ProxyContext<R> {
             max_attempts_per_provider: rs.max_attempts_per_provider,
             max_providers_to_try: rs.max_providers_to_try,
             provider_cooldown_secs: rs.provider_cooldown_secs,
-            upstream_first_byte_timeout_secs: rs.upstream_first_byte_timeout_secs,
+            // Compact requests get a widened first-byte timeout: the whole
+            // prompt cache is invalidated upstream, so the first byte can
+            // legitimately take minutes. See `effective_first_byte_timeout_secs`.
+            upstream_first_byte_timeout_secs: effective_first_byte_timeout_secs(
+                rs.upstream_first_byte_timeout_secs,
+                self.is_compact_request,
+            ),
             upstream_stream_idle_timeout_secs: rs.upstream_stream_idle_timeout_secs,
             upstream_request_timeout_non_streaming_secs: rs
                 .upstream_request_timeout_non_streaming_secs,

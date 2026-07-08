@@ -6,18 +6,22 @@ mod validation;
 
 pub(crate) use types::map_provider_model;
 pub use types::{
-    ClaudeModels, DailyResetMode, ProviderAuthMode, ProviderBaseUrlMode, ProviderModelMapping,
-    ProviderSummary, ProviderUpsertParams,
+    ClaudeModels, DailyResetMode, ProviderAuthMode, ProviderBaseUrlMode,
+    ProviderExtensionValuesInput, ProviderModelMapping, ProviderSummary, ProviderUpsertParams,
 };
 
 #[allow(unused_imports)]
 pub(crate) use types::{
-    is_r2c_bridge, ClaudeTerminalLaunchContext, GatewayProvidersSelection, ProviderForGateway,
-    ProviderOAuthDetails, CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE, CX2CC_BRIDGE_TYPE,
-    LEGACY_CC2CX_BRIDGE_TYPE, R2C_BRIDGE_TYPE,
+    is_cx2cc_bridge, is_r2c_bridge, ClaudeTerminalLaunchContext, GatewayProvidersSelection,
+    ProviderForGateway, ProviderOAuthDetails, ProviderRouteRow,
+    CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE, CX2CC_BRIDGE_TYPE, LEGACY_CC2CX_BRIDGE_TYPE,
+    R2C_BRIDGE_TYPE,
 };
 
-pub use queries::{delete, get_api_key_plaintext, list_by_cli, names_by_id, reorder, upsert};
+pub use queries::{
+    default_route_list, default_route_set_order, delete, duplicate, get_api_key_plaintext,
+    list_by_cli, names_by_id, reorder, upsert,
+};
 
 pub(crate) use queries::{
     active_sort_mode_id_for_gateway, claude_terminal_launch_context, clear_oauth, cli_key_by_id,

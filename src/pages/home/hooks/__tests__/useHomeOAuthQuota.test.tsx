@@ -67,6 +67,7 @@ function makeProvider(
     bridge_type: partial.bridge_type ?? null,
     stream_idle_timeout_seconds: partial.stream_idle_timeout_seconds ?? null,
     model_mapping: partial.model_mapping ?? {},
+    extension_values: partial.extension_values ?? [],
     api_key_configured: partial.api_key_configured ?? false,
   };
 }
@@ -86,6 +87,7 @@ function makeRequestLog(
     requested_model: partial.requested_model ?? null,
     status: partial.status ?? 200,
     error_code: partial.error_code ?? null,
+    is_interrupted: partial.is_interrupted ?? false,
     duration_ms: partial.duration_ms ?? 1000,
     ttfb_ms: partial.ttfb_ms ?? null,
     attempt_count: partial.attempt_count ?? 1,
@@ -105,11 +107,14 @@ function makeRequestLog(
     cache_creation_input_tokens: partial.cache_creation_input_tokens ?? null,
     cache_creation_5m_input_tokens: partial.cache_creation_5m_input_tokens ?? null,
     cache_creation_1h_input_tokens: partial.cache_creation_1h_input_tokens ?? null,
+    effective_input_tokens: partial.effective_input_tokens ?? null,
     cost_usd: partial.cost_usd ?? null,
     provider_chain_json: partial.provider_chain_json ?? null,
     error_details_json: partial.error_details_json ?? null,
     cost_multiplier: partial.cost_multiplier ?? 1,
     created_at_ms: partial.created_at_ms ?? (partial.created_at ?? 0) * 1000,
+    last_activity_ms: partial.last_activity_ms ?? null,
+    activity_details_json: partial.activity_details_json ?? null,
     created_at: partial.created_at ?? 0,
   };
 }
@@ -263,6 +268,58 @@ describe("pages/home/hooks/useHomeOAuthQuota", () => {
       limit_weekly_reset_at: null,
       reset_credit_available_count: null,
     });
+  });
+
+  it("skips disabled OAuth providers during bulk refresh", async () => {
+    vi.mocked(providersList).mockImplementation(async (cliKey) => {
+      if (cliKey === "codex") {
+        return [
+          makeProvider({
+            id: 11,
+            cli_key: "codex",
+            name: "Codex OAuth",
+            auth_mode: "oauth",
+          }),
+          makeProvider({
+            id: 12,
+            cli_key: "codex",
+            name: "Disabled Codex OAuth",
+            auth_mode: "oauth",
+            enabled: false,
+          }),
+        ];
+      }
+      return [];
+    });
+
+    const client = createTestQueryClient();
+    const wrapper = createQueryWrapper(client);
+    vi.mocked(providerOAuthFetchLimits).mockResolvedValue({
+      limit_short_label: "5h",
+      limit_5h_text: "44%",
+      limit_weekly_text: "88%",
+      limit_5h_reset_at: null,
+      limit_weekly_reset_at: null,
+      reset_credit_available_count: null,
+    });
+
+    const { result } = renderHook(
+      () => useHomeOAuthQuota({ cliPriorityOrder: ["claude", "codex", "gemini"] }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.oauthQuotaRows).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.refreshOAuthQuota();
+    });
+
+    expect(providerOAuthFetchLimits).toHaveBeenCalledTimes(1);
+    expect(providerOAuthFetchLimits).toHaveBeenCalledWith(11);
+    expect(providerOAuthFetchLimits).not.toHaveBeenCalledWith(12);
+    expect(gatewayCircuitResetProvider).toHaveBeenCalledWith(11);
+    expect(gatewayCircuitResetProvider).not.toHaveBeenCalledWith(12);
+    expect(result.current.oauthQuotaRows.find((row) => row.providerId === 12)?.state).toBe("idle");
   });
 
   it("resets only the selected Codex OAuth provider and keeps other OAuth caches intact", async () => {

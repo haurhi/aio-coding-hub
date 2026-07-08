@@ -114,6 +114,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                                 &state.db,
                                 &state.log_tx,
                                 &state.plugin_pipeline,
+                                &state.active_requests,
                             ),
                             trace_id: trace_id.as_str(),
                             cli_key: cli_key.as_str(),
@@ -415,6 +416,10 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
             circuit_state_after,
             circuit_failure_count,
             circuit_failure_threshold,
+            circuit_recover_at_unix: None,
+            circuit_trigger_error_code: None,
+            provider_bridged: Some(provider_ctx.provider_bridged),
+            timeout_secs: None,
         });
 
         emit_attempt_event_and_log(
@@ -484,6 +489,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                             &state.db,
                             &state.log_tx,
                             &state.plugin_pipeline,
+                            &state.active_requests,
                         ),
                         trace_id: trace_id.as_str(),
                         cli_key: cli_key.as_str(),

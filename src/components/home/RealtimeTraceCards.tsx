@@ -9,6 +9,8 @@ import type { CliSessionsFolderLookupEntry } from "../../services/cli/cliSession
 import type { CliKey } from "../../services/providers/providers";
 import type { ProjectedRealtimeCard } from "../../services/gateway/requestActivityProjection";
 import { REALTIME_TRACE_EXIT_START_MS } from "../../services/gateway/requestActivityProjection";
+import { requestLogActiveActivityState } from "../../services/gateway/requestLogState";
+import { hasFailoverFromSegments } from "../../services/gateway/traceRoute";
 import { cn } from "../../utils/cn";
 import {
   computeOutputTokensPerSecond,
@@ -20,16 +22,11 @@ import {
   sanitizeTtfbMs,
 } from "../../utils/formatters";
 import { Clock, Server, CheckCircle2, XCircle } from "lucide-react";
-import {
-  computeEffectiveInputTokens,
-  computeStatusBadge,
-  FolderBadge,
-  formatClaudeModelMappingText,
-  FreeBadge,
-  getErrorCodeLabel,
-  SessionReuseBadge,
-} from "./HomeLogShared";
+import { computeStatusBadge } from "./requestLogPresentation";
+import { FolderBadge, FreeBadge, SessionReuseBadge } from "./LogBadges";
+import { formatClaudeModelMappingText } from "./requestLogSpecialSettings";
 import { CliBrandIcon } from "./CliBrandIcon";
+import { getErrorCodeLabel } from "./requestLogErrorLabels";
 
 export type RealtimeTraceCardsProps = {
   folderLookupBySessionKey: Map<string, CliSessionsFolderLookupEntry>;
@@ -69,6 +66,13 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
   showCustomTooltip,
 }: RealtimeTraceCardsProps) {
   const visibleTraces = useMemo(() => cards.map((card) => card.trace), [cards]);
+  const activeRequestByTraceId = useMemo(() => {
+    const map = new Map<string, NonNullable<ProjectedRealtimeCard["activeRequest"]>>();
+    for (const card of cards) {
+      if (card.activeRequest) map.set(card.trace.trace_id, card.activeRequest);
+    }
+    return map;
+  }, [cards]);
 
   // Compute a batch-aligned exit threshold: if multiple traces completed within
   // BATCH_EXIT_WINDOW_MS of each other, they all exit when the earliest one would.
@@ -147,9 +151,8 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
           return { providerText, startProvider, endProvider, segments: segs };
         })();
 
-        const hasFailover =
-          attemptRoute.segments.length > 1 ||
-          attemptRoute.segments.some((s) => s.status === "failed");
+        // 与落库后徽章同规则（见 traceRoute.ts，复刻后端 has_failover）。
+        const hasFailover = hasFailoverFromSegments(attemptRoute.segments);
 
         const statusBadge = computeStatusBadge({
           status: summaryStatus,
@@ -165,9 +168,12 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
         const hasSessionReuse = (trace.attempts ?? []).some(
           (attempt) => attempt.session_reuse === true
         );
-        const latestAttempt = (trace.attempts ?? [])
-          .slice()
-          .sort((a, b) => b.attempt_index - a.attempt_index)[0];
+        let latestAttempt: NonNullable<typeof trace.attempts>[number] | undefined;
+        for (const attempt of trace.attempts ?? []) {
+          if (!latestAttempt || attempt.attempt_index > latestAttempt.attempt_index) {
+            latestAttempt = attempt;
+          }
+        }
 
         const providerText = attemptRoute.providerText;
         const sessionFolder = (() => {
@@ -225,11 +231,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
           ? sanitizeTtfbMs(trace.summary.ttfb_ms ?? null, trace.summary.duration_ms)
           : null;
 
-        const effectiveInputTokens = computeEffectiveInputTokens(
-          trace.cli_key,
-          trace.summary?.input_tokens ?? null,
-          trace.summary?.cache_read_input_tokens ?? null
-        );
+        const effectiveInputTokens = trace.summary?.effective_input_tokens ?? null;
         const displayInputTokens = effectiveInputTokens ?? (isClientAbort ? 0 : null);
         const displayOutputTokens = trace.summary?.output_tokens ?? (isClientAbort ? 0 : null);
         const displayCacheReadTokens =
@@ -266,8 +268,24 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
               ? attemptRoute.segments.map((seg) => seg.provider).join(" → ")
               : null;
         const providerTitle = providerText;
+        const idleMinutes = (() => {
+          if (!isInProgress) return null;
+          const activeRequest = activeRequestByTraceId.get(trace.trace_id);
+          if (!activeRequest) return null;
+          if (
+            requestLogActiveActivityState(activeRequest.last_activity_ms, nowMs) !==
+            "in_progress_idle"
+          ) {
+            return null;
+          }
+          return Math.max(
+            1,
+            Math.floor(Math.max(0, nowMs - activeRequest.last_activity_ms) / 60_000)
+          );
+        })();
         const liveStageText = (() => {
           if (!isInProgress) return null;
+          if (idleMinutes != null) return `已静默 ${idleMinutes} 分钟`;
           if (!latestAttempt) return "等待首个尝试";
           if (hasFailover) return "切换处理中";
           if (latestAttempt.outcome === "started") return "处理中";
@@ -386,7 +404,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                 </div>
 
                 {isInProgress ? (
-                  <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-9">
+                  <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-12">
                     <div
                       className={cn(
                         LIVE_METRIC_CARD_BASE,
@@ -401,7 +419,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                       className={cn(
                         LIVE_METRIC_CARD_BASE,
                         LIVE_METRIC_CARD_SURFACE,
-                        "sm:col-span-3"
+                        "sm:col-span-2"
                       )}
                     >
                       <div className={LIVE_METRIC_LABEL}>尝试次数</div>
@@ -413,7 +431,7 @@ export const RealtimeTraceCards = memo(function RealtimeTraceCards({
                       className={cn(
                         LIVE_METRIC_CARD_BASE,
                         LIVE_METRIC_CARD_SURFACE,
-                        "sm:col-span-3"
+                        "sm:col-span-7"
                       )}
                     >
                       <div className={LIVE_METRIC_LABEL}>当前链路</div>

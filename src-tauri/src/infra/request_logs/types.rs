@@ -29,6 +29,8 @@ pub struct RequestLogInsert {
     pub provider_chain_json: Option<String>,
     pub error_details_json: Option<String>,
     pub created_at_ms: i64,
+    pub last_activity_ms: Option<i64>,
+    pub activity_details_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -68,6 +70,10 @@ pub struct RequestLogSummary {
     pub requested_model: Option<String>,
     pub status: Option<i64>,
     pub error_code: Option<String>,
+    // Persisted row never resolved (no status, no error): the request was cut
+    // off by a crash/stop before reconciliation. Owned here so the frontend
+    // does not re-derive the predicate.
+    pub is_interrupted: bool,
     pub duration_ms: i64,
     pub ttfb_ms: Option<i64>,
     pub attempt_count: i64,
@@ -87,11 +93,17 @@ pub struct RequestLogSummary {
     pub cache_creation_input_tokens: Option<i64>,
     pub cache_creation_5m_input_tokens: Option<i64>,
     pub cache_creation_1h_input_tokens: Option<i64>,
+    // Computed by the backend via domain::usage_stats::effective_input_tokens_display
+    // (single source of truth shared with the usage aggregates). None = usage
+    // unknown (no input_tokens recorded), rendered as "—" by the frontend.
+    pub effective_input_tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     pub provider_chain_json: Option<String>,
     pub error_details_json: Option<String>,
     pub cost_multiplier: f64,
     pub created_at_ms: i64,
+    pub last_activity_ms: Option<i64>,
+    pub activity_details_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -108,6 +120,8 @@ pub struct RequestLogDetail {
     pub special_settings_json: Option<String>,
     pub status: Option<i64>,
     pub error_code: Option<String>,
+    // See RequestLogSummary::is_interrupted.
+    pub is_interrupted: bool,
     pub duration_ms: i64,
     pub ttfb_ms: Option<i64>,
     pub attempts_json: String,
@@ -118,6 +132,8 @@ pub struct RequestLogDetail {
     pub cache_creation_input_tokens: Option<i64>,
     pub cache_creation_5m_input_tokens: Option<i64>,
     pub cache_creation_1h_input_tokens: Option<i64>,
+    // See RequestLogSummary::effective_input_tokens.
+    pub effective_input_tokens: Option<i64>,
     pub usage_json: Option<String>,
     pub requested_model: Option<String>,
     pub final_provider_id: i64,
@@ -129,6 +145,8 @@ pub struct RequestLogDetail {
     pub error_details_json: Option<String>,
     pub cost_multiplier: f64,
     pub created_at_ms: i64,
+    pub last_activity_ms: Option<i64>,
+    pub activity_details_json: Option<String>,
     pub created_at: i64,
 }
 

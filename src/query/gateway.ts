@@ -14,6 +14,7 @@ import {
   type GatewayProviderCircuitStatus,
 } from "../services/gateway/gateway";
 import type { CliKey } from "../services/providers/providers";
+import { useDocumentVisibility } from "../hooks/useDocumentVisibility";
 import { gatewayKeys } from "./keys";
 
 export type GatewayCircuitDerivedState = {
@@ -98,12 +99,17 @@ export function useGatewayStatusQuery(options?: {
   enabled?: boolean;
   refetchIntervalMs?: number | false;
 }) {
+  // Polling pauses while the window is hidden (same semantic as the backend's
+  // event gating) but keeps running when merely unfocused — hence the
+  // visibility gate on refetchInterval instead of refetchIntervalInBackground.
+  const documentVisible = useDocumentVisibility();
+
   return useQuery({
     queryKey: gatewayKeys.status(),
     queryFn: () => gatewayStatus(),
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
-    refetchInterval: options?.refetchIntervalMs ?? false,
+    refetchInterval: documentVisible ? (options?.refetchIntervalMs ?? false) : false,
     refetchIntervalInBackground: true,
   });
 }
@@ -157,13 +163,15 @@ export function useGatewaySessionsListQuery(
   options?: { enabled?: boolean; refetchIntervalMs?: number | false }
 ) {
   const normalizedLimit = normalizeGatewaySessionsLimit(limit) ?? GATEWAY_SESSIONS_DEFAULT_LIMIT;
+  // See useGatewayStatusQuery: poll only while the window is visible.
+  const documentVisible = useDocumentVisibility();
 
   return useQuery({
     queryKey: gatewayKeys.sessionsList(normalizedLimit),
     queryFn: () => gatewaySessionsList(normalizedLimit),
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
-    refetchInterval: options?.refetchIntervalMs ?? false,
+    refetchInterval: documentVisible ? (options?.refetchIntervalMs ?? false) : false,
     refetchIntervalInBackground: true,
   });
 }

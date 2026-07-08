@@ -154,6 +154,7 @@ describe("pages/settings/settingsPersistenceModel", () => {
       startMinimized: false,
       trayEnabled: true,
       logRetentionDays: 7,
+      requestLogRetentionDays: 0,
       providerCooldownSeconds: 30,
       providerBaseUrlPingCacheTtlSeconds: 60,
       upstreamFirstByteTimeoutSeconds: 0,

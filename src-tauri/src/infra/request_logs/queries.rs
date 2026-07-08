@@ -38,6 +38,8 @@ const REQUEST_LOG_SUMMARY_FIELDS: &str = "
   cost_usd_femto,
   cost_multiplier,
   created_at_ms,
+  last_activity_ms,
+  activity_details_json,
   created_at,
   provider_chain_json,
   error_details_json
@@ -71,6 +73,8 @@ const REQUEST_LOG_DETAIL_FIELDS: &str = "
   cost_usd_femto,
   cost_multiplier,
   created_at_ms,
+  last_activity_ms,
+  activity_details_json,
   created_at,
   provider_chain_json,
   error_details_json
@@ -204,6 +208,8 @@ pub(super) fn route_from_attempts(attempts: &[AttemptRow]) -> Vec<RequestLogRout
 struct SourceProviderInfo {
     source_provider_id: Option<i64>,
     source_provider_name: Option<String>,
+    // Same predicate as the usage-stats SQL: source id present OR cx2cc bridge.
+    bridged: bool,
 }
 
 fn normalize_source_provider_name(name: Option<String>) -> Option<String> {
@@ -236,11 +242,11 @@ fn load_source_provider_info_map(
 SELECT
   bridge.id,
   bridge.source_provider_id,
-  source.name
+  source.name,
+  bridge.bridge_type
 FROM providers bridge
 LEFT JOIN providers source ON source.id = bridge.source_provider_id
 WHERE bridge.id IN ({placeholders})
-  AND bridge.source_provider_id IS NOT NULL
 "#
     );
 
@@ -265,12 +271,19 @@ WHERE bridge.id IN ({placeholders})
         let source_provider_name: Option<String> = row
             .get(2)
             .map_err(|e| db_err!("invalid provider source name: {e}"))?;
+        let bridge_type: Option<String> = row
+            .get(3)
+            .map_err(|e| db_err!("invalid provider bridge type: {e}"))?;
 
         out.insert(
             bridge_id,
             SourceProviderInfo {
                 source_provider_id,
                 source_provider_name: normalize_source_provider_name(source_provider_name),
+                bridged: crate::usage_stats::is_bridged_input_semantics(
+                    source_provider_id,
+                    bridge_type.as_deref(),
+                ),
             },
         );
     }
@@ -286,10 +299,18 @@ fn attach_source_provider_info(
     let info_by_bridge_id = load_source_provider_info_map(conn, &ids)?;
 
     for item in items.iter_mut() {
+        let mut bridged = false;
         if let Some(info) = info_by_bridge_id.get(&item.final_provider_id) {
             item.final_provider_source_id = info.source_provider_id;
             item.final_provider_source_name = info.source_provider_name.clone();
+            bridged = info.bridged;
         }
+        item.effective_input_tokens = crate::usage_stats::effective_input_tokens_display(
+            &item.cli_key,
+            bridged,
+            item.input_tokens,
+            item.cache_read_input_tokens,
+        );
     }
 
     Ok(())
@@ -302,12 +323,18 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<RequestLogSummary, rusqlite
     let (start_provider_id, start_provider_name) = start_provider_from_attempts(&attempts);
     let (final_provider_id, final_provider_name) = final_provider_from_attempts(&attempts);
     let route = route_from_attempts(&attempts);
-    // has_failover: 真正切换过 provider（route 中有多个 hop，skipped 已被过滤）
+    // has_failover: 切换过 provider（route 中有多个 hop）。注意 provider_id>0 的
+    // skipped attempt 也计入 hop（见 route_includes_skipped_attempts 测试）；前端
+    // src/services/gateway/traceRoute.ts 复刻此语义，两侧需保持同步。
     let has_failover = route.len() > 1;
     let session_reuse = attempts
         .iter()
         .any(|row| row.session_reuse.unwrap_or(false));
     let cost_usd = cost_usd_from_femto(row.get("cost_usd_femto")?);
+
+    let status: Option<i64> = row.get("status")?;
+    let error_code: Option<String> = row.get("error_code")?;
+    let is_interrupted = status.is_none() && error_code.is_none();
 
     Ok(RequestLogSummary {
         id: row.get("id")?,
@@ -319,8 +346,9 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<RequestLogSummary, rusqlite
         excluded_from_stats: row.get::<_, i64>("excluded_from_stats").unwrap_or(0) != 0,
         special_settings_json: row.get("special_settings_json")?,
         requested_model: row.get("requested_model")?,
-        status: row.get("status")?,
-        error_code: row.get("error_code")?,
+        status,
+        error_code,
+        is_interrupted,
         duration_ms: row.get("duration_ms")?,
         ttfb_ms: row.get("ttfb_ms")?,
         attempt_count,
@@ -340,9 +368,13 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<RequestLogSummary, rusqlite
         cache_creation_input_tokens: row.get("cache_creation_input_tokens")?,
         cache_creation_5m_input_tokens: row.get("cache_creation_5m_input_tokens")?,
         cache_creation_1h_input_tokens: row.get("cache_creation_1h_input_tokens")?,
+        // Filled by attach_source_provider_info (needs the providers table).
+        effective_input_tokens: None,
         cost_usd,
         cost_multiplier: row.get("cost_multiplier")?,
         created_at_ms: row.get("created_at_ms")?,
+        last_activity_ms: row.get("last_activity_ms")?,
+        activity_details_json: row.get("activity_details_json").unwrap_or(None),
         created_at: row.get("created_at")?,
         provider_chain_json: row.get("provider_chain_json").unwrap_or(None),
         error_details_json: row.get("error_details_json").unwrap_or(None),
@@ -354,6 +386,9 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
     let attempts = parse_attempts(&attempts_json);
     let (final_provider_id, final_provider_name) = final_provider_from_attempts(&attempts);
     let cost_usd = cost_usd_from_femto(row.get("cost_usd_femto")?);
+    let status: Option<i64> = row.get("status")?;
+    let error_code: Option<String> = row.get("error_code")?;
+    let is_interrupted = status.is_none() && error_code.is_none();
 
     Ok(RequestLogDetail {
         id: row.get("id")?,
@@ -365,8 +400,9 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
         query: row.get("query")?,
         excluded_from_stats: row.get::<_, i64>("excluded_from_stats").unwrap_or(0) != 0,
         special_settings_json: row.get("special_settings_json")?,
-        status: row.get("status")?,
-        error_code: row.get("error_code")?,
+        status,
+        error_code,
+        is_interrupted,
         duration_ms: row.get("duration_ms")?,
         ttfb_ms: row.get("ttfb_ms")?,
         attempts_json,
@@ -377,6 +413,8 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
         cache_creation_input_tokens: row.get("cache_creation_input_tokens")?,
         cache_creation_5m_input_tokens: row.get("cache_creation_5m_input_tokens")?,
         cache_creation_1h_input_tokens: row.get("cache_creation_1h_input_tokens")?,
+        // Filled by attach_source_provider_info_to_detail.
+        effective_input_tokens: None,
         usage_json: row.get("usage_json")?,
         requested_model: row.get("requested_model")?,
         final_provider_id,
@@ -386,6 +424,8 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
         cost_usd,
         cost_multiplier: row.get("cost_multiplier")?,
         created_at_ms: row.get("created_at_ms")?,
+        last_activity_ms: row.get("last_activity_ms")?,
+        activity_details_json: row.get("activity_details_json").unwrap_or(None),
         created_at: row.get("created_at")?,
         provider_chain_json: row.get("provider_chain_json").unwrap_or(None),
         error_details_json: row.get("error_details_json").unwrap_or(None),
@@ -397,10 +437,18 @@ fn attach_source_provider_info_to_detail(
     item: &mut RequestLogDetail,
 ) -> crate::shared::error::AppResult<()> {
     let info_by_bridge_id = load_source_provider_info_map(conn, &[item.final_provider_id])?;
+    let mut bridged = false;
     if let Some(info) = info_by_bridge_id.get(&item.final_provider_id) {
         item.final_provider_source_id = info.source_provider_id;
         item.final_provider_source_name = info.source_provider_name.clone();
+        bridged = info.bridged;
     }
+    item.effective_input_tokens = crate::usage_stats::effective_input_tokens_display(
+        &item.cli_key,
+        bridged,
+        item.input_tokens,
+        item.cache_read_input_tokens,
+    );
     Ok(())
 }
 
@@ -758,15 +806,16 @@ INSERT INTO request_logs (
 CREATE TABLE providers (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  source_provider_id INTEGER
+  source_provider_id INTEGER,
+  bridge_type TEXT
 );
-INSERT INTO providers (id, name, source_provider_id) VALUES (7, 'OpenAI Primary', NULL);
-INSERT INTO providers (id, name, source_provider_id) VALUES (12, 'Claude Bridge', 7);
+INSERT INTO providers (id, name, source_provider_id, bridge_type) VALUES (7, 'OpenAI Primary', NULL, NULL);
+INSERT INTO providers (id, name, source_provider_id, bridge_type) VALUES (12, 'Claude Bridge', 7, 'cx2cc');
 "#,
         )
         .unwrap();
 
-        let info = load_source_provider_info_map(&conn, &[12, 99]).unwrap();
+        let info = load_source_provider_info_map(&conn, &[7, 12, 99]).unwrap();
         let bridge = info.get(&12).expect("bridge provider source info");
 
         assert_eq!(bridge.source_provider_id, Some(7));
@@ -774,6 +823,12 @@ INSERT INTO providers (id, name, source_provider_id) VALUES (12, 'Claude Bridge'
             bridge.source_provider_name.as_deref(),
             Some("OpenAI Primary")
         );
+        assert!(bridge.bridged);
+
+        let plain = info.get(&7).expect("plain provider info");
+        assert_eq!(plain.source_provider_id, None);
+        assert!(!plain.bridged);
+
         assert!(!info.contains_key(&99));
     }
 

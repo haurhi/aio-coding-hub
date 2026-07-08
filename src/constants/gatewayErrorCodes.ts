@@ -45,7 +45,7 @@ export type GatewayErrorCode = (typeof GatewayErrorCodes)[keyof typeof GatewayEr
 
 export type GatewayErrorDescription = { desc: string; suggestion: string };
 
-export const GatewayErrorShortLabels = {
+const GatewayErrorShortLabels = {
   [GatewayErrorCodes.ALL_PROVIDERS_UNAVAILABLE]: "全部不可用",
   [GatewayErrorCodes.UPSTREAM_ALL_FAILED]: "全部失败",
   [GatewayErrorCodes.NO_ENABLED_PROVIDER]: "无供应商",
@@ -104,7 +104,8 @@ export const GatewayErrorDescriptions = {
   },
   GW_UPSTREAM_TIMEOUT: {
     desc: "上游服务响应超时",
-    suggestion: "Provider 响应时间过长。请检查 Provider 服务状态，或考虑在设置中增加超时时间。",
+    suggestion:
+      "Provider 在配置的首字节超时内未返回响应。若上游响应普遍偏慢（大上下文、冷缓存），请调大：设置 → 通用 → 首字节超时（0=禁用）；若上游为自建网关，请检查其反代是否缓冲了流式响应。",
   },
   GW_UPSTREAM_CONNECT_FAILED: {
     desc: "无法连接到上游服务",

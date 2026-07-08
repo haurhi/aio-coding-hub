@@ -43,6 +43,8 @@ vi.mock("../../components/cli-manager/tabs/GeneralTab", () => ({
     onPersistCircuitBreakerNotice,
     onPersistCodexSessionIdCompletion,
     onPersistCacheAnomalyMonitor,
+    onPersistTaskCompleteNotify,
+    onPersistNotificationSound,
     onPersistCommonSettings,
     blurOnEnter,
   }: any) => (
@@ -68,6 +70,18 @@ vi.mock("../../components/cli-manager/tabs/GeneralTab", () => ({
       </button>
       <button type="button" onClick={() => onPersistCacheAnomalyMonitor(false)}>
         disable-cache-monitor
+      </button>
+      <button type="button" onClick={() => onPersistTaskCompleteNotify(true)}>
+        enable-task-notify
+      </button>
+      <button type="button" onClick={() => onPersistTaskCompleteNotify(false)}>
+        disable-task-notify
+      </button>
+      <button type="button" onClick={() => onPersistNotificationSound(true)}>
+        enable-notification-sound
+      </button>
+      <button type="button" onClick={() => onPersistNotificationSound(false)}>
+        disable-notification-sound
       </button>
       <button
         type="button"
@@ -101,6 +115,7 @@ vi.mock("../../components/cli-manager/tabs/CodexTab", () => ({
     refreshCodex,
     openCodexConfigDir,
     persistCodexConfig,
+    persistCodexConfigToml,
     persistCodexHomeSettings,
     pickCodexHomeDirectory,
   }: any) => (
@@ -117,6 +132,9 @@ vi.mock("../../components/cli-manager/tabs/CodexTab", () => ({
       </button>
       <button type="button" onClick={() => persistCodexConfig({ foo: "bar" })}>
         save-codex
+      </button>
+      <button type="button" onClick={() => persistCodexConfigToml?.('model = "gpt-5"')}>
+        save-codex-toml
       </button>
       <button
         type="button"
@@ -974,6 +992,231 @@ describe("pages/CliManagerPage", () => {
     await waitFor(() => expect(codexTomlRefetch).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(codexInfoRefetch).toHaveBeenCalledTimes(1));
     expect(toast).toHaveBeenCalledWith("Codex 目录已切换");
+  });
+
+  it("persists common notification and cache toggles through shared settings", async () => {
+    vi.mocked(toast).mockClear();
+
+    vi.mocked(useSettingsQuery).mockReturnValue({
+      data: createAppSettings(),
+      isLoading: false,
+    } as any);
+    vi.mocked(useSettingsGatewayRectifierSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useSettingsCircuitBreakerNoticeSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useSettingsCodexSessionIdCompletionSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+
+    const commonMutation = { isPending: false, mutateAsync: vi.fn() };
+    commonMutation.mutateAsync
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_cache_anomaly_monitor: true }))
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_cache_anomaly_monitor: false }))
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_task_complete_notify: true }))
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_task_complete_notify: false }))
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_notification_sound: true }))
+      .mockResolvedValueOnce(createSettingsMutationResult({ enable_notification_sound: false }))
+      .mockResolvedValueOnce(null);
+    vi.mocked(useSettingsPatchMutation).mockReturnValue(commonMutation as any);
+
+    vi.mocked(useCliManagerClaudeInfoQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerClaudeSettingsQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerClaudeSettingsSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexInfoQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigTomlQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigTomlSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerGeminiInfoQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<CliManagerPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "enable-cache-monitor" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已开启缓存异常监测（实验）"));
+    fireEvent.click(screen.getByRole("button", { name: "disable-cache-monitor" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已关闭缓存异常监测（实验）"));
+
+    fireEvent.click(screen.getByRole("button", { name: "enable-task-notify" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已开启任务结束提醒"));
+    fireEvent.click(screen.getByRole("button", { name: "disable-task-notify" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已关闭任务结束提醒"));
+
+    fireEvent.click(screen.getByRole("button", { name: "enable-notification-sound" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已开启通知音效"));
+    fireEvent.click(screen.getByRole("button", { name: "disable-notification-sound" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已关闭通知音效"));
+
+    fireEvent.click(screen.getByRole("button", { name: "enable-cache-monitor" }));
+    await waitFor(() => expect(commonMutation.mutateAsync).toHaveBeenCalledTimes(7));
+    expect(toast).toHaveBeenCalledWith("已保存");
+    expect(commonMutation.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enable_notification_sound: false,
+        upstream_proxy_password: { mode: "preserve" },
+      })
+    );
+  });
+
+  it("persists Codex TOML and Gemini config success, empty, and error paths", async () => {
+    vi.mocked(toast).mockClear();
+    vi.mocked(logToConsole).mockClear();
+
+    vi.mocked(useSettingsQuery).mockReturnValue({
+      data: createAppSettings(),
+      isLoading: false,
+    } as any);
+    vi.mocked(useSettingsGatewayRectifierSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useSettingsCircuitBreakerNoticeSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useSettingsCodexSessionIdCompletionSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useSettingsPatchMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+
+    vi.mocked(useCliManagerClaudeInfoQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerClaudeSettingsQuery).mockReturnValue({
+      data: null,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerClaudeSettingsSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+
+    vi.mocked(useCliManagerCodexInfoQuery).mockReturnValue({
+      data: { found: true },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigQuery).mockReturnValue({
+      data: { config_dir: "/codex", can_open_config_dir: true },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigSetMutation).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerCodexConfigTomlQuery).mockReturnValue({
+      data: { config_path: "/codex/config.toml", exists: true, toml: "" },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    const codexTomlMutation = { isPending: false, mutateAsync: vi.fn() };
+    codexTomlMutation.mutateAsync
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("CODEX_TOML_BAD: invalid toml"));
+    vi.mocked(useCliManagerCodexConfigTomlSetMutation).mockReturnValue(codexTomlMutation as any);
+
+    vi.mocked(useCliManagerGeminiInfoQuery).mockReturnValue({
+      data: { found: true },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useCliManagerGeminiConfigQuery).mockReturnValue({
+      data: { modelName: "gemini-2.5-pro" },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    const geminiMutation = { isPending: false, mutateAsync: vi.fn() };
+    geminiMutation.mutateAsync
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("GEMINI_DENIED: denied"));
+    vi.mocked(useCliManagerGeminiConfigSetMutation).mockReturnValue(geminiMutation as any);
+
+    renderWithProviders(<CliManagerPage />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    await screen.findByText("codex-tab");
+    fireEvent.click(screen.getByRole("button", { name: "save-codex-toml" }));
+    await waitFor(() => expect(codexTomlMutation.mutateAsync).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "save-codex-toml" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已保存 config.toml"));
+    fireEvent.click(screen.getByRole("button", { name: "save-codex-toml" }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        "保存 config.toml失败（code CODEX_TOML_BAD）：invalid toml"
+      )
+    );
+    expect(logToConsole).toHaveBeenCalledWith(
+      "error",
+      "保存 Codex config.toml 失败",
+      expect.objectContaining({ error_code: "CODEX_TOML_BAD" })
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Gemini" }));
+    await screen.findByText("gemini-tab");
+    fireEvent.click(screen.getByRole("button", { name: "save-gemini" }));
+    await waitFor(() => expect(geminiMutation.mutateAsync).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "save-gemini" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("已更新 Gemini 配置"));
+    fireEvent.click(screen.getByRole("button", { name: "save-gemini" }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("更新 Gemini 配置失败（code GEMINI_DENIED）：denied")
+    );
+    expect(logToConsole).toHaveBeenCalledWith(
+      "error",
+      "更新 Gemini 配置失败",
+      expect.objectContaining({
+        error_code: "GEMINI_DENIED",
+        patch: { modelName: "gemini-2.5-pro" },
+      })
+    );
   });
 
   it("does not refresh codex queries when codex_home save returns null", async () => {
