@@ -43,6 +43,9 @@ export function useHomeFreshnessOwner({
   foregroundThrottleMs = 1000,
   onRefreshRequestLogs,
 }: UseHomeFreshnessOwnerOptions) {
+  // 事件驱动刷新（complete 信号 / 前台补拉 / 手动）只要求页面处于活跃路由：
+  // 窗口在后台时信号照常触发拉取（低频、无轮询），回前台即是新数据。
+  // watchdog 轮询仍仅在前台运行（active），避免后台周期性空转。
   const active = overviewActive && foregroundActive;
   const refreshWindowMs = resolveRequestLogsRefreshWindowMs(requestLogsRefreshWindowMs);
   const watchdogIntervalMs = resolveRequestActivityWatchdogIntervalMs(
@@ -50,7 +53,7 @@ export function useHomeFreshnessOwner({
   );
   const { flush: flushRequestLogs, schedule: scheduleRequestLogsRefresh } =
     useCoalescedAsyncRefresh<RefreshSource, unknown>({
-      enabled: active,
+      enabled: overviewActive,
       delayMs: refreshWindowMs,
       task: () => onRefreshRequestLogs(),
       onError: (error, source) => {
@@ -89,7 +92,7 @@ export function useHomeFreshnessOwner({
   }, [active, requestActivityPending, scheduleRequestLogsRefresh, watchdogIntervalMs]);
 
   useEffect(() => {
-    if (!active) {
+    if (!overviewActive) {
       return;
     }
 
@@ -129,7 +132,7 @@ export function useHomeFreshnessOwner({
       cancelled = true;
       requestSignalSub.unsubscribe();
     };
-  }, [active, scheduleRequestLogsRefresh]);
+  }, [overviewActive, scheduleRequestLogsRefresh]);
 
   return {
     refreshRequestLogsNow,

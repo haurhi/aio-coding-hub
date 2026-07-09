@@ -6,7 +6,13 @@ import { useProviderLimitUsageV1Query } from "../../../query/providerLimitUsage"
 import { useUsageHourlySeriesQuery } from "../../../query/usage";
 import { emitBackgroundTaskVisibilityTrigger } from "../../../services/backgroundTasks";
 import { backgroundTaskVisibilityTriggers } from "../../../constants/backgroundTaskContracts";
+import { requestLogCreatedAtMs } from "../../../services/gateway/requestLogState";
 import { useHomeFreshnessOwner } from "./useHomeFreshnessOwner";
+
+// 终态落库是异步批量写：complete 信号触发的拉取可能仍读到无终态的占位行。
+// 只要列表里还有新近的未终态行，就让 watchdog 继续轮询直到读到终态（自愈）。
+// 时间窗兜底：终态写入真正丢失的行不会让 watchdog 永久空转。
+const UNRESOLVED_LOG_WATCH_WINDOW_MS = 10 * 60 * 1000;
 
 type UseHomeOverviewFeedOptions = {
   overviewActive: boolean;
@@ -40,6 +46,10 @@ export function useHomeOverviewFeed({
     enabled: overviewActive,
   });
   const activeRequests = requestLogsFeed.activeRequests ?? [];
+  const hasRecentUnresolvedRequestLog = requestLogsFeed.requestLogs.some(
+    (log) =>
+      log.is_interrupted && Date.now() - requestLogCreatedAtMs(log) < UNRESOLVED_LOG_WATCH_WINDOW_MS
+  );
 
   const refetchUsageHeatmapSilently = useCallback(async () => {
     if (!shouldRefetchOverviewUsageSeries) return null;
@@ -70,7 +80,7 @@ export function useHomeOverviewFeed({
   const { refreshRequestLogsNow } = useHomeFreshnessOwner({
     overviewActive,
     foregroundActive,
-    requestActivityPending: activeRequests.length > 0,
+    requestActivityPending: activeRequests.length > 0 || hasRecentUnresolvedRequestLog,
     requestLogsRefreshWindowMs: 1000,
     onRefreshRequestLogs: refetchRequestLogsSilently,
   });
