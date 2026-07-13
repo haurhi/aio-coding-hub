@@ -698,7 +698,7 @@ mod tests {
         base_url: String,
         priority: i64,
     ) -> i64 {
-        providers::upsert(
+        let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
                 provider_id: None,
@@ -729,7 +729,9 @@ mod tests {
             },
         )
         .expect("insert r2c provider")
-        .id
+        .id;
+        append_default_route_provider(db, "codex", provider_id);
+        provider_id
     }
 
     fn insert_codex_oauth_provider_with_priority(db: &db::Db, name: &str, priority: i64) -> i64 {
@@ -4065,10 +4067,10 @@ module.exports.activate = function activate(api) {
         assert_eq!(summary.requests_total, 1);
         assert_eq!(summary.requests_with_usage, 1);
         assert_eq!(summary.requests_success, 1);
-        assert_eq!(summary.input_tokens, 4);
+        assert_eq!(summary.input_tokens, 1);
         assert_eq!(summary.output_tokens, 3);
-        assert_eq!(summary.io_total_tokens, 7);
-        assert_eq!(summary.total_tokens, 16);
+        assert_eq!(summary.io_total_tokens, 4);
+        assert_eq!(summary.total_tokens, 13);
         assert_eq!(summary.cache_read_input_tokens, 6);
         assert_eq!(summary.cache_creation_input_tokens, 3);
         assert_eq!(summary.cache_creation_5m_input_tokens, 2);
@@ -4085,10 +4087,10 @@ module.exports.activate = function activate(api) {
         assert_eq!(leaderboard[0].name, "codex/R2C Chat SSE Stub");
         assert_eq!(leaderboard[0].requests_total, 1);
         assert_eq!(leaderboard[0].requests_success, 1);
-        assert_eq!(leaderboard[0].input_tokens, 4);
+        assert_eq!(leaderboard[0].input_tokens, 1);
         assert_eq!(leaderboard[0].output_tokens, 3);
-        assert_eq!(leaderboard[0].io_total_tokens, 7);
-        assert_eq!(leaderboard[0].total_tokens, 16);
+        assert_eq!(leaderboard[0].io_total_tokens, 4);
+        assert_eq!(leaderboard[0].total_tokens, 13);
         assert_eq!(leaderboard[0].cache_read_input_tokens, 6);
         assert_eq!(leaderboard[0].cache_creation_input_tokens, 3);
         assert!(leaderboard[0]
@@ -4100,7 +4102,7 @@ module.exports.activate = function activate(api) {
         assert_eq!(cache_trend.len(), 1);
         assert_eq!(cache_trend[0].key, format!("codex:{provider_id}"));
         assert_eq!(cache_trend[0].name, "codex/R2C Chat SSE Stub");
-        assert_eq!(cache_trend[0].denom_tokens, 13);
+        assert_eq!(cache_trend[0].denom_tokens, 10);
         assert_eq!(cache_trend[0].cache_read_input_tokens, 6);
         assert_eq!(cache_trend[0].requests_success, 1);
 
