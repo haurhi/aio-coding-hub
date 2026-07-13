@@ -8,6 +8,7 @@ import {
   type CodexConfigState,
   type CodexConfigTomlState,
   type CodexConfigTomlValidationResult,
+  type CodexModelCatalogState,
   type SimpleCliInfo,
   cliManagerClaudeEnvSet,
   cliManagerClaudeHooksGet,
@@ -20,6 +21,7 @@ import {
   cliManagerCodexConfigTomlSet,
   cliManagerCodexConfigTomlValidate,
   cliManagerCodexInfoGet,
+  cliManagerCodexModelCatalogGet,
 } from "../cliManager";
 
 vi.mock("../../../generated/bindings", async () => {
@@ -32,6 +34,7 @@ vi.mock("../../../generated/bindings", async () => {
       ...actual.commands,
       cliManagerClaudeInfoGet: vi.fn(),
       cliManagerCodexInfoGet: vi.fn(),
+      cliManagerCodexModelCatalogGet: vi.fn(),
       cliManagerCodexConfigSet: vi.fn(),
       cliManagerCodexConfigTomlGet: vi.fn(),
       cliManagerCodexConfigTomlValidate: vi.fn(),
@@ -95,6 +98,22 @@ function makeCodexConfigState(overrides: Partial<CodexConfigState> = {}): CodexC
     features_fast_mode: null,
     features_responses_websockets_v2: null,
     features_multi_agent: null,
+    ...overrides,
+  };
+}
+
+function makeCodexModelCatalogState(
+  overrides: Partial<CodexModelCatalogState> = {}
+): CodexModelCatalogState {
+  return {
+    status: "ready",
+    issue: null,
+    snapshot: {
+      config_path: "/tmp/.codex/config.toml",
+      executable_path: "/usr/bin/codex",
+      cli_version: "0.0.0",
+    },
+    models: [],
     ...overrides,
   };
 }
@@ -208,6 +227,10 @@ describe("services/cli/cliManager", () => {
       status: "ok",
       data: makeSimpleCliInfo(),
     });
+    vi.mocked(commands.cliManagerCodexModelCatalogGet).mockResolvedValue({
+      status: "ok",
+      data: makeCodexModelCatalogState(),
+    });
     vi.mocked(commands.cliManagerCodexConfigSet).mockResolvedValue({
       status: "ok",
       data: makeCodexConfigState(),
@@ -248,10 +271,25 @@ describe("services/cli/cliManager", () => {
     await cliManagerCodexInfoGet();
     expect(commands.cliManagerCodexInfoGet).toHaveBeenCalledWith();
 
+    await cliManagerCodexModelCatalogGet();
+    expect(commands.cliManagerCodexModelCatalogGet).toHaveBeenCalledWith();
+
     await cliManagerCodexConfigSet({ model: "gpt-5" });
     expect(commands.cliManagerCodexConfigSet).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-5" })
     );
+    const ordinaryPatch = vi.mocked(commands.cliManagerCodexConfigSet).mock.calls[0]?.[0];
+    expect(ordinaryPatch).not.toHaveProperty("model_context_window");
+    expect(ordinaryPatch).not.toHaveProperty("model_auto_compact_token_limit");
+
+    vi.mocked(commands.cliManagerCodexConfigSet).mockClear();
+    await cliManagerCodexConfigSet({
+      model_context_window: null,
+      model_auto_compact_token_limit: 900_000,
+    });
+    const tokenPatch = vi.mocked(commands.cliManagerCodexConfigSet).mock.calls[0]?.[0];
+    expect(tokenPatch).toHaveProperty("model_context_window", null);
+    expect(tokenPatch).toHaveProperty("model_auto_compact_token_limit", 900_000);
 
     await cliManagerCodexConfigTomlGet();
     expect(commands.cliManagerCodexConfigTomlGet).toHaveBeenCalledWith();

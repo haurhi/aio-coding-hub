@@ -34,7 +34,38 @@ function weightedAverage(
   return totalValue / totalWeight;
 }
 
-export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] = [
+type PreviewLeaderboardRowInput = Omit<
+  UsageLeaderboardRow,
+  "first_request_created_at_ms" | "last_request_created_at_ms"
+>;
+
+function withoutRequestBounds(row: PreviewLeaderboardRowInput): UsageLeaderboardRow {
+  return {
+    ...row,
+    first_request_created_at_ms: null,
+    last_request_created_at_ms: null,
+  };
+}
+
+function localDayTimeMs(dayKey: string, hour: number, minute: number) {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+}
+
+function withPreviewDayBounds(
+  row: PreviewLeaderboardRowInput,
+  firstHour: number,
+  lastHour: number,
+  lastMinute: number
+): UsageLeaderboardRow {
+  return {
+    ...row,
+    first_request_created_at_ms: localDayTimeMs(row.key, firstHour, 0),
+    last_request_created_at_ms: localDayTimeMs(row.key, lastHour, lastMinute),
+  };
+}
+
+const PREVIEW_TOKEN_PROVIDER_BASE_ROWS: PreviewLeaderboardRowInput[] = [
   {
     key: "provider:201",
     name: "OpenAI Primary",
@@ -47,6 +78,7 @@ export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 14_000,
     cache_creation_input_tokens: 2_600,
     cache_read_input_tokens: 4_600,
+    total_duration_ms: 17_640,
     avg_duration_ms: 980,
     avg_ttfb_ms: 240,
     avg_output_tokens_per_second: 96.5,
@@ -64,6 +96,7 @@ export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 12_000,
     cache_creation_input_tokens: 2_100,
     cache_read_input_tokens: 6_300,
+    total_duration_ms: 16_800,
     avg_duration_ms: 1_120,
     avg_ttfb_ms: 310,
     avg_output_tokens_per_second: 84.2,
@@ -81,6 +114,7 @@ export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 9_000,
     cache_creation_input_tokens: 1_200,
     cache_read_input_tokens: 3_400,
+    total_duration_ms: 10_320,
     avg_duration_ms: 860,
     avg_ttfb_ms: 220,
     avg_output_tokens_per_second: 105.7,
@@ -88,7 +122,10 @@ export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] = [
   },
 ];
 
-export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
+export const PREVIEW_TOKEN_PROVIDER_ROWS: UsageLeaderboardRow[] =
+  PREVIEW_TOKEN_PROVIDER_BASE_ROWS.map(withoutRequestBounds);
+
+const PREVIEW_TOKEN_MODEL_BASE_ROWS: PreviewLeaderboardRowInput[] = [
   {
     key: "model:gpt-5.4",
     name: "gpt-5.4",
@@ -101,6 +138,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 11_000,
     cache_creation_input_tokens: 1_900,
     cache_read_input_tokens: 3_200,
+    total_duration_ms: 13_020,
     avg_duration_ms: 930,
     avg_ttfb_ms: 230,
     avg_output_tokens_per_second: 98.4,
@@ -118,6 +156,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 9_000,
     cache_creation_input_tokens: 1_500,
     cache_read_input_tokens: 4_300,
+    total_duration_ms: 12_980,
     avg_duration_ms: 1_180,
     avg_ttfb_ms: 320,
     avg_output_tokens_per_second: 82.1,
@@ -135,6 +174,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 6_000,
     cache_creation_input_tokens: 800,
     cache_read_input_tokens: 2_100,
+    total_duration_ms: 7_200,
     avg_duration_ms: 900,
     avg_ttfb_ms: 220,
     avg_output_tokens_per_second: 97.8,
@@ -152,6 +192,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 3_000,
     cache_creation_input_tokens: 700,
     cache_read_input_tokens: 1_400,
+    total_duration_ms: 4_360,
     avg_duration_ms: 1_090,
     avg_ttfb_ms: 270,
     avg_output_tokens_per_second: 87.9,
@@ -169,6 +210,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 3_000,
     cache_creation_input_tokens: 600,
     cache_read_input_tokens: 2_000,
+    total_duration_ms: 3_640,
     avg_duration_ms: 910,
     avg_ttfb_ms: 230,
     avg_output_tokens_per_second: 92.7,
@@ -186,6 +228,7 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 3_000,
     cache_creation_input_tokens: 400,
     cache_read_input_tokens: 1_300,
+    total_duration_ms: 3_120,
     avg_duration_ms: 780,
     avg_ttfb_ms: 190,
     avg_output_tokens_per_second: 118.6,
@@ -193,11 +236,14 @@ export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] = [
   },
 ];
 
+export const PREVIEW_TOKEN_MODEL_ROWS: UsageLeaderboardRow[] =
+  PREVIEW_TOKEN_MODEL_BASE_ROWS.map(withoutRequestBounds);
+
 const PREVIEW_TODAY_KEY = previewDayKey(0);
 const PREVIEW_YESTERDAY_KEY = previewDayKey(-1);
 const PREVIEW_TWO_DAYS_AGO_KEY = previewDayKey(-2);
 
-export const PREVIEW_TOKEN_DAY_ROWS: UsageLeaderboardRow[] = [
+const PREVIEW_TOKEN_DAY_BASE_ROWS: PreviewLeaderboardRowInput[] = [
   {
     key: PREVIEW_TODAY_KEY,
     name: PREVIEW_TODAY_KEY,
@@ -210,6 +256,7 @@ export const PREVIEW_TOKEN_DAY_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 13_000,
     cache_creation_input_tokens: 2_400,
     cache_read_input_tokens: 5_600,
+    total_duration_ms: 19_200,
     avg_duration_ms: 960,
     avg_ttfb_ms: 230,
     avg_output_tokens_per_second: 101.2,
@@ -227,6 +274,7 @@ export const PREVIEW_TOKEN_DAY_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 10_000,
     cache_creation_input_tokens: 1_600,
     cache_read_input_tokens: 3_800,
+    total_duration_ms: 16_200,
     avg_duration_ms: 1_080,
     avg_ttfb_ms: 290,
     avg_output_tokens_per_second: 88.4,
@@ -244,12 +292,17 @@ export const PREVIEW_TOKEN_DAY_ROWS: UsageLeaderboardRow[] = [
     output_tokens: 7_000,
     cache_creation_input_tokens: 900,
     cache_read_input_tokens: 1_900,
+    total_duration_ms: 9_000,
     avg_duration_ms: 900,
     avg_ttfb_ms: 220,
     avg_output_tokens_per_second: 104.8,
     cost_usd: 0.78,
   },
 ];
+
+export const PREVIEW_TOKEN_DAY_ROWS: UsageLeaderboardRow[] = PREVIEW_TOKEN_DAY_BASE_ROWS.map(
+  (row, index) => withPreviewDayBounds(row, 8 + index, 23 - index, 34)
+);
 
 const PREVIEW_DAY_FOLDER_SPECS = [
   {
@@ -311,6 +364,7 @@ export function scalePreviewTokenRows(
       output_tokens: scale(row.output_tokens),
       cache_creation_input_tokens: scale(row.cache_creation_input_tokens),
       cache_read_input_tokens: scale(row.cache_read_input_tokens),
+      total_duration_ms: scale(row.total_duration_ms),
       cost_usd: row.cost_usd == null ? null : row.cost_usd * factor,
     };
   });
@@ -398,6 +452,7 @@ export function buildPreviewTokenSummary(rows: UsageLeaderboardRow[]): UsageSumm
   const outputTokens = rows.reduce((sum, row) => sum + row.output_tokens, 0);
   const ioTotalTokens = rows.reduce((sum, row) => sum + row.io_total_tokens, 0);
   const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
+  const totalDurationMs = rows.reduce((sum, row) => sum + row.total_duration_ms, 0);
   const cacheCreationTokens = rows.reduce((sum, row) => sum + row.cache_creation_input_tokens, 0);
   const cacheReadTokens = rows.reduce((sum, row) => sum + row.cache_read_input_tokens, 0);
 
@@ -411,6 +466,7 @@ export function buildPreviewTokenSummary(rows: UsageLeaderboardRow[]): UsageSumm
         sum + (row.cost_usd != null && Number.isFinite(row.cost_usd) ? row.requests_success : 0),
       0
     ),
+    total_duration_ms: totalDurationMs,
     avg_duration_ms: weightedAverage(
       rows,
       (row) => row.avg_duration_ms,

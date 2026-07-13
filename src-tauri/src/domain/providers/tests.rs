@@ -564,6 +564,7 @@ fn provider_duplicate_copies_extension_values() {
             cost_multiplier: source_summary.cost_multiplier,
             priority: None,
             claude_models: Some(source_summary.claude_models.clone()),
+            model_mapping: Some(source_summary.model_mapping.clone()),
             limit_5h_usd: source_summary.limit_5h_usd,
             limit_daily_usd: source_summary.limit_daily_usd,
             daily_reset_mode: Some(source_summary.daily_reset_mode),

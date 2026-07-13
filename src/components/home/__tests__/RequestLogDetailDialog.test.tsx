@@ -81,6 +81,7 @@ function createSelectedLog(overrides: Partial<RequestLogDetail> = {}): RequestLo
     duration_ms: 1234,
     ttfb_ms: 100,
     input_tokens: 10,
+    effective_input_tokens: 10,
     output_tokens: 20,
     total_tokens: 30,
     cache_read_input_tokens: 5,
@@ -721,7 +722,26 @@ describe("home/RequestLogDetailDialog", () => {
     expectMetricValue("速率", "—");
   });
 
-  it("keeps zero-valued cache window metrics visible when they are the only cache source", () => {
+  it("uses effective input and displays canonical cache buckets", () => {
+    setRequestLogQueryState({
+      selectedLog: createSelectedLog({
+        input_tokens: 1000,
+        effective_input_tokens: 700,
+        cache_creation_input_tokens: 200,
+        cache_creation_5m_input_tokens: null,
+        cache_creation_1h_input_tokens: null,
+        cache_read_input_tokens: 100,
+      }),
+    });
+
+    render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
+
+    expectMetricValue("输入 Token", "700");
+    expectMetricValue("缓存创建", "200");
+    expectMetricValue("缓存读取", "100");
+  });
+
+  it("keeps zero-valued cache metrics visible and hides entirely missing metrics", () => {
     const view = render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
 
     setRequestLogQueryState({
@@ -732,7 +752,7 @@ describe("home/RequestLogDetailDialog", () => {
       }),
     });
     view.rerender(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
-    expectMetricValue("缓存创建", "0 (5m)");
+    expectMetricValue("缓存创建", "0");
 
     setRequestLogQueryState({
       selectedLog: createSelectedLog({
@@ -742,7 +762,7 @@ describe("home/RequestLogDetailDialog", () => {
       }),
     });
     view.rerender(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
-    expectMetricValue("缓存创建", "0 (1h)");
+    expectMetricValue("缓存创建", "0");
 
     setRequestLogQueryState({
       selectedLog: createSelectedLog({
@@ -752,7 +772,7 @@ describe("home/RequestLogDetailDialog", () => {
       }),
     });
     view.rerender(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
-    expectMetricValue("缓存创建", "—");
+    expect(screen.queryByText("缓存创建")).not.toBeInTheDocument();
   });
 
   // --- Tab switching tests ---

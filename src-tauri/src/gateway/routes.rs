@@ -725,6 +725,7 @@ mod tests {
                 source_provider_id: None,
                 bridge_type: Some("r2c".to_string()),
                 stream_idle_timeout_seconds: None,
+                extension_values: None,
             },
         )
         .expect("insert r2c provider")
@@ -4057,6 +4058,7 @@ module.exports.activate = function activate(api) {
             provider_id: Some(provider_id),
             folder_keys: None,
             exclude_cx2cc_gateway_bridge: Some(false),
+            day_start_hour: None,
         };
         let summary = usage_stats::summary_v2(&db, &usage_params, |_| Vec::new())
             .expect("usage summary includes r2c translated stream");

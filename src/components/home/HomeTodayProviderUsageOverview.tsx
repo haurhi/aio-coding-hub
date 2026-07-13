@@ -1,7 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { Loader2 } from "lucide-react";
 import { useDocumentVisibility } from "../../hooks/useDocumentVisibility";
-import { useNowMs } from "../../hooks/useNowMs";
 import { useWindowForeground } from "../../hooks/useWindowForeground";
 import type { GatewayActiveSession } from "../../services/gateway/gateway";
 import {
@@ -11,11 +10,21 @@ import {
 } from "../../services/gateway/requestActivityProjection";
 import type { RequestLogSummary } from "../../services/gateway/requestLogs";
 import type { TraceSession } from "../../services/gateway/traceStore";
+import {
+  HOME_USAGE_DEFAULT_DAY_START_HOUR,
+  readHomeUsageDayStartHourFromStorage,
+  subscribeHomeUsageDayStartHour,
+} from "../../services/home/homeUsageDayBoundary";
 import type { UsageLeaderboardRow, UsageSummary } from "../../services/usage/usage";
 import { Card } from "../../ui/Card";
 import { computeCacheHitRate } from "../../utils/cacheRateMetrics";
 import { formatTokensMillions } from "../../utils/chartHelpers";
-import { formatInteger, formatPercent, formatUsdCompact } from "../../utils/formatters";
+import {
+  formatCompactDurationMs,
+  formatInteger,
+  formatPercent,
+  formatUsdCompact,
+} from "../../utils/formatters";
 import { computeStatusBadge } from "./requestLogPresentation";
 import { QueryErrorCard } from "../shared/QueryErrorCard";
 import {
@@ -23,7 +32,7 @@ import {
   type HomeTokenCostDataModelQueryRefreshConfig,
 } from "./useHomeTokenCostDataModel";
 
-const SUMMARY_SKELETON_KEYS = [0, 1, 2, 3, 4];
+const SUMMARY_SKELETON_KEYS = [0, 1, 2, 3, 4, 5];
 const PROVIDER_SKELETON_KEYS = [0, 1, 2];
 const MAX_PROVIDER_ROWS = 3;
 const REALTIME_PROVIDER_HINT_LIMIT = 20;
@@ -35,16 +44,12 @@ const TABLE_MONO_TD_CLASS =
   "border-b border-border px-3 py-2 font-mono text-xs tabular-nums text-secondary-foreground dark:border-border dark:text-secondary-foreground";
 const TABLE_TH_MAIN_CLASS = "text-[11px] font-medium tracking-normal text-muted-foreground";
 const TABLE_TH_NOTE_CLASS = "text-[9px] font-normal tracking-normal text-muted-foreground";
-const TODAY_PROVIDER_QUERY_CONFIG = {
-  period: "daily" as const,
-  input: {
-    startTs: null,
-    endTs: null,
-    cliKey: null,
-    providerId: null,
-    excludeCx2CcGatewayBridge: true,
-  },
-  previewFactor: 1,
+const TODAY_PROVIDER_QUERY_BASE_INPUT = {
+  startTs: null,
+  endTs: null,
+  cliKey: null,
+  providerId: null,
+  excludeCx2CcGatewayBridge: true,
 };
 const IN_PROGRESS_BADGE = computeStatusBadge({
   status: null,
@@ -69,7 +74,7 @@ function summaryCacheHitRate(summary: UsageSummary | null) {
   );
 }
 
-type SummaryMetricAccent = "blue" | "purple" | "green" | "orange" | "slate";
+type SummaryMetricAccent = "blue" | "purple" | "green" | "orange" | "cyan";
 type DisplayProviderRow = {
   row: UsageLeaderboardRow;
   isRunning: boolean;
@@ -89,7 +94,7 @@ const SUMMARY_METRIC_ACCENT_CLASS: Record<SummaryMetricAccent, string> = {
   purple: "bg-violet-500",
   green: "bg-emerald-500",
   orange: "bg-orange-500",
-  slate: "bg-muted dark:bg-muted",
+  cyan: "bg-cyan-500",
 };
 
 function successRate(row: UsageLeaderboardRow) {
@@ -216,8 +221,9 @@ function buildRunningProvidersFromRealtimeCards(
   const seen = new Set<string>();
   const entries: ActiveProviderEntry[] = [];
 
-  for (const { trace } of cards) {
-    if (trace.summary) continue;
+  for (const card of cards) {
+    if (card.kind !== "active") continue;
+    const { trace } = card;
     let latestAttempt: NonNullable<typeof trace.attempts>[number] | undefined;
     for (const attempt of trace.attempts ?? []) {
       if (!latestAttempt || attempt.attempt_index > latestAttempt.attempt_index) {
@@ -287,6 +293,9 @@ function createSyntheticProviderRow(entry: ActiveProviderEntry): UsageLeaderboar
     output_tokens: 0,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
+    total_duration_ms: 0,
+    first_request_created_at_ms: null,
+    last_request_created_at_ms: null,
     avg_duration_ms: null,
     avg_ttfb_ms: null,
     avg_output_tokens_per_second: null,
@@ -514,7 +523,7 @@ function SummaryCards({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-6">
       <SummaryMetricCard
         title="含缓存总 Token"
         value={formatTokenValue(summary?.total_tokens)}
@@ -531,11 +540,16 @@ function SummaryCards({
         accent="purple"
       />
       <SummaryMetricCard
-        title="今日请求数"
+        title="总请求数"
         value={formatInteger(summary?.requests_total)}
         accent="green"
       />
-      <SummaryMetricCard title="今日花费" value={formatUsdCompact(totalCostUsd)} accent="orange" />
+      <SummaryMetricCard
+        title="请求总耗时"
+        value={formatCompactDurationMs(summary?.total_duration_ms)}
+        accent="cyan"
+      />
+      <SummaryMetricCard title="总花费" value={formatUsdCompact(totalCostUsd)} accent="orange" />
     </div>
   );
 }
@@ -548,23 +562,27 @@ function ProviderUsageSkeleton() {
         <div className="h-4 w-28 rounded bg-muted dark:bg-secondary" />
       </td>
       <td className={TABLE_MONO_TD_CLASS}>
-        <span className="sr-only">请求数加载中</span>
+        <span className="sr-only">总 Token 加载中</span>
         <div className="h-3 w-16 rounded bg-secondary dark:bg-secondary" />
       </td>
       <td className={TABLE_MONO_TD_CLASS}>
-        <span className="sr-only">缓存命中率加载中</span>
+        <span className="sr-only">输入输出 Token 加载中</span>
         <div className="h-3 w-14 rounded bg-secondary dark:bg-secondary" />
       </td>
       <td className={TABLE_MONO_TD_CLASS}>
-        <span className="sr-only">Token 加载中</span>
+        <span className="sr-only">缓存命中率加载中</span>
         <div className="h-3 w-12 rounded bg-secondary dark:bg-secondary" />
       </td>
       <td className={TABLE_MONO_TD_CLASS}>
-        <span className="sr-only">费用加载中</span>
+        <span className="sr-only">成功率加载中</span>
         <div className="h-3 w-12 rounded bg-secondary dark:bg-secondary" />
       </td>
       <td className={TABLE_MONO_TD_CLASS}>
-        <span className="sr-only">状态加载中</span>
+        <span className="sr-only">总耗时加载中</span>
+        <div className="h-3 w-12 rounded bg-secondary dark:bg-secondary" />
+      </td>
+      <td className={TABLE_MONO_TD_CLASS}>
+        <span className="sr-only">总花费加载中</span>
         <div className="h-3 w-12 rounded bg-secondary dark:bg-secondary" />
       </td>
     </tr>
@@ -585,6 +603,11 @@ export function HomeTodayProviderUsageOverview({
   traces?: TraceSession[];
 }) {
   const documentVisible = useDocumentVisibility();
+  const dayStartHour = useSyncExternalStore(
+    subscribeHomeUsageDayStartHour,
+    readHomeUsageDayStartHourFromStorage,
+    () => HOME_USAGE_DEFAULT_DAY_START_HOUR
+  );
   const queryRefreshConfig = useMemo<HomeTokenCostDataModelQueryRefreshConfig>(() => {
     const refetchIntervalMs: number | false = documentVisible
       ? OVERVIEW_REFRESH_INTERVAL_MS
@@ -601,9 +624,20 @@ export function HomeTodayProviderUsageOverview({
       },
     };
   }, [documentVisible]);
+  const queryConfig = useMemo(
+    () => ({
+      period: "daily" as const,
+      input: {
+        ...TODAY_PROVIDER_QUERY_BASE_INPUT,
+        dayStartHour,
+      },
+      previewFactor: 1,
+    }),
+    [dayStartHour]
+  );
   const model = useHomeTokenCostDataModel({
     scope: "provider",
-    queryConfig: TODAY_PROVIDER_QUERY_CONFIG,
+    queryConfig,
     devPreviewEnabled,
     queryRefreshConfig,
   });
@@ -614,7 +648,6 @@ export function HomeTodayProviderUsageOverview({
     throttleMs: 1000,
   });
 
-  const nowMs = useNowMs(Boolean(traces && traces.length > 0), 1000);
   const activeProviders = useMemo(() => {
     const activeSessionProviders = buildActiveProviders(activeSessions, {
       preferCliPrefix: !model.previewActive,
@@ -625,9 +658,8 @@ export function HomeTodayProviderUsageOverview({
         requestLogs,
         activeRequests,
         traces,
-        nowMs,
+        nowMs: Date.now(),
         realtimeCardLimit: REALTIME_PROVIDER_HINT_LIMIT,
-        realtimeCandidateLimit: REALTIME_PROVIDER_HINT_LIMIT,
       });
       const realtimeProviders = buildRunningProvidersFromRealtimeCards(projection.realtimeCards, {
         preferCliPrefix: !model.previewActive,
@@ -636,7 +668,7 @@ export function HomeTodayProviderUsageOverview({
     }
 
     return activeSessionProviders;
-  }, [activeRequests, activeSessions, model.previewActive, nowMs, requestLogs, traces]);
+  }, [activeRequests, activeSessions, model.previewActive, requestLogs, traces]);
 
   const topRows = useMemo(
     () => selectProviderRows(model.rows, activeProviders),
@@ -681,6 +713,9 @@ export function HomeTodayProviderUsageOverview({
                     成功率
                   </th>
                   <th scope="col" className={TABLE_TH_CLASS}>
+                    总耗时
+                  </th>
+                  <th scope="col" className={TABLE_TH_CLASS}>
                     总花费
                   </th>
                 </tr>
@@ -716,6 +751,9 @@ export function HomeTodayProviderUsageOverview({
                   </th>
                   <th scope="col" className={TABLE_TH_CLASS}>
                     成功率
+                  </th>
+                  <th scope="col" className={TABLE_TH_CLASS}>
+                    总耗时
                   </th>
                   <th scope="col" className={TABLE_TH_CLASS}>
                     总花费
@@ -755,6 +793,9 @@ export function HomeTodayProviderUsageOverview({
                     </td>
                     <td className={TABLE_MONO_TD_CLASS}>
                       {isSynthetic ? "—" : formatPercent(successRate(row))}
+                    </td>
+                    <td className={TABLE_MONO_TD_CLASS}>
+                      {isSynthetic ? "—" : formatCompactDurationMs(row.total_duration_ms)}
                     </td>
                     <td className={TABLE_MONO_TD_CLASS}>
                       {isSynthetic ? "—" : formatUsdCompact(row.cost_usd)}

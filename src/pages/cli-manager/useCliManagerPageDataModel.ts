@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   type ClaudeSettingsPatch,
   type CodexConfigPatch,
+  type CodexConfigState,
   type GeminiConfigPatch,
 } from "../../services/cli/cliManager";
 import { logToConsole } from "../../services/consoleLog";
@@ -31,6 +32,8 @@ import {
   useCliManagerCodexConfigTomlQuery,
   useCliManagerCodexConfigTomlSetMutation,
   useCliManagerCodexInfoQuery,
+  useCliManagerCodexModelCatalogQuery,
+  useCliManagerCodexModelCatalogRefresh,
   useCliManagerGeminiConfigQuery,
   useCliManagerGeminiConfigSetMutation,
   useCliManagerGeminiInfoQuery,
@@ -216,17 +219,37 @@ export function useCliManagerPageDataModel() {
   const codexConfigTomlQuery = useCliManagerCodexConfigTomlQuery({ enabled: tab === "codex" });
   const codexConfigSetMutation = useCliManagerCodexConfigSetMutation();
   const codexConfigTomlSetMutation = useCliManagerCodexConfigTomlSetMutation();
+  const refreshCodexModelCatalog = useCliManagerCodexModelCatalogRefresh();
+  const codexModelCatalogQuery = useCliManagerCodexModelCatalogQuery({
+    enabled:
+      tab === "codex" && codexInfoQuery.data?.found === true && codexConfigQuery.data != null,
+    snapshot: {
+      configPath: codexConfigQuery.data?.config_path,
+      executablePath: codexInfoQuery.data?.executable_path,
+      cliVersion: codexInfoQuery.data?.version,
+    },
+  });
 
   const codexInfo = codexInfoQuery.data ?? null;
   const codexConfig = codexConfigQuery.data ?? null;
   const codexConfigToml = codexConfigTomlQuery.data ?? null;
+  const codexModelCatalog = codexModelCatalogQuery.isError
+    ? null
+    : (codexModelCatalogQuery.data ?? null);
   const codexAvailable: "checking" | "available" | "unavailable" =
-    codexInfoQuery.isFetching && !codexInfo ? "checking" : codexInfo ? "available" : "unavailable";
+    codexInfoQuery.isFetching && !codexInfo
+      ? "checking"
+      : codexInfo?.found === true
+        ? "available"
+        : "unavailable";
   const codexLoading = codexInfoQuery.isFetching;
   const codexConfigLoading = codexConfigQuery.isFetching;
-  const codexConfigSaving = codexConfigSetMutation.isPending;
   const codexConfigTomlLoading = codexConfigTomlQuery.isFetching;
   const codexConfigTomlSaving = codexConfigTomlSetMutation.isPending;
+  const codexConfigWriting = codexConfigSetMutation.isPending || codexConfigTomlSaving;
+  const codexConfigSaving = codexConfigWriting;
+  const codexModelCatalogLoading = codexModelCatalogQuery.isFetching;
+  const codexModelCatalogError = codexModelCatalogQuery.isError;
 
   const geminiInfoQuery = useCliManagerGeminiInfoQuery({ enabled: tab === "gemini" });
   const geminiConfigQuery = useCliManagerGeminiConfigQuery({ enabled: tab === "gemini" });
@@ -446,11 +469,22 @@ export function useCliManagerPageDataModel() {
   }
 
   async function refreshCodex() {
-    await Promise.all([
+    if (codexConfigWriting) return;
+    const [configResult, , infoResult] = await Promise.all([
       codexConfigQuery.refetch(),
       codexConfigTomlQuery.refetch(),
       codexInfoQuery.refetch(),
     ]);
+    const nextConfig = configResult.data ?? null;
+    const nextInfo = infoResult.data ?? null;
+    if (configResult.isError || infoResult.isError || !nextConfig || nextInfo?.found !== true) {
+      return;
+    }
+    await refreshCodexModelCatalog({
+      configPath: nextConfig.config_path,
+      executablePath: nextInfo.executable_path,
+      cliVersion: nextInfo.version,
+    });
   }
 
   async function refreshGeminiInfo() {
@@ -528,16 +562,17 @@ export function useCliManagerPageDataModel() {
     }
   }
 
-  async function persistCodexConfig(patch: CodexConfigPatch) {
-    if (codexConfigSaving) return;
-    if (codexAvailable !== "available") return;
+  async function persistCodexConfig(patch: CodexConfigPatch): Promise<CodexConfigState | null> {
+    if (codexConfigWriting) return null;
+    if (!codexConfig) return null;
 
     try {
       const updated = await codexConfigSetMutation.mutateAsync(patch);
       if (!updated) {
-        return;
+        return null;
       }
       toast("已更新 Codex 配置");
+      return updated;
     } catch (err) {
       const formatted = formatActionFailureToast("更新 Codex 配置", err);
       logToConsole("error", "更新 Codex 配置失败", {
@@ -546,12 +581,13 @@ export function useCliManagerPageDataModel() {
         patch,
       });
       toast(formatted.toast);
+      return null;
     }
   }
 
   async function persistCodexConfigToml(toml: string): Promise<boolean> {
-    if (codexConfigTomlSaving) return false;
-    if (codexAvailable !== "available") return false;
+    if (codexConfigWriting) return false;
+    if (!codexConfig) return false;
 
     try {
       const updated = await codexConfigTomlSetMutation.mutateAsync({ toml });
@@ -682,9 +718,12 @@ export function useCliManagerPageDataModel() {
       codexConfigSaving,
       codexConfigTomlLoading,
       codexConfigTomlSaving,
+      codexModelCatalogLoading,
+      codexModelCatalogError,
       codexInfo,
       codexConfig,
       codexConfigToml,
+      codexModelCatalog,
       appSettings,
       codexHomeSettingsSaving: commonSettingsSaving || settingsWriteBlocked,
       refreshCodex,

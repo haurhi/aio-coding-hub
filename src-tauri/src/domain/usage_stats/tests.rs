@@ -5,7 +5,7 @@ use super::day_detail::{day_detail_v1_with_conn, UsageDayResolvedFolder};
 use super::folder_options::folder_options_v1_with_conn;
 use super::leaderboard_v2::{
     leaderboard_v2_folder_filtered_with_conn, leaderboard_v2_with_conn,
-    FolderFilteredLeaderboardParams,
+    leaderboard_v2_with_conn_day_start, FolderFilteredLeaderboardParams,
 };
 use super::summary::{summary_query, summary_v2_with_conn};
 use super::*;
@@ -40,11 +40,13 @@ fn setup_conn() -> Connection {
 	  cache_creation_input_tokens INTEGER,
 	  cache_creation_5m_input_tokens INTEGER,
 	  cache_creation_1h_input_tokens INTEGER,
+	  special_settings_json TEXT,
 	  cost_usd_femto INTEGER,
 	  usage_json TEXT,
 	  excluded_from_stats INTEGER NOT NULL DEFAULT 0,
 	  session_id TEXT,
-	  created_at INTEGER NOT NULL
+	  created_at INTEGER NOT NULL,
+	  created_at_ms INTEGER NOT NULL DEFAULT 0
 	);
 	"#,
     )
@@ -75,6 +77,16 @@ fn local_day_start_ts(conn: &Connection, day: &str) -> i64 {
         |row| row.get(0),
     )
     .expect("query local day start ts")
+}
+
+fn local_usage_day_start_ts(conn: &Connection, day: &str, day_start_hour: i64) -> i64 {
+    let time = format!("{day_start_hour:02}:00:00");
+    conn.query_row(
+        "SELECT CAST(strftime('%s', ?1 || ' ' || ?2, 'utc') AS INTEGER)",
+        params![day, time],
+        |row| row.get(0),
+    )
+    .expect("query local usage day start ts")
 }
 
 #[derive(Clone)]
@@ -185,6 +197,7 @@ fn lifecycle_interruption_rows_are_excluded_from_usage_summary_and_leaderboard()
         TestUsageLog {
             provider_id: 1,
             provider_name: "Included Provider",
+            duration_ms: 1000,
             input_tokens: Some(80),
             output_tokens: Some(20),
             total_tokens: Some(100),
@@ -195,21 +208,39 @@ fn lifecycle_interruption_rows_are_excluded_from_usage_summary_and_leaderboard()
     insert_usage_log(
         &conn,
         TestUsageLog {
+            provider_id: 1,
+            provider_name: "Included Provider",
+            status: Some(500),
+            error_code: Some("UPSTREAM_ERROR"),
+            duration_ms: 2500,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cost_usd_femto: None,
+            ..base_usage_log(1_001)
+        },
+    );
+    insert_usage_log(
+        &conn,
+        TestUsageLog {
             provider_id: 2,
             provider_name: "Interrupted Provider",
             status: Some(499),
             error_code: Some("GW_REQUEST_INTERRUPTED_BY_RESTART"),
+            duration_ms: 99_000,
             input_tokens: Some(8_000),
             output_tokens: Some(2_000),
             total_tokens: Some(10_000),
             cost_usd_femto: Some(99_000_000_000_000_000),
             excluded_from_stats: 1,
-            ..base_usage_log(1_001)
+            ..base_usage_log(1_002)
         },
     );
 
     let summary = summary_query(&conn, None, None, None, None, false).expect("summary");
-    assert_eq!(summary.requests_total, 1);
+    assert_eq!(summary.requests_total, 2);
+    assert_eq!(summary.requests_failed, 1);
+    assert_eq!(summary.total_duration_ms, 3500);
     assert_eq!(summary.total_tokens, 100);
 
     let rows = leaderboard_v2_with_conn(
@@ -225,6 +256,9 @@ fn lifecycle_interruption_rows_are_excluded_from_usage_summary_and_leaderboard()
     .expect("leaderboard");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].key, "codex:1");
+    assert_eq!(rows[0].requests_total, 2);
+    assert_eq!(rows[0].requests_failed, 1);
+    assert_eq!(rows[0].total_duration_ms, 3500);
     assert_eq!(rows[0].total_tokens, 100);
 }
 
@@ -373,10 +407,12 @@ fn usage_params_accept_generated_and_legacy_cx2cc_filter_keys() {
         "cliKey": null,
         "providerId": null,
         "folderKeys": null,
+        "dayStartHour": 5,
         "excludeCx2CcGatewayBridge": true
     }))
     .expect("deserialize usage query params");
     assert_eq!(params.exclude_cx2cc_gateway_bridge, Some(true));
+    assert_eq!(params.day_start_hour, Some(5));
 
     let legacy_params: UsageQueryParams = serde_json::from_value(serde_json::json!({
         "period": "daily",
@@ -396,10 +432,12 @@ fn usage_params_accept_generated_and_legacy_cx2cc_filter_keys() {
         "providerId": null,
         "folderLimit": 8,
         "folderKeys": null,
+        "dayStartHour": 5,
         "excludeCx2CcGatewayBridge": true
     }))
     .expect("deserialize usage day detail params");
     assert_eq!(detail_params.exclude_cx2cc_gateway_bridge, Some(true));
+    assert_eq!(detail_params.day_start_hour, Some(5));
 
     let legacy_detail_params: UsageDayDetailParams = serde_json::from_value(serde_json::json!({
         "day": "2026-04-22",
@@ -545,6 +583,7 @@ fn cx2cc_gateway_bridge_filter_covers_overview_and_home_usage_queries() {
             cli_key: None,
             provider_id: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: Some(true),
         },
         fixture_folder_lookup,
@@ -562,6 +601,7 @@ fn cx2cc_gateway_bridge_filter_covers_overview_and_home_usage_queries() {
             cli_key: None,
             provider_id: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: Some(false),
         },
         fixture_folder_lookup,
@@ -579,6 +619,7 @@ fn cx2cc_gateway_bridge_filter_covers_overview_and_home_usage_queries() {
             cli_key: None,
             provider_id: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: Some(true),
         },
         fixture_folder_lookup,
@@ -599,6 +640,7 @@ fn cx2cc_gateway_bridge_filter_covers_overview_and_home_usage_queries() {
             provider_id: None,
             folder_limit: None,
             folder_keys: Some(vec!["/work/alpha".to_string()]),
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: Some(true),
         },
         fixture_folder_lookup,
@@ -621,6 +663,135 @@ fn cx2cc_gateway_bridge_filter_covers_overview_and_home_usage_queries() {
     let hourly_rows = hourly_series(&db, 1).expect("hourly series");
     let hourly_total: i64 = hourly_rows.iter().map(|row| row.total_tokens).sum();
     assert_eq!(hourly_total, 5_500);
+}
+
+#[test]
+fn legacy_leaderboards_use_effective_input_for_persisted_cx2cc_semantics() {
+    let (_dir, db) = setup_temp_db();
+    let conn = db.open_connection().expect("open test db connection");
+    let created_at = compute_start_ts_last_n_days(&conn, 1)
+        .expect("today start ts")
+        .saturating_add(60);
+
+    insert_migrated_usage_log(
+        &conn,
+        "trace-legacy-leaderboard-cx2cc",
+        "claude",
+        901,
+        "Deleted CX2CC Provider",
+        1_000,
+        50,
+        created_at,
+        None,
+    );
+    conn.execute(
+        r#"
+UPDATE request_logs
+SET cache_read_input_tokens = 100,
+    cache_creation_input_tokens = 200,
+    special_settings_json = ?2
+WHERE trace_id = ?1
+        "#,
+        params![
+            "trace-legacy-leaderboard-cx2cc",
+            r#"[{"type":"cx2cc_cost_basis","source_cli_key":"codex"}]"#
+        ],
+    )
+    .expect("seed persisted CX2CC semantics");
+    drop(conn);
+
+    let provider_rows =
+        leaderboard_provider(&db, "all", None, 10).expect("legacy provider leaderboard");
+    assert_eq!(provider_rows.len(), 1);
+    let provider = &provider_rows[0];
+    assert_eq!(provider.input_tokens, 700);
+    assert_eq!(provider.output_tokens, 50);
+    assert_eq!(provider.total_tokens, 1_050);
+    assert_eq!(provider.cache_read_input_tokens, 100);
+    assert_eq!(provider.cache_creation_input_tokens, 200);
+
+    let day_rows = leaderboard_day(&db, "all", None, 10).expect("legacy day leaderboard");
+    assert_eq!(day_rows.len(), 1);
+    let day = &day_rows[0];
+    assert_eq!(day.input_tokens, 700);
+    assert_eq!(day.output_tokens, 50);
+    assert_eq!(day.total_tokens, 1_050);
+    assert_eq!(day.cache_read_input_tokens, 100);
+    assert_eq!(day.cache_creation_input_tokens, 200);
+}
+
+#[test]
+fn legacy_leaderboards_fallback_to_persisted_total_only_without_double_counting() {
+    let (_dir, db) = setup_temp_db();
+    let conn = db.open_connection().expect("open test db connection");
+    let created_at = compute_start_ts_last_n_days(&conn, 1)
+        .expect("today start ts")
+        .saturating_add(120);
+
+    insert_migrated_usage_log(
+        &conn,
+        "trace-legacy-total-only",
+        "codex",
+        902,
+        "Legacy Total Provider",
+        1,
+        1,
+        created_at,
+        None,
+    );
+    conn.execute(
+        r#"
+UPDATE request_logs
+SET input_tokens = NULL,
+    output_tokens = NULL,
+    total_tokens = 777,
+    cache_read_input_tokens = NULL,
+    cache_creation_input_tokens = NULL,
+    cache_creation_5m_input_tokens = NULL,
+    cache_creation_1h_input_tokens = NULL
+WHERE trace_id = ?1
+        "#,
+        params!["trace-legacy-total-only"],
+    )
+    .expect("seed total-only legacy row");
+
+    insert_migrated_usage_log(
+        &conn,
+        "trace-legacy-canonical-buckets",
+        "codex",
+        902,
+        "Legacy Total Provider",
+        100,
+        20,
+        created_at.saturating_add(1),
+        None,
+    );
+    conn.execute(
+        r#"
+UPDATE request_logs
+SET total_tokens = 9999,
+    cache_read_input_tokens = 10,
+    cache_creation_input_tokens = 5
+WHERE trace_id = ?1
+        "#,
+        params!["trace-legacy-canonical-buckets"],
+    )
+    .expect("seed canonical bucket row with stale persisted total");
+    drop(conn);
+
+    let provider_rows =
+        leaderboard_provider(&db, "all", None, 10).expect("legacy provider leaderboard");
+    assert_eq!(provider_rows.len(), 1);
+    let provider = &provider_rows[0];
+    assert_eq!(provider.input_tokens, 85);
+    assert_eq!(provider.output_tokens, 20);
+    assert_eq!(provider.total_tokens, 897);
+    assert_eq!(provider.cache_read_input_tokens, 10);
+    assert_eq!(provider.cache_creation_input_tokens, 5);
+
+    let day_rows = leaderboard_day(&db, "all", None, 10).expect("legacy day leaderboard");
+    assert_eq!(day_rows.len(), 1);
+    assert_eq!(day_rows[0].total_tokens, 897);
 }
 
 #[test]
@@ -1127,11 +1298,11 @@ INSERT INTO request_logs (
     assert_eq!(rows_hour.len(), 2);
     assert_eq!(rows_hour[0].name, "codex/OpenAI");
     assert_eq!(rows_hour[0].hour, Some(1));
-    assert_eq!(rows_hour[0].denom_tokens, 520);
+    assert_eq!(rows_hour[0].denom_tokens, 500);
     assert_eq!(rows_hour[0].cache_read_input_tokens, 200);
 
     assert_eq!(rows_hour[1].hour, Some(2));
-    assert_eq!(rows_hour[1].denom_tokens, 110);
+    assert_eq!(rows_hour[1].denom_tokens, 100);
     assert_eq!(rows_hour[1].cache_read_input_tokens, 50);
 
     // Weekly bucket is day-based and aggregates both rows into a single point.
@@ -1151,7 +1322,7 @@ INSERT INTO request_logs (
 
     assert_eq!(rows_day.len(), 1);
     assert_eq!(rows_day[0].hour, None);
-    assert_eq!(rows_day[0].denom_tokens, 630);
+    assert_eq!(rows_day[0].denom_tokens, 600);
     assert_eq!(rows_day[0].cache_read_input_tokens, 250);
     assert_eq!(rows_day[0].requests_success, 2);
 }
@@ -1483,6 +1654,8 @@ INSERT INTO request_logs (
     assert_eq!(rows[0].output_tokens, 30);
     assert_eq!(rows[0].total_tokens, 330);
     assert_eq!(rows[0].cost_usd, Some(3.0));
+    assert_eq!(rows[0].first_request_created_at_ms, Some(day_two_ts * 1000));
+    assert_eq!(rows[0].last_request_created_at_ms, Some(day_two_ts * 1000));
 
     assert_eq!(rows[1].key, day_one);
     assert_eq!(rows[1].name, day_one);
@@ -1491,6 +1664,11 @@ INSERT INTO request_logs (
     assert_eq!(rows[1].output_tokens, 90);
     assert_eq!(rows[1].total_tokens, 390);
     assert_eq!(rows[1].cost_usd, Some(3.0));
+    assert_eq!(rows[1].first_request_created_at_ms, Some(day_one_ts * 1000));
+    assert_eq!(
+        rows[1].last_request_created_at_ms,
+        Some((day_one_ts + 3600) * 1000)
+    );
 
     let cli_filtered = leaderboard_v2_with_conn(
         &conn,
@@ -1506,6 +1684,10 @@ INSERT INTO request_logs (
     assert_eq!(cli_filtered.len(), 1);
     assert_eq!(cli_filtered[0].key, day_one);
     assert_eq!(cli_filtered[0].requests_total, 2);
+    assert_eq!(
+        cli_filtered[0].last_request_created_at_ms,
+        Some((day_one_ts + 3600) * 1000)
+    );
 
     let provider_filtered = leaderboard_v2_with_conn(
         &conn,
@@ -1521,6 +1703,200 @@ INSERT INTO request_logs (
     assert_eq!(provider_filtered.len(), 1);
     assert_eq!(provider_filtered[0].key, day_two);
     assert_eq!(provider_filtered[0].requests_total, 1);
+
+    let model_rows = leaderboard_v2_with_conn(
+        &conn,
+        UsageScopeV2::Model,
+        Some(day_one_ts),
+        Some(end_ts),
+        None,
+        None,
+        Some(50),
+        false,
+    )
+    .expect("model leaderboard");
+    assert!(model_rows
+        .iter()
+        .all(|row| row.first_request_created_at_ms.is_none()
+            && row.last_request_created_at_ms.is_none()));
+}
+
+#[test]
+fn v2_day_leaderboard_respects_usage_day_start_hour() {
+    let conn = setup_conn();
+    let day_one = "2026-04-16";
+    let day_two = "2026-04-17";
+    let day_start_hour = 5;
+    let usage_day_one_start = local_usage_day_start_ts(&conn, day_one, day_start_hour);
+    let usage_day_two_start = local_usage_day_start_ts(&conn, day_two, day_start_hour);
+    let query_end = local_usage_day_start_ts(&conn, "2026-04-18", day_start_hour);
+
+    for (provider_id, provider_name) in [(123, "OpenAI"), (456, "Gemini Upstream")] {
+        conn.execute(
+            "INSERT INTO providers (id, name) VALUES (?1, ?2)",
+            params![provider_id, provider_name],
+        )
+        .expect("insert provider");
+    }
+
+    for (cli_key, provider_id, provider_name, session_id, created_at, input_tokens) in [
+        (
+            "codex",
+            123,
+            "OpenAI",
+            "codex-alpha-1",
+            usage_day_one_start + 4 * 3600,
+            100i64,
+        ),
+        (
+            "codex",
+            123,
+            "OpenAI",
+            "codex-alpha-2",
+            usage_day_one_start + 21 * 3600,
+            200i64,
+        ),
+        (
+            "codex",
+            456,
+            "Gemini Upstream",
+            "codex-beta-1",
+            usage_day_two_start + 4 * 3600,
+            300i64,
+        ),
+        (
+            "claude",
+            123,
+            "OpenAI",
+            "claude-alpha-1",
+            usage_day_two_start + 15 * 3600,
+            400i64,
+        ),
+    ] {
+        insert_usage_log(
+            &conn,
+            TestUsageLog {
+                cli_key,
+                provider_id,
+                provider_name,
+                requested_model: "model-test",
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(10),
+                session_id: Some(session_id),
+                created_at,
+                ..base_usage_log(created_at)
+            },
+        );
+    }
+
+    let usage_day_rows = leaderboard_v2_with_conn_day_start(
+        &conn,
+        UsageScopeV2::Day,
+        Some(usage_day_one_start),
+        Some(query_end),
+        None,
+        None,
+        Some(50),
+        false,
+        day_start_hour,
+    )
+    .expect("usage day leaderboard");
+    assert_eq!(usage_day_rows.len(), 2);
+    assert_eq!(usage_day_rows[0].key, day_two);
+    assert_eq!(usage_day_rows[0].requests_total, 2);
+    assert_eq!(
+        usage_day_rows[0].first_request_created_at_ms,
+        Some((usage_day_two_start + 4 * 3600) * 1000)
+    );
+    assert_eq!(
+        usage_day_rows[0].last_request_created_at_ms,
+        Some((usage_day_two_start + 15 * 3600) * 1000)
+    );
+    assert_eq!(usage_day_rows[1].key, day_one);
+    assert_eq!(usage_day_rows[1].requests_total, 2);
+    assert_eq!(
+        usage_day_rows[1].first_request_created_at_ms,
+        Some((usage_day_one_start + 4 * 3600) * 1000)
+    );
+    assert_eq!(
+        usage_day_rows[1].last_request_created_at_ms,
+        Some((usage_day_one_start + 21 * 3600) * 1000)
+    );
+
+    let natural_rows = leaderboard_v2_with_conn(
+        &conn,
+        UsageScopeV2::Day,
+        Some(usage_day_one_start),
+        Some(query_end),
+        None,
+        None,
+        Some(50),
+        false,
+    )
+    .expect("natural day leaderboard");
+    assert_eq!(natural_rows.len(), 2);
+    assert_eq!(natural_rows[0].key, day_two);
+    assert_eq!(natural_rows[0].requests_total, 3);
+    assert_eq!(
+        natural_rows[0].first_request_created_at_ms,
+        Some((usage_day_one_start + 21 * 3600) * 1000)
+    );
+    assert_eq!(
+        natural_rows[0].last_request_created_at_ms,
+        Some((usage_day_two_start + 15 * 3600) * 1000)
+    );
+    assert_eq!(natural_rows[1].key, day_one);
+    assert_eq!(natural_rows[1].requests_total, 1);
+
+    let folder_rows = leaderboard_v2_folder_filtered_with_conn(
+        &conn,
+        FolderFilteredLeaderboardParams {
+            scope: UsageScopeV2::Day,
+            start_ts: Some(usage_day_one_start),
+            end_ts: Some(query_end),
+            cli_key: None,
+            provider_id: None,
+            folder_keys: &["/work/alpha".to_string()],
+            limit: Some(50),
+            exclude_cx2cc_gateway_bridge: false,
+            day_start_hour,
+        },
+        fixture_folder_lookup,
+    )
+    .expect("folder filtered usage day leaderboard");
+    assert_eq!(folder_rows.len(), 2);
+    assert_eq!(folder_rows[0].key, day_two);
+    assert_eq!(folder_rows[0].requests_total, 1);
+    assert_eq!(folder_rows[1].key, day_one);
+    assert_eq!(folder_rows[1].requests_total, 2);
+
+    let day_one_detail = day_detail_v1_with_conn(
+        &conn,
+        &UsageDayDetailParams {
+            day: day_one.to_string(),
+            cli_key: None,
+            provider_id: None,
+            folder_limit: None,
+            folder_keys: Some(vec!["/work/alpha".to_string()]),
+            day_start_hour: Some(day_start_hour),
+            exclude_cx2cc_gateway_bridge: None,
+        },
+        fixture_folder_lookup,
+    )
+    .expect("usage day detail");
+    assert_eq!(
+        day_one_detail
+            .hours
+            .iter()
+            .map(|row| row.requests_total)
+            .sum::<i64>(),
+        2
+    );
+    assert_eq!(day_one_detail.hours[2].requests_total, 1);
+    assert_eq!(day_one_detail.hours[9].requests_total, 1);
+    assert_eq!(day_one_detail.folders.len(), 1);
+    assert_eq!(day_one_detail.folders[0].key, "/work/alpha");
+    assert_eq!(day_one_detail.folders[0].requests_total, 2);
 }
 
 #[test]
@@ -1600,6 +1976,7 @@ fn day_detail_v1_filters_by_local_day_and_returns_hour_buckets() {
             provider_id: None,
             folder_limit: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         |_| Vec::new(),
@@ -1612,15 +1989,15 @@ fn day_detail_v1_filters_by_local_day_and_returns_hour_buckets() {
     assert_eq!(detail.hours[0].requests_total, 0);
     assert_eq!(detail.hours[0].total_tokens, 0);
     assert_eq!(detail.hours[2].requests_total, 2);
-    assert_eq!(detail.hours[2].total_tokens, 230);
-    assert_eq!(detail.hours[2].io_total_tokens, 190);
+    assert_eq!(detail.hours[2].total_tokens, 220);
+    assert_eq!(detail.hours[2].io_total_tokens, 180);
     assert_eq!(detail.hours[5].requests_total, 1);
     assert_eq!(detail.hours[5].total_tokens, 90);
     assert_eq!(detail.hours[23].hour, 23);
     assert_eq!(detail.folders.len(), 1);
     assert_eq!(detail.folders[0].name, "未知文件夹");
     assert_eq!(detail.folders[0].requests_total, 3);
-    assert_eq!(detail.folders[0].total_tokens, 320);
+    assert_eq!(detail.folders[0].total_tokens, 310);
 
     let provider_filtered = day_detail_v1_with_conn(
         &conn,
@@ -1630,6 +2007,7 @@ fn day_detail_v1_filters_by_local_day_and_returns_hour_buckets() {
             provider_id: Some(456),
             folder_limit: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         |_| Vec::new(),
@@ -1648,6 +2026,7 @@ fn day_detail_v1_filters_by_local_day_and_returns_hour_buckets() {
             provider_id: None,
             folder_limit: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         |_| Vec::new(),
@@ -1744,6 +2123,7 @@ fn day_detail_v1_groups_resolved_folders_and_unknown_sessions() {
             provider_id: None,
             folder_limit: None,
             folder_keys: None,
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         |keys| {
@@ -1797,8 +2177,8 @@ fn day_detail_v1_groups_resolved_folders_and_unknown_sessions() {
     assert_eq!(alpha.folder_path.as_deref(), Some("/work/alpha"));
     assert_eq!(alpha.requests_total, 2);
     assert_eq!(alpha.requests_success, 2);
-    assert_eq!(alpha.total_tokens, 260);
-    assert_eq!(alpha.io_total_tokens, 230);
+    assert_eq!(alpha.total_tokens, 250);
+    assert_eq!(alpha.io_total_tokens, 220);
 
     let beta = by_key.get("/work/beta").expect("beta folder row");
     assert_eq!(beta.name, "beta");
@@ -1874,6 +2254,7 @@ fn folder_options_v1_groups_resolved_folders_and_keeps_unknown_selectable() {
             cli_key: None,
             provider_id: None,
             folder_keys: Some(vec!["/work/alpha".to_string()]),
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         fixture_folder_lookup,
@@ -1947,6 +2328,7 @@ fn folder_keys_filter_summary_leaderboard_and_day_detail() {
         cli_key: None,
         provider_id: None,
         folder_keys: Some(vec!["/work/alpha".to_string()]),
+        day_start_hour: None,
         exclude_cx2cc_gateway_bridge: None,
     };
     let unfiltered_summary = summary_v2_with_conn(
@@ -1978,6 +2360,7 @@ fn folder_keys_filter_summary_leaderboard_and_day_detail() {
             folder_keys: &["/work/alpha".to_string()],
             limit: Some(50),
             exclude_cx2cc_gateway_bridge: false,
+            day_start_hour: 0,
         },
         fixture_folder_lookup,
     )
@@ -1985,6 +2368,14 @@ fn folder_keys_filter_summary_leaderboard_and_day_detail() {
     assert_eq!(alpha_day_rows.len(), 1);
     assert_eq!(alpha_day_rows[0].key, day);
     assert_eq!(alpha_day_rows[0].total_tokens, 120);
+    assert_eq!(
+        alpha_day_rows[0].first_request_created_at_ms,
+        Some((start_ts + 2 * 3600) * 1000)
+    );
+    assert_eq!(
+        alpha_day_rows[0].last_request_created_at_ms,
+        Some((start_ts + 2 * 3600) * 1000)
+    );
 
     let alpha_model_rows = leaderboard_v2_folder_filtered_with_conn(
         &conn,
@@ -1997,12 +2388,15 @@ fn folder_keys_filter_summary_leaderboard_and_day_detail() {
             folder_keys: &["/work/alpha".to_string()],
             limit: Some(50),
             exclude_cx2cc_gateway_bridge: false,
+            day_start_hour: 0,
         },
         fixture_folder_lookup,
     )
     .expect("model leaderboard");
     assert_eq!(alpha_model_rows.len(), 1);
     assert_eq!(alpha_model_rows[0].key, "gpt-alpha");
+    assert_eq!(alpha_model_rows[0].first_request_created_at_ms, None);
+    assert_eq!(alpha_model_rows[0].last_request_created_at_ms, None);
 
     let unknown_summary = summary_v2_with_conn(
         &conn,
@@ -2039,6 +2433,7 @@ fn folder_keys_filter_summary_leaderboard_and_day_detail() {
             provider_id: None,
             folder_limit: None,
             folder_keys: Some(vec!["/work/alpha".to_string()]),
+            day_start_hour: None,
             exclude_cx2cc_gateway_bridge: None,
         },
         fixture_folder_lookup,

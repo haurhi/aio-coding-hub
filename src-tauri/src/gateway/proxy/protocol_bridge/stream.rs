@@ -561,8 +561,8 @@ mod tests {
             Some("gpt-route-r2c".into()),
             crate::gateway::proxy::cx2cc::settings::Cx2ccSettings::default(),
         );
-        let waker = std::task::Waker::from(Arc::new(NoopWaker));
-        let mut cx = Context::from_waker(&waker);
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
         let mut output = String::new();
 
         loop {
