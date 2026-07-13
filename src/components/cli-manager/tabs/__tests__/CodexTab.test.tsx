@@ -1089,6 +1089,7 @@ describe("components/cli-manager/tabs/CodexTab", () => {
         error: { message: "invalid toml", line: 2, column: 3 },
       })
       .mockResolvedValueOnce({ ok: true, error: null })
+      .mockResolvedValueOnce({ ok: true, error: null })
       .mockResolvedValueOnce({ ok: true, error: null });
 
     render(
