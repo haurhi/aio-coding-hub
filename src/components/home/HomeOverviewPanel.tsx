@@ -712,8 +712,14 @@ function useHomeOverviewTabs({
     didKeysChange(openCircuitKeys, sessionsTabState.openCircuitKeys);
 
   if (openCircuitChanged) {
+    let nextTab = sessionsTabState.tab;
+    if (openCircuitKeys.length > 0) {
+      nextTab = "circuit";
+    } else if (sessionsTabState.tab === "circuit") {
+      nextTab = "workspaceConfig";
+    }
     effectiveSessionsTabState = {
-      tab: openCircuitKeys.length === 0 ? "workspaceConfig" : "circuit",
+      tab: nextTab,
       openCircuitKeys,
     };
     setSessionsTabState(effectiveSessionsTabState);

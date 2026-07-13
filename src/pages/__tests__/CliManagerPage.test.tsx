@@ -26,6 +26,8 @@ import {
   useCliManagerCodexConfigTomlQuery,
   useCliManagerCodexConfigTomlSetMutation,
   useCliManagerCodexInfoQuery,
+  useCliManagerCodexModelCatalogQuery,
+  useCliManagerCodexModelCatalogRefresh,
   useCliManagerGeminiConfigQuery,
   useCliManagerGeminiConfigSetMutation,
   useCliManagerGeminiInfoQuery,
@@ -186,6 +188,8 @@ vi.mock("../../query/cliManager", async () => {
     useCliManagerCodexConfigSetMutation: vi.fn(),
     useCliManagerCodexConfigTomlQuery: vi.fn(),
     useCliManagerCodexConfigTomlSetMutation: vi.fn(),
+    useCliManagerCodexModelCatalogQuery: vi.fn(),
+    useCliManagerCodexModelCatalogRefresh: vi.fn(),
     useCliManagerGeminiConfigQuery: vi.fn(),
     useCliManagerGeminiConfigSetMutation: vi.fn(),
     useCliManagerGeminiInfoQuery: vi.fn(),
@@ -252,6 +256,13 @@ beforeEach(() => {
     isPending: false,
     mutateAsync: vi.fn(),
   } as any);
+
+  vi.mocked(useCliManagerCodexModelCatalogQuery).mockReturnValue({
+    data: null,
+    isFetching: false,
+    isError: false,
+  } as any);
+  vi.mocked(useCliManagerCodexModelCatalogRefresh).mockReturnValue(vi.fn() as any);
 
   vi.mocked(useProvidersListQuery).mockReturnValue({
     data: null,
@@ -941,8 +952,18 @@ describe("pages/CliManagerPage", () => {
       mutateAsync: vi.fn(),
     } as any);
 
-    const codexInfoRefetch = vi.fn().mockResolvedValue({ data: {} });
-    const codexConfigRefetch = vi.fn().mockResolvedValue({ data: {} });
+    const codexModelCatalogRefresh = vi.fn().mockResolvedValue(null);
+    vi.mocked(useCliManagerCodexModelCatalogRefresh).mockReturnValue(codexModelCatalogRefresh);
+    const codexInfoRefetch = vi.fn().mockResolvedValue({
+      data: {
+        found: true,
+        executable_path: "D:\\Tools\\codex.exe",
+        version: "1.2.3",
+      },
+    });
+    const codexConfigRefetch = vi.fn().mockResolvedValue({
+      data: { config_path: "D:\\Work\\CodexHome\\config.toml" },
+    });
     const codexTomlRefetch = vi.fn().mockResolvedValue({ data: {} });
     vi.mocked(useCliManagerCodexInfoQuery).mockReturnValue({
       data: { found: true },
@@ -991,6 +1012,11 @@ describe("pages/CliManagerPage", () => {
     await waitFor(() => expect(codexConfigRefetch).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(codexTomlRefetch).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(codexInfoRefetch).toHaveBeenCalledTimes(1));
+    expect(codexModelCatalogRefresh).toHaveBeenCalledWith({
+      configPath: "D:\\Work\\CodexHome\\config.toml",
+      executablePath: "D:\\Tools\\codex.exe",
+      cliVersion: "1.2.3",
+    });
     expect(toast).toHaveBeenCalledWith("Codex 目录已切换");
   });
 

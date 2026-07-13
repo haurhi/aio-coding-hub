@@ -422,34 +422,41 @@ fn emit_started_event<R: tauri::Runtime>(
         provider_bridged: Some(prepared.provider_bridged),
         timeout_secs: None,
     };
-    abort_guard.capture_in_flight_attempt(&started_attempt);
-    if input.observe_request {
-        emit_attempt_event(
-            &input.state.app,
-            GatewayAttemptEvent {
-                trace_id: input.trace_id.clone(),
-                cli_key: input.cli_key.clone(),
-                session_id: input.session_id.clone(),
-                method: input.method_hint.clone(),
-                path: input.forwarded_path.clone(),
-                query: input.query.clone(),
-                requested_model: input.requested_model.clone(),
-                attempt_index,
-                provider_id: prepared.provider_id,
-                session_reuse: prepared.session_reuse,
-                provider_name: prepared.provider_name_base.clone(),
-                base_url: prepared.provider_base_url_base.clone(),
-                outcome: "started".to_string(),
-                status: None,
-                attempt_started_ms,
-                attempt_duration_ms: 0,
-                circuit_state_before: Some(circuit_before.state.as_str()),
-                circuit_state_after: None,
-                circuit_failure_count: Some(circuit_before.failure_count),
-                circuit_failure_threshold: Some(circuit_before.failure_threshold),
-                claude_model_mapping: prepared.claude_model_mapping.clone(),
-            },
+    let started_event = input.observe_request.then(|| {
+        bound_attempt_event(GatewayAttemptEvent {
+            trace_id: input.trace_id.clone(),
+            cli_key: input.cli_key.clone(),
+            session_id: input.session_id.clone(),
+            method: input.method_hint.clone(),
+            path: input.forwarded_path.clone(),
+            query: input.query.clone(),
+            requested_model: input.requested_model.clone(),
+            attempt_index,
+            provider_id: prepared.provider_id,
+            session_reuse: prepared.session_reuse,
+            provider_name: prepared.provider_name_base.clone(),
+            base_url: prepared.provider_base_url_base.clone(),
+            outcome: "started".to_string(),
+            status: None,
+            attempt_started_ms,
+            attempt_duration_ms: 0,
+            circuit_state_before: Some(circuit_before.state.as_str()),
+            circuit_state_after: None,
+            circuit_failure_count: Some(circuit_before.failure_count),
+            circuit_failure_threshold: Some(circuit_before.failure_threshold),
+            claude_model_mapping: prepared.claude_model_mapping.clone(),
+        })
+    });
+    if let Some(started_event) = started_event.as_ref() {
+        let elapsed_ms = i64::try_from(attempt_started_ms).unwrap_or(i64::MAX);
+        input.state.active_requests.record_attempt_start(
+            started_event.clone(),
+            input.created_at_ms.saturating_add(elapsed_ms),
         );
+    }
+    abort_guard.capture_in_flight_attempt(&started_attempt);
+    if let Some(started_event) = started_event {
+        emit_attempt_event(&input.state.app, started_event);
     }
 }
 

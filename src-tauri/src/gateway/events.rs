@@ -171,7 +171,7 @@ pub(crate) struct GatewayRequestSignalEvent {
     ts: i64,
 }
 
-#[derive(Debug, Serialize, Clone, specta::Type)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, specta::Type)]
 pub(crate) struct GatewayAttemptEvent {
     pub(super) trace_id: String,
     pub(super) cli_key: String,
@@ -377,7 +377,29 @@ fn bound_request_signal_event(mut payload: GatewayRequestSignalEvent) -> Gateway
     payload
 }
 
-fn bound_attempt_event(mut payload: GatewayAttemptEvent) -> GatewayAttemptEvent {
+fn request_event_effective_input_tokens(
+    cli_key: &str,
+    attempts: &[FailoverAttempt],
+    usage: &usage::UsageMetrics,
+) -> Option<i64> {
+    // Skipped and synthetic attempts carry no provider snapshot. The last
+    // concrete attempt matches final-provider resolution in the persisted log.
+    let final_provider_bridged = attempts
+        .iter()
+        .rev()
+        .find_map(|attempt| attempt.provider_bridged)
+        .unwrap_or(false);
+    crate::usage_stats::effective_input_tokens_display(
+        cli_key,
+        None,
+        final_provider_bridged,
+        usage.input_tokens,
+        usage.cache_read_input_tokens,
+        usage.cache_creation_input_tokens,
+    )
+}
+
+pub(super) fn bound_attempt_event(mut payload: GatewayAttemptEvent) -> GatewayAttemptEvent {
     payload.method = truncate_chars(payload.method, EVENT_METHOD_MAX_CHARS);
     payload.path = truncate_chars(payload.path, EVENT_PATH_MAX_CHARS);
     truncate_optional_chars(&mut payload.query, EVENT_QUERY_MAX_CHARS);
@@ -437,21 +459,7 @@ pub(super) fn emit_request_event<R: tauri::Runtime>(
     }
 
     let usage = usage.unwrap_or_default();
-    // The last attempt with a concrete provider decides the input semantics
-    // (skipped/synthetic attempts carry None), matching final-provider
-    // resolution in the persisted log.
-    let final_provider_bridged = attempts
-        .iter()
-        .rev()
-        .find_map(|attempt| attempt.provider_bridged)
-        .unwrap_or(false);
-    // None when usage is unknown (no input_tokens) so the frontend renders "—".
-    let effective_input_tokens = crate::usage_stats::effective_input_tokens_display(
-        &cli_key,
-        final_provider_bridged,
-        usage.input_tokens,
-        usage.cache_read_input_tokens,
-    );
+    let effective_input_tokens = request_event_effective_input_tokens(&cli_key, &attempts, &usage);
     let payload = GatewayRequestEvent {
         trace_id,
         cli_key,
@@ -633,6 +641,51 @@ mod tests {
 
     fn ascii_len(value: &str) -> usize {
         value.chars().count()
+    }
+
+    #[test]
+    fn request_event_effective_input_uses_protocol_and_provider_snapshot() {
+        let usage = usage::UsageMetrics {
+            input_tokens: Some(1_000),
+            output_tokens: Some(50),
+            total_tokens: Some(1_050),
+            cache_read_input_tokens: Some(100),
+            cache_creation_input_tokens: Some(200),
+            ..Default::default()
+        };
+        let plain_attempt = sample_attempt(1);
+        let mut bridged_attempt = sample_attempt(2);
+        bridged_attempt.provider_bridged = Some(true);
+        let mut synthetic_attempt = sample_attempt(3);
+        synthetic_attempt.provider_bridged = None;
+
+        assert_eq!(
+            request_event_effective_input_tokens("codex", &[], &usage),
+            Some(700)
+        );
+        assert_eq!(
+            request_event_effective_input_tokens(
+                "claude",
+                &[bridged_attempt, synthetic_attempt],
+                &usage,
+            ),
+            Some(700)
+        );
+        assert_eq!(
+            request_event_effective_input_tokens("gemini", &[], &usage),
+            Some(900)
+        );
+        assert_eq!(
+            request_event_effective_input_tokens("claude", &[plain_attempt], &usage),
+            Some(1_000)
+        );
+
+        let mut unknown = usage;
+        unknown.input_tokens = None;
+        assert_eq!(
+            request_event_effective_input_tokens("codex", &[], &unknown),
+            None
+        );
     }
 
     // --- Shared payload fixtures ---

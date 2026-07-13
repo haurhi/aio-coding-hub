@@ -48,20 +48,15 @@ pub(crate) async fn model_prices_sync_basellm(
         .map_err(|e| e.to_string())?;
 
     let db_for_backfill = db.clone();
+    let app_for_backfill = app.clone();
     let backfill_result = blocking::run(
         "model_prices_sync_basellm_backfill_missing_cost",
         move || {
             for cli_key in ["claude", "codex"] {
-                cost_stats::backfill_missing_v1(
+                cost_stats::backfill_missing_for_cli(
+                    &app_for_backfill,
                     &db_for_backfill,
-                    &cost_stats::CostQueryParams {
-                        period: "allTime".to_string(),
-                        start_ts: None,
-                        end_ts: None,
-                        cli_key: Some(cli_key.to_string()),
-                        provider_id: None,
-                        model: None,
-                    },
+                    cli_key,
                     5000,
                 )?;
             }

@@ -20,6 +20,8 @@ pub use types::{
 mod costing;
 use costing::{has_any_cost_usage, is_success_status, usage_for_cost};
 
+mod semantics;
+
 mod queries;
 use queries::{final_provider_from_attempts, parse_attempts, validate_cli_key};
 pub use queries::{
@@ -236,13 +238,13 @@ fn fetch_model_price_json(
 }
 
 #[derive(Debug, Clone)]
-struct EffectiveCostBasis {
-    cli_key: String,
-    model: String,
+pub(crate) struct EffectiveCostBasis {
+    pub(crate) cli_key: String,
+    pub(crate) model: String,
 }
 
 /// Parse `effectivePriority` from `codex_service_tier_result` special setting.
-fn parse_effective_priority(special_settings_json: Option<&str>) -> bool {
+pub(crate) fn parse_effective_priority(special_settings_json: Option<&str>) -> bool {
     let raw = match special_settings_json {
         Some(s) => s.trim(),
         None => return false,
@@ -282,58 +284,43 @@ fn parse_effective_priority(special_settings_json: Option<&str>) -> bool {
 
 pub(crate) fn parse_cx2cc_cost_basis(
     special_settings_json: Option<&str>,
+    final_provider_id: Option<i64>,
 ) -> Option<(String, String)> {
-    let raw = special_settings_json?.trim();
-    if raw.is_empty() {
+    let semantics::Cx2ccCostBasisResolution::Matched(basis) =
+        semantics::resolve_cx2cc_cost_basis(special_settings_json, final_provider_id)
+    else {
         return None;
-    }
-
-    let settings: Vec<Value> = serde_json::from_str(raw).ok()?;
-    for setting in settings.iter().rev() {
-        let Some(obj) = setting.as_object() else {
-            continue;
-        };
-        if obj.get("type").and_then(Value::as_str) != Some("cx2cc_cost_basis") {
-            continue;
-        }
-
-        let Some(cli_key) = obj
-            .get("source_cli_key")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let Some(model) = obj
-            .get("priced_model")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-
-        return Some((cli_key.to_string(), model.to_string()));
-    }
-
-    None
+    };
+    Some((basis.source_cli_key, basis.priced_model?))
 }
 
-fn effective_cost_basis(item: &RequestLogInsert) -> Option<EffectiveCostBasis> {
-    if let Some((cli_key, model)) = parse_cx2cc_cost_basis(item.special_settings_json.as_deref()) {
+#[cfg(test)]
+pub(crate) fn cx2cc_openai_input_semantics_override(
+    special_settings_json: Option<&str>,
+    final_provider_id: Option<i64>,
+) -> Option<bool> {
+    semantics::resolve_cx2cc_cost_basis(special_settings_json, final_provider_id)
+        .openai_input_semantics_override()
+}
+
+pub(crate) fn effective_cost_basis(
+    cli_key: &str,
+    requested_model: Option<&str>,
+    special_settings_json: Option<&str>,
+    final_provider_id: Option<i64>,
+) -> Option<EffectiveCostBasis> {
+    if let Some((cli_key, model)) = parse_cx2cc_cost_basis(special_settings_json, final_provider_id)
+    {
         return Some(EffectiveCostBasis { cli_key, model });
     }
 
-    let model = item
-        .requested_model
-        .as_deref()
+    let model = requested_model
         .map(str::trim)
         .filter(|v| !v.is_empty())?
         .to_string();
 
     Some(EffectiveCostBasis {
-        cli_key: item.cli_key.clone(),
+        cli_key: cli_key.to_string(),
         model,
     })
 }
@@ -741,7 +728,12 @@ fn insert_batch_once(
             };
 
             let cost_usd_femto = if is_success_status(item.status, item.error_code.as_deref()) {
-                match effective_cost_basis(item) {
+                match effective_cost_basis(
+                    &item.cli_key,
+                    item.requested_model.as_deref(),
+                    item.special_settings_json.as_deref(),
+                    final_provider_id_db,
+                ) {
                     Some(cost_basis) => {
                         let usage = usage_for_cost(item);
                         if !has_any_cost_usage(&usage) {
@@ -1539,6 +1531,7 @@ WHERE trace_id = ?1
             {
                 "type": "cx2cc_cost_basis",
                 "scope": "request",
+                "bridge_provider_id": 12,
                 "source_cli_key": "codex",
                 "source_provider_id": 42,
                 "priced_model": "gpt-5.4"
@@ -1547,8 +1540,138 @@ WHERE trace_id = ?1
         .to_string();
 
         assert_eq!(
-            parse_cx2cc_cost_basis(Some(&special_settings_json)),
+            parse_cx2cc_cost_basis(Some(&special_settings_json), Some(12)),
             Some(("codex".to_string(), "gpt-5.4".to_string()))
+        );
+    }
+
+    #[test]
+    fn cx2cc_cost_basis_uses_codex_cache_creation_buckets_when_persisting_cost() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let conn = db.open_connection().expect("open connection");
+        conn.execute(
+            r#"
+INSERT INTO model_prices (cli_key, model, price_json, created_at, updated_at)
+VALUES ('codex', 'gpt-explicit', ?1, 1, 1)
+"#,
+            [r#"{
+              "input_cost_per_token": 0.004,
+              "output_cost_per_token": 0.02,
+              "cache_read_input_token_cost": 0.001,
+              "cache_creation_input_token_cost": 0.006
+            }"#],
+        )
+        .expect("insert explicit model price");
+        conn.execute(
+            r#"
+INSERT INTO model_prices (cli_key, model, price_json, created_at, updated_at)
+VALUES ('codex', 'gpt-fallback', ?1, 1, 1)
+"#,
+            [r#"{
+              "input_cost_per_token": 0.004,
+              "output_cost_per_token": 0.02,
+              "cache_read_input_token_cost": 0.001
+            }"#],
+        )
+        .expect("insert fallback model price");
+        conn.execute(
+            r#"
+INSERT INTO model_prices (cli_key, model, price_json, created_at, updated_at)
+VALUES ('claude', 'claude-client-model', '{"input_cost_per_token":0.001}', 1, 1)
+"#,
+            [],
+        )
+        .expect("insert Claude model price");
+        drop(conn);
+
+        let marker = |priced_model: &str| {
+            serde_json::json!([{
+                "type": "cx2cc_cost_basis",
+                "source_cli_key": "codex",
+                "priced_model": priced_model,
+            }])
+            .to_string()
+        };
+        let items = [
+            RequestLogInsert {
+                special_settings_json: Some(marker("gpt-explicit")),
+                requested_model: Some("claude-client-model".to_string()),
+                input_tokens: Some(1_000),
+                output_tokens: Some(50),
+                total_tokens: Some(1_050),
+                cache_read_input_tokens: Some(100),
+                cache_creation_input_tokens: Some(200),
+                ..request_log_insert("trace-cx2cc-explicit-cost")
+            },
+            RequestLogInsert {
+                special_settings_json: Some(marker("gpt-fallback")),
+                requested_model: Some("claude-client-model".to_string()),
+                input_tokens: Some(1_000),
+                output_tokens: Some(50),
+                total_tokens: Some(1_050),
+                cache_read_input_tokens: Some(100),
+                cache_creation_input_tokens: Some(200),
+                ..request_log_insert("trace-cx2cc-fallback-cost")
+            },
+            RequestLogInsert {
+                special_settings_json: Some(
+                    serde_json::json!([{
+                        "type": "cx2cc_cost_basis",
+                        "bridge_provider_id": 12,
+                        "source_cli_key": "codex",
+                        "priced_model": "gpt-explicit",
+                    }])
+                    .to_string(),
+                ),
+                requested_model: Some("claude-client-model".to_string()),
+                attempts_json: serde_json::json!([
+                    {
+                        "provider_id": 12,
+                        "provider_name": "Failed CX2CC",
+                        "outcome": "failed",
+                        "status": 502
+                    },
+                    {
+                        "provider_id": 13,
+                        "provider_name": "Plain Claude",
+                        "outcome": "success",
+                        "status": 200
+                    }
+                ])
+                .to_string(),
+                input_tokens: Some(100),
+                total_tokens: Some(100),
+                ..request_log_insert("trace-cx2cc-failover-plain-claude-cost")
+            },
+        ];
+
+        insert_batch_once(&app_handle, &db, &items, &mut InsertBatchCache::default())
+            .expect("insert CX2CC request costs");
+
+        let conn = db.open_connection().expect("open connection");
+        let read_cost = |trace_id: &str| {
+            conn.query_row(
+                "SELECT cost_usd_femto FROM request_logs WHERE trace_id = ?1",
+                [trace_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .expect("read request cost")
+            .expect("request cost should be present")
+        };
+
+        assert_eq!(
+            read_cost("trace-cx2cc-explicit-cost"),
+            5_100_000_000_000_000
+        );
+        assert_eq!(
+            read_cost("trace-cx2cc-fallback-cost"),
+            4_900_000_000_000_000
+        );
+        assert_eq!(
+            read_cost("trace-cx2cc-failover-plain-claude-cost"),
+            100_000_000_000_000,
+            "a failed CX2CC attempt must not price the final plain Claude response"
         );
     }
 

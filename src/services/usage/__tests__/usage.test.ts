@@ -20,6 +20,8 @@ import {
   normalizeUsageDayDetailInput,
   normalizeUsageDayDetailFolderLimit,
   normalizeUsageHourlySeriesDays,
+  normalizeUsageLeaderboardCsvExportContent,
+  normalizeUsageLeaderboardCsvExportFilePath,
   normalizeUsageLeaderboardLimit,
   normalizeUsageLeaderboardV2Limit,
   normalizeUsageProviderCacheRateTrendLimit,
@@ -29,6 +31,7 @@ import {
   usageFolderOptionsV1,
   usageHourlySeries,
   usageLeaderboardDay,
+  usageLeaderboardCsvExport,
   usageLeaderboardProvider,
   usageLeaderboardV2,
   usageProviderCacheRateTrendV1,
@@ -52,6 +55,7 @@ vi.mock("../../../generated/bindings", async () => {
       usageFolderOptionsV1: vi.fn(),
       usageSummaryV2: vi.fn(),
       usageLeaderboardV2: vi.fn(),
+      usageLeaderboardCsvExport: vi.fn(),
       usageProviderCacheRateTrendV1: vi.fn(),
     },
   };
@@ -72,6 +76,7 @@ function makeUsageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     requests_success: 1,
     requests_failed: 0,
     cost_covered_success: 1,
+    total_duration_ms: 120,
     avg_duration_ms: 120,
     avg_ttfb_ms: 30,
     avg_output_tokens_per_second: 10,
@@ -152,6 +157,9 @@ function makeUsageLeaderboardRow(
     output_tokens: 200,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
+    total_duration_ms: 120,
+    first_request_created_at_ms: null,
+    last_request_created_at_ms: null,
     avg_duration_ms: 120,
     avg_ttfb_ms: 30,
     avg_output_tokens_per_second: 10,
@@ -274,6 +282,10 @@ describe("services/usage/usage", () => {
       status: "ok",
       data: [makeUsageProviderCacheRateTrendRow()],
     });
+    vi.mocked(commands.usageLeaderboardCsvExport).mockResolvedValue({
+      status: "ok",
+      data: true,
+    });
 
     const todaySummary = await usageSummary("today");
     const cliSummary = await usageSummary("last7", { cliKey: "claude" });
@@ -291,6 +303,7 @@ describe("services/usage/usage", () => {
       providerId: null,
       folderLimit: 8,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
 
@@ -301,6 +314,7 @@ describe("services/usage/usage", () => {
       cliKey: "gemini",
       providerId: 7,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
 
@@ -312,6 +326,7 @@ describe("services/usage/usage", () => {
       providerId: 9,
       limit: null,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 6,
       excludeCx2CcGatewayBridge: true,
     });
     const folderOptions = await usageFolderOptionsV1("custom", {
@@ -319,6 +334,7 @@ describe("services/usage/usage", () => {
       endTs: 2,
       cliKey: "claude",
       providerId: 9,
+      dayStartHour: 7,
       excludeCx2CcGatewayBridge: true,
     });
 
@@ -328,8 +344,13 @@ describe("services/usage/usage", () => {
       cliKey: "claude",
       providerId: 11,
       limit: 20,
+      dayStartHour: 8,
       excludeCx2CcGatewayBridge: true,
-    });
+    } as never);
+    const csvExported = await usageLeaderboardCsvExport(
+      " /tmp/usage.csv ",
+      "\uFEFF排名,供应商\r\n1,OpenAI\r\n"
+    );
 
     expect(todaySummary.requests_total).toBe(1);
     expect(cliSummary.requests_success).toBe(1);
@@ -341,6 +362,7 @@ describe("services/usage/usage", () => {
     expect(leaderboardRows[0]?.key).toBe("provider:1");
     expect(folderOptions[0]?.key).toBe("/tmp/project");
     expect(cacheRateRows[0]?.key).toBe("provider:1");
+    expect(csvExported).toBe(true);
 
     expect(commands.usageSummary).toHaveBeenNthCalledWith(1, "today", null);
     expect(commands.usageSummary).toHaveBeenNthCalledWith(2, "last7", "claude");
@@ -355,6 +377,7 @@ describe("services/usage/usage", () => {
       providerId: null,
       folderLimit: 8,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
     expect(commands.usageSummaryV2).toHaveBeenNthCalledWith(1, {
@@ -364,6 +387,7 @@ describe("services/usage/usage", () => {
       cliKey: null,
       providerId: null,
       folderKeys: null,
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: null,
     });
     expect(commands.usageSummaryV2).toHaveBeenNthCalledWith(2, {
@@ -373,6 +397,7 @@ describe("services/usage/usage", () => {
       cliKey: "gemini",
       providerId: 7,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
     expect(commands.usageLeaderboardV2).toHaveBeenNthCalledWith(
@@ -385,6 +410,7 @@ describe("services/usage/usage", () => {
         cliKey: null,
         providerId: null,
         folderKeys: null,
+        dayStartHour: null,
         excludeCx2CcGatewayBridge: null,
       },
       null
@@ -399,6 +425,7 @@ describe("services/usage/usage", () => {
         cliKey: "claude",
         providerId: 9,
         folderKeys: ["/tmp/project"],
+        dayStartHour: 6,
         excludeCx2CcGatewayBridge: true,
       },
       null
@@ -410,6 +437,7 @@ describe("services/usage/usage", () => {
       cliKey: "claude",
       providerId: 9,
       folderKeys: null,
+      dayStartHour: 7,
       excludeCx2CcGatewayBridge: true,
     });
     expect(commands.usageProviderCacheRateTrendV1).toHaveBeenCalledWith(
@@ -420,9 +448,14 @@ describe("services/usage/usage", () => {
         cliKey: "claude",
         providerId: 11,
         folderKeys: null,
+        dayStartHour: null,
         excludeCx2CcGatewayBridge: true,
       },
       20
+    );
+    expect(commands.usageLeaderboardCsvExport).toHaveBeenCalledWith(
+      "/tmp/usage.csv",
+      "\uFEFF排名,供应商\r\n1,OpenAI\r\n"
     );
   });
 
@@ -430,6 +463,7 @@ describe("services/usage/usage", () => {
     vi.mocked(commands.usageSummary).mockClear();
     vi.mocked(commands.usageSummaryV2).mockClear();
     vi.mocked(commands.usageDayDetailV1).mockClear();
+    vi.mocked(commands.usageLeaderboardCsvExport).mockClear();
 
     vi.mocked(commands.usageSummary).mockResolvedValue({ status: "ok", data: makeUsageSummary() });
     vi.mocked(commands.usageSummaryV2).mockResolvedValue({
@@ -450,6 +484,7 @@ describe("services/usage/usage", () => {
         cliKey: " gemini " as never,
         providerId: 7,
         folderKeys: [" /b ", "/a", "/a", " "],
+        dayStartHour: 5,
         excludeCx2CcGatewayBridge: true,
       })
     ).toEqual({
@@ -458,9 +493,12 @@ describe("services/usage/usage", () => {
       cliKey: "gemini",
       providerId: 7,
       folderKeys: ["/a", "/b"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
     expect(normalizeUsageDay(" 2026-04-22 ")).toBe("2026-04-22");
+    expect(normalizeUsageLeaderboardCsvExportFilePath(" /tmp/usage.csv ")).toBe("/tmp/usage.csv");
+    expect(normalizeUsageLeaderboardCsvExportContent("\uFEFF排名\r\n")).toBe("\uFEFF排名\r\n");
     expect(
       normalizeUsageDayDetailInput({
         day: " 2026-04-22 ",
@@ -468,6 +506,7 @@ describe("services/usage/usage", () => {
         providerId: 9,
         folderLimit: 999,
         folderKeys: [" /tmp/project ", "/tmp/project"],
+        dayStartHour: 6,
         excludeCx2CcGatewayBridge: false,
       })
     ).toEqual({
@@ -476,6 +515,7 @@ describe("services/usage/usage", () => {
       providerId: 9,
       folderLimit: USAGE_DAY_DETAIL_FOLDER_MAX_LIMIT,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 6,
       excludeCx2CcGatewayBridge: false,
     });
 
@@ -486,6 +526,7 @@ describe("services/usage/usage", () => {
       cliKey: " gemini " as never,
       providerId: 7,
       folderKeys: [" /b ", "/a", "/a", " "],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
     await usageDayDetailV1({
@@ -494,6 +535,7 @@ describe("services/usage/usage", () => {
       providerId: 9,
       folderLimit: 999,
       folderKeys: [" /tmp/project ", "/tmp/project"],
+      dayStartHour: 6,
       excludeCx2CcGatewayBridge: false,
     });
 
@@ -505,6 +547,7 @@ describe("services/usage/usage", () => {
       cliKey: "gemini",
       providerId: 7,
       folderKeys: ["/a", "/b"],
+      dayStartHour: 5,
       excludeCx2CcGatewayBridge: true,
     });
     expect(commands.usageDayDetailV1).toHaveBeenCalledWith({
@@ -513,6 +556,7 @@ describe("services/usage/usage", () => {
       providerId: 9,
       folderLimit: USAGE_DAY_DETAIL_FOLDER_MAX_LIMIT,
       folderKeys: ["/tmp/project"],
+      dayStartHour: 6,
       excludeCx2CcGatewayBridge: false,
     });
   });
@@ -521,6 +565,7 @@ describe("services/usage/usage", () => {
     vi.mocked(commands.usageSummary).mockClear();
     vi.mocked(commands.usageSummaryV2).mockClear();
     vi.mocked(commands.usageDayDetailV1).mockClear();
+    vi.mocked(commands.usageLeaderboardCsvExport).mockClear();
 
     await expect(usageSummary("today", { cliKey: "opencode" as never })).rejects.toThrow(
       "SEC_INVALID_INPUT"
@@ -536,11 +581,22 @@ describe("services/usage/usage", () => {
     await expect(
       usageSummaryV2("daily", { excludeCx2CcGatewayBridge: "yes" as never })
     ).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(usageSummaryV2("daily", { dayStartHour: 10 })).rejects.toThrow(
+      "SEC_INVALID_INPUT"
+    );
+    await expect(usageDayDetailV1({ day: "2026-04-22", dayStartHour: -1 })).rejects.toThrow(
+      "SEC_INVALID_INPUT"
+    );
     await expect(usageDayDetailV1({ day: "2026-02-31" })).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(usageLeaderboardCsvExport("   ", "排名\r\n")).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(usageLeaderboardCsvExport("/tmp/usage.csv", "\uFEFF  ")).rejects.toThrow(
+      "SEC_INVALID_INPUT"
+    );
 
     expect(commands.usageSummary).not.toHaveBeenCalled();
     expect(commands.usageSummaryV2).not.toHaveBeenCalled();
     expect(commands.usageDayDetailV1).not.toHaveBeenCalled();
+    expect(commands.usageLeaderboardCsvExport).not.toHaveBeenCalled();
   });
 
   it("normalizes bounded usage limits before ipc", async () => {

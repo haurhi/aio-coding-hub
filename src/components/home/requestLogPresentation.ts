@@ -41,6 +41,37 @@ export type RequestLogAuditMeta = {
   providerFallbackText: string | null;
 };
 
+export type CacheCreationDisplay = {
+  tokens: number;
+  ttl: "5m" | "1h" | null;
+};
+
+export function resolveCacheCreationDisplay(input: {
+  cache_creation_input_tokens?: number | null;
+  cache_creation_5m_input_tokens?: number | null;
+  cache_creation_1h_input_tokens?: number | null;
+}): CacheCreationDisplay | null {
+  if (input.cache_creation_5m_input_tokens != null && input.cache_creation_5m_input_tokens > 0) {
+    return { tokens: input.cache_creation_5m_input_tokens, ttl: "5m" };
+  }
+  if (input.cache_creation_1h_input_tokens != null && input.cache_creation_1h_input_tokens > 0) {
+    return { tokens: input.cache_creation_1h_input_tokens, ttl: "1h" };
+  }
+  if (input.cache_creation_input_tokens != null && input.cache_creation_input_tokens > 0) {
+    return { tokens: input.cache_creation_input_tokens, ttl: null };
+  }
+  if (input.cache_creation_5m_input_tokens != null) {
+    return { tokens: input.cache_creation_5m_input_tokens, ttl: "5m" };
+  }
+  if (input.cache_creation_1h_input_tokens != null) {
+    return { tokens: input.cache_creation_1h_input_tokens, ttl: "1h" };
+  }
+  if (input.cache_creation_input_tokens != null) {
+    return { tokens: input.cache_creation_input_tokens, ttl: null };
+  }
+  return null;
+}
+
 function auditTag(label: string, className: string, title?: string): RequestLogAuditTag {
   return { label, className, title };
 }

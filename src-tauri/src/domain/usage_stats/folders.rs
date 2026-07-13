@@ -6,8 +6,8 @@ use super::filters::{
     build_optional_range_cli_provider_filters, sql_exclude_cx2cc_gateway_bridge_clause,
 };
 use super::{
-    sql_effective_input_tokens_expr_with_alias, sql_effective_total_tokens_expr_with_alias,
-    ProviderAgg, UsageFolderOptionV1,
+    effective_total_from_buckets, sql_effective_input_tokens_expr_with_alias, ProviderAgg,
+    UsageFolderOptionV1,
 };
 
 pub(super) const UNKNOWN_FOLDER_KEY: &str = "__unknown__";
@@ -125,10 +125,21 @@ pub(super) fn folder_identity_for_row(
 }
 
 pub(super) fn row_to_agg(row: &Row<'_>) -> rusqlite::Result<ProviderAgg> {
+    let input_tokens = row.get::<_, Option<i64>>("input_tokens")?.unwrap_or(0);
+    let output_tokens = row.get::<_, Option<i64>>("output_tokens")?.unwrap_or(0);
+    let cache_creation_input_tokens = row
+        .get::<_, Option<i64>>("cache_creation_input_tokens")?
+        .unwrap_or(0);
+    let cache_read_input_tokens = row
+        .get::<_, Option<i64>>("cache_read_input_tokens")?
+        .unwrap_or(0);
     Ok(ProviderAgg {
         requests_total: row.get("requests_total")?,
         requests_success: row.get::<_, Option<i64>>("requests_success")?.unwrap_or(0),
         requests_failed: row.get::<_, Option<i64>>("requests_failed")?.unwrap_or(0),
+        total_duration_ms: row.get::<_, Option<i64>>("total_duration_ms")?.unwrap_or(0),
+        first_request_created_at_ms: row.get("first_request_created_at_ms")?,
+        last_request_created_at_ms: row.get("last_request_created_at_ms")?,
         success_duration_ms_sum: row
             .get::<_, Option<i64>>("success_duration_ms_sum")?
             .unwrap_or(0),
@@ -144,15 +155,16 @@ pub(super) fn row_to_agg(row: &Row<'_>) -> rusqlite::Result<ProviderAgg> {
         success_output_tokens_for_rate_sum: row
             .get::<_, Option<i64>>("success_output_tokens_for_rate_sum")?
             .unwrap_or(0),
-        total_tokens: row.get::<_, Option<i64>>("total_tokens")?.unwrap_or(0),
-        input_tokens: row.get::<_, Option<i64>>("input_tokens")?.unwrap_or(0),
-        output_tokens: row.get::<_, Option<i64>>("output_tokens")?.unwrap_or(0),
-        cache_creation_input_tokens: row
-            .get::<_, Option<i64>>("cache_creation_input_tokens")?
-            .unwrap_or(0),
-        cache_read_input_tokens: row
-            .get::<_, Option<i64>>("cache_read_input_tokens")?
-            .unwrap_or(0),
+        total_tokens: effective_total_from_buckets(
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+        ),
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
         cache_creation_5m_input_tokens: row
             .get::<_, Option<i64>>("cache_creation_5m_input_tokens")?
             .unwrap_or(0),
@@ -180,7 +192,6 @@ pub(super) fn usage_event_rows(
     exclude_cx2cc_gateway_bridge: bool,
 ) -> Result<Vec<UsageEventAgg>, String> {
     let effective_input_expr = sql_effective_input_tokens_expr_with_alias("r");
-    let effective_total_expr = sql_effective_total_tokens_expr_with_alias("r");
     let (where_clause, where_params) = build_optional_range_cli_provider_filters(
         "r.created_at",
         "r.cli_key",
@@ -239,7 +250,6 @@ SELECT
       r.error_code IS NOT NULL
     ) THEN 1 ELSE 0 END
   ) AS requests_failed,
-  SUM({effective_total_expr}) AS total_tokens,
   SUM({effective_input_expr}) AS input_tokens,
   SUM(COALESCE(r.output_tokens, 0)) AS output_tokens,
   SUM(COALESCE(r.cache_creation_input_tokens, 0)) AS cache_creation_input_tokens,
@@ -258,6 +268,9 @@ SELECT
       r.cost_usd_femto IS NOT NULL AND r.cost_usd_femto > 0
     ) THEN r.cost_usd_femto ELSE 0 END
   ) AS total_cost_usd_femto,
+  SUM(r.duration_ms) AS total_duration_ms,
+  MIN(CASE WHEN r.created_at_ms > 0 THEN r.created_at_ms ELSE r.created_at * 1000 END) AS first_request_created_at_ms,
+  MAX(CASE WHEN r.created_at_ms > 0 THEN r.created_at_ms ELSE r.created_at * 1000 END) AS last_request_created_at_ms,
   SUM(CASE WHEN r.status >= 200 AND r.status < 300 AND r.error_code IS NULL THEN r.duration_ms ELSE 0 END) AS success_duration_ms_sum,
   SUM(
     CASE WHEN (
@@ -299,7 +312,6 @@ GROUP BY r.cli_key, session_id{bucket_group}{hour_group}
         bucket_select = bucket_select,
         hour_select = hour_select,
         effective_input_expr = effective_input_expr,
-        effective_total_expr = effective_total_expr.as_str(),
         where_clause = where_clause,
         cx2cc_filter_clause = cx2cc_filter_clause,
         bucket_group = bucket_group,

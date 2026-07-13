@@ -346,15 +346,6 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/usage_provider_cache_rate_trend_v1`, () => HttpResponse.json([])),
 
-  // ---- Cost ----
-  http.post(`${TAURI_ENDPOINT}/cost_summary_v1`, () => HttpResponse.json(null)),
-  http.post(`${TAURI_ENDPOINT}/cost_trend_v1`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/cost_breakdown_provider_v1`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/cost_breakdown_model_v1`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/cost_top_requests_v1`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/cost_scatter_cli_provider_model_v1`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/cost_backfill_missing_v1`, () => HttpResponse.json(null)),
-
   // ---- Provider Limit Usage ----
   http.post(`${TAURI_ENDPOINT}/provider_limit_usage_v1`, () => HttpResponse.json([])),
 

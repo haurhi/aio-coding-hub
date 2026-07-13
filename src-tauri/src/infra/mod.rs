@@ -8,6 +8,7 @@ pub(crate) mod cli_manager;
 pub(crate) mod cli_proxy;
 pub(crate) mod cli_update;
 pub(crate) mod codex_config;
+pub(crate) mod codex_model_catalog;
 pub(crate) mod codex_paths;
 pub(crate) mod config_migrate;
 pub(crate) mod data_management;

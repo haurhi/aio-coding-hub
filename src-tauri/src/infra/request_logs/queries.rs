@@ -305,11 +305,18 @@ fn attach_source_provider_info(
             item.final_provider_source_name = info.source_provider_name.clone();
             bridged = info.bridged;
         }
+        let persisted_openai_semantics = super::semantics::resolve_cx2cc_cost_basis(
+            item.special_settings_json.as_deref(),
+            (item.final_provider_id > 0).then_some(item.final_provider_id),
+        )
+        .openai_input_semantics_override();
         item.effective_input_tokens = crate::usage_stats::effective_input_tokens_display(
             &item.cli_key,
+            persisted_openai_semantics,
             bridged,
             item.input_tokens,
             item.cache_read_input_tokens,
+            item.cache_creation_input_tokens,
         );
     }
 
@@ -443,11 +450,18 @@ fn attach_source_provider_info_to_detail(
         item.final_provider_source_name = info.source_provider_name.clone();
         bridged = info.bridged;
     }
+    let persisted_openai_semantics = super::semantics::resolve_cx2cc_cost_basis(
+        item.special_settings_json.as_deref(),
+        (item.final_provider_id > 0).then_some(item.final_provider_id),
+    )
+    .openai_input_semantics_override();
     item.effective_input_tokens = crate::usage_stats::effective_input_tokens_display(
         &item.cli_key,
+        persisted_openai_semantics,
         bridged,
         item.input_tokens,
         item.cache_read_input_tokens,
+        item.cache_creation_input_tokens,
     );
     Ok(())
 }
@@ -937,5 +951,130 @@ INSERT INTO request_logs (
 
         let detail = get_by_id(&db, 11).unwrap();
         assert_eq!(detail.session_id.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn summary_and_detail_prefer_persisted_cx2cc_semantics_over_provider_state() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("request-log-semantics.db");
+        let db = db::init_for_tests(&db_path).unwrap();
+        let conn = db.open_connection().unwrap();
+
+        conn.execute_batch(
+            r#"
+INSERT INTO providers (id, cli_key, name, base_url, api_key_plaintext, enabled, priority,
+  sort_order, cost_multiplier, created_at, updated_at)
+VALUES (7, 'codex', 'OpenAI Primary', 'https://example.com', '', 1, 100, 0, 1.0, 1, 1);
+INSERT INTO providers (id, cli_key, name, base_url, api_key_plaintext, enabled, priority,
+  sort_order, cost_multiplier, source_provider_id, bridge_type, created_at, updated_at)
+VALUES (12, 'claude', 'Claude Bridge', 'https://example.com', '', 1, 100, 0, 1.0,
+  7, 'cx2cc', 1, 1);
+"#,
+        )
+        .unwrap();
+
+        let fixtures = [
+            (
+                31_i64,
+                Some(r#"[{"type":"cx2cc_cost_basis","source_cli_key":"codex"}]"#),
+            ),
+            (
+                32_i64,
+                Some(r#"[{"type":"cx2cc_cost_basis","source_cli_key":"claude"}]"#),
+            ),
+            (33_i64, None),
+            (34_i64, Some("not-json")),
+            (
+                35_i64,
+                Some(
+                    r#"[{"type":"cx2cc_cost_basis","bridge_provider_id":12,"source_cli_key":"codex"}]"#,
+                ),
+            ),
+            (
+                36_i64,
+                Some(
+                    r#"[{"type":"cx2cc_cost_basis","bridge_provider_id":99,"source_cli_key":"codex"}]"#,
+                ),
+            ),
+        ];
+
+        for (id, special_settings_json) in fixtures {
+            conn.execute(
+                r#"
+INSERT INTO request_logs (
+  id, trace_id, cli_key, method, path, query, excluded_from_stats,
+  special_settings_json, status, error_code, duration_ms, ttfb_ms, attempts_json,
+  input_tokens, output_tokens, total_tokens, cache_read_input_tokens,
+  cache_creation_input_tokens, cache_creation_5m_input_tokens,
+  cache_creation_1h_input_tokens, usage_json, requested_model, cost_usd_femto,
+  cost_multiplier, created_at_ms, created_at, final_provider_id
+) VALUES (?1, ?2, 'claude', 'POST', '/v1/messages', NULL, 0, ?3, 200, NULL, 10, 5,
+  '[{"provider_id":12,"provider_name":"Claude Bridge","outcome":"success","status":200}]',
+  1000, 50, 1050, 100, 200, NULL, NULL, NULL, 'claude-model', NULL, 1.0,
+  ?4, ?1, 12)
+"#,
+                rusqlite::params![
+                    id,
+                    format!("trace-semantics-{id}"),
+                    special_settings_json,
+                    id * 1000
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let assert_effective = |expected: &[(i64, i64)]| {
+            let summaries = list_recent_all(&db, 20).unwrap();
+            for (id, tokens) in expected {
+                let summary = summaries
+                    .iter()
+                    .find(|item| item.id == *id)
+                    .unwrap_or_else(|| panic!("missing summary id={id}"));
+                assert_eq!(
+                    summary.effective_input_tokens,
+                    Some(*tokens),
+                    "summary id={id}"
+                );
+
+                let detail = get_by_id(&db, *id).unwrap();
+                assert_eq!(
+                    detail.effective_input_tokens,
+                    Some(*tokens),
+                    "detail id={id}"
+                );
+            }
+        };
+
+        assert_effective(&[
+            (31, 700),
+            (32, 1000),
+            (33, 700),
+            (34, 700),
+            (35, 700),
+            (36, 1000),
+        ]);
+
+        let conn = db.open_connection().unwrap();
+        conn.execute(
+            "UPDATE providers SET source_provider_id = NULL, bridge_type = NULL WHERE id = 12",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        assert_effective(&[
+            (31, 700),
+            (32, 1000),
+            (33, 1000),
+            (34, 1000),
+            (35, 700),
+            (36, 1000),
+        ]);
+
+        let conn = db.open_connection().unwrap();
+        conn.execute("DELETE FROM providers WHERE id = 12", [])
+            .unwrap();
+        drop(conn);
+        assert_effective(&[(31, 700), (32, 1000), (35, 700), (36, 1000)]);
     }
 }

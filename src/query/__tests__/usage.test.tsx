@@ -58,6 +58,7 @@ function makeUsageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     requests_success: 0,
     requests_failed: 0,
     cost_covered_success: 0,
+    total_duration_ms: 0,
     avg_duration_ms: null,
     avg_ttfb_ms: null,
     avg_output_tokens_per_second: null,
@@ -220,6 +221,7 @@ describe("query/usage", () => {
       cliKey: "claude" as const,
       providerId: 7,
       folderKeys: ["/tmp/project"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -263,6 +265,7 @@ describe("query/usage", () => {
       cliKey: "gemini" as const,
       providerId: 7,
       folderKeys: ["/a", "/b"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -323,6 +326,7 @@ describe("query/usage", () => {
       providerId: 9,
       limit: null,
       folderKeys: ["/tmp/project"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
     const normalizedInput = { ...input, limit: USAGE_LEADERBOARD_V2_DEFAULT_LIMIT };
@@ -371,6 +375,7 @@ describe("query/usage", () => {
       providerId: 9,
       limit: USAGE_LEADERBOARD_V2_MAX_LIMIT,
       folderKeys: ["/tmp/project"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -440,6 +445,7 @@ describe("query/usage", () => {
       providerId: null,
       folderLimit: 8,
       folderKeys: ["/tmp/project"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -479,6 +485,7 @@ describe("query/usage", () => {
       providerId: 7,
       folderLimit: USAGE_DAY_DETAIL_FOLDER_MAX_LIMIT,
       folderKeys: ["/tmp/project"],
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -562,7 +569,7 @@ describe("query/usage", () => {
       providerId: 11,
       excludeCx2CcGatewayBridge: true,
     };
-    const normalizedInput = { ...input, folderKeys: null };
+    const normalizedInput = { ...input, folderKeys: null, dayStartHour: null };
 
     renderHook(() => useUsageFolderOptionsV1Query("daily", input), { wrapper });
 
@@ -597,6 +604,7 @@ describe("query/usage", () => {
       cliKey: "claude" as const,
       providerId: 11,
       folderKeys: null,
+      dayStartHour: null,
       excludeCx2CcGatewayBridge: true,
     };
 
@@ -638,7 +646,6 @@ describe("query/usage", () => {
         endTs: 2,
         cliKey: "claude",
         providerId: 11,
-        folderKeys: null,
         limit: 20,
         excludeCx2CcGatewayBridge: true,
       });
@@ -665,7 +672,6 @@ describe("query/usage", () => {
       endTs: 2,
       cliKey: "claude" as const,
       providerId: 11,
-      folderKeys: null,
       limit: USAGE_PROVIDER_CACHE_RATE_TREND_MAX_LIMIT,
       excludeCx2CcGatewayBridge: true,
     };

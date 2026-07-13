@@ -118,8 +118,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::gateway::events::{
-    decision_chain as dc, emit_attempt_event, emit_gateway_debug_log_lazy, emit_gateway_log,
-    FailoverAttempt, GatewayAttemptEvent,
+    bound_attempt_event, decision_chain as dc, emit_attempt_event, emit_gateway_debug_log_lazy,
+    emit_gateway_log, FailoverAttempt, GatewayAttemptEvent,
 };
 use crate::gateway::response_fixer;
 use crate::gateway::streams::{

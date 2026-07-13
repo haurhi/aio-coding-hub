@@ -909,7 +909,7 @@ describe("components/home/HomeOverviewPanel", () => {
     expect(screen.getByText("Claude New Circuit")).toBeInTheDocument();
   });
 
-  it("auto-switches to 配置信息 when open circuits are removed", () => {
+  it("keeps 活跃 Session selected when open circuits are removed", async () => {
     const { rerender } = renderPanel({
       openCircuits: [
         {
@@ -921,8 +921,8 @@ describe("components/home/HomeOverviewPanel", () => {
       ],
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "供应商限额" }));
-    expect(screen.getByText("provider-limit:0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "活跃 Session" }));
+    expect(await screen.findByText("active-sessions:0")).toBeInTheDocument();
 
     rerender(
       <HomeOverviewPanel
@@ -973,7 +973,11 @@ describe("components/home/HomeOverviewPanel", () => {
       />
     );
 
-    expect(screen.getByText("workspace-config:empty")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "活跃 Session" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    expect(await screen.findByText("active-sessions:0")).toBeInTheDocument();
   });
 
   it("switches back to 配置信息 when circuits become empty in logs-primary layout", async () => {

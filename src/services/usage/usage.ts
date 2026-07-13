@@ -13,7 +13,11 @@ import {
   type UsageQueryParams as GeneratedUsageQueryParams,
   type UsageSummary,
 } from "../../generated/bindings";
-import { invokeGeneratedIpc, mapGeneratedCommandResponse } from "../generatedIpc";
+import {
+  invokeGeneratedIpc,
+  mapGeneratedCommandResponse,
+  type GeneratedCommandResult,
+} from "../generatedIpc";
 import {
   narrowGeneratedStringUnion,
   type OptionalNullableGeneratedFields,
@@ -57,6 +61,7 @@ export type NormalizedUsageQueryInputV2 = {
   cliKey: CliKey | null;
   providerId: number | null;
   folderKeys: string[] | null;
+  dayStartHour: number | null;
   excludeCx2CcGatewayBridge: boolean | null;
 };
 export type UsageDayDetailInput = Override<
@@ -65,14 +70,41 @@ export type UsageDayDetailInput = Override<
     cliKey?: CliKey | null;
   }
 >;
+export type UsageProviderCacheRateTrendInput = Omit<
+  UsageQueryInputV2,
+  "folderKeys" | "dayStartHour"
+> & {
+  limit?: number | null;
+};
 export type NormalizedUsageDayDetailInput = {
   day: string;
   cliKey: CliKey | null;
   providerId: number | null;
   folderLimit: number | null;
   folderKeys: string[] | null;
+  dayStartHour: number | null;
   excludeCx2CcGatewayBridge: boolean | null;
 };
+
+export function normalizeUsageLeaderboardCsvExportFilePath(filePath: string): string {
+  const normalized = filePath.trim();
+  if (!normalized) {
+    throw new Error("SEC_INVALID_INPUT: filePath is required");
+  }
+  return normalized;
+}
+
+export function normalizeUsageLeaderboardCsvExportContent(csv: string): string {
+  if (
+    !csv
+      .trimStart()
+      .replace(/^\uFEFF/, "")
+      .trim()
+  ) {
+    throw new Error("SEC_INVALID_INPUT: csv is required");
+  }
+  return csv;
+}
 
 function normalizeBoundedInteger(
   label: string,
@@ -149,6 +181,14 @@ function normalizeUsageProviderId(providerId?: number | null): number | null {
   return providerId;
 }
 
+function normalizeUsageDayStartHour(value?: number | null): number | null {
+  if (value == null) return null;
+  if (!Number.isSafeInteger(value) || value < 0 || value > 9) {
+    throw new Error(`SEC_INVALID_INPUT: invalid dayStartHour=${value}`);
+  }
+  return value;
+}
+
 function normalizeUsageBoolean(label: string, value: boolean | null | undefined): boolean | null {
   if (value == null) return null;
   if (typeof value !== "boolean") {
@@ -192,6 +232,7 @@ export function normalizeUsageQueryInputV2(input?: UsageQueryInputV2): Normalize
     cliKey: validateUsageCliKey(input?.cliKey),
     providerId: normalizeUsageProviderId(input?.providerId),
     folderKeys: normalizeUsageFolderKeys(input?.folderKeys),
+    dayStartHour: normalizeUsageDayStartHour(input?.dayStartHour),
     excludeCx2CcGatewayBridge: normalizeUsageBoolean(
       "excludeCx2CcGatewayBridge",
       input?.excludeCx2CcGatewayBridge
@@ -230,6 +271,7 @@ export function normalizeUsageDayDetailInput(
     providerId: normalizeUsageProviderId(input.providerId),
     folderLimit: normalizeUsageDayDetailFolderLimit(input.folderLimit),
     folderKeys: normalizeUsageFolderKeys(input.folderKeys),
+    dayStartHour: normalizeUsageDayStartHour(input.dayStartHour),
     excludeCx2CcGatewayBridge: normalizeUsageBoolean(
       "excludeCx2CcGatewayBridge",
       input.excludeCx2CcGatewayBridge
@@ -249,6 +291,7 @@ function buildQueryParamsV2(
     cliKey: normalizedInput.cliKey,
     providerId: normalizedInput.providerId,
     folderKeys: normalizedInput.folderKeys,
+    dayStartHour: normalizedInput.dayStartHour,
     excludeCx2CcGatewayBridge: normalizedInput.excludeCx2CcGatewayBridge,
   };
 }
@@ -261,6 +304,7 @@ function buildUsageDayDetailParams(input: UsageDayDetailInput): GeneratedUsageDa
     providerId: normalizedInput.providerId,
     folderLimit: normalizedInput.folderLimit,
     folderKeys: normalizedInput.folderKeys,
+    dayStartHour: normalizedInput.dayStartHour,
     excludeCx2CcGatewayBridge: normalizedInput.excludeCx2CcGatewayBridge,
   };
 }
@@ -400,9 +444,9 @@ export async function usageFolderOptionsV1(period: UsagePeriod, input?: UsageQue
 
 export async function usageProviderCacheRateTrendV1(
   period: UsagePeriod,
-  input?: UsageQueryInputV2 & { limit?: number | null }
+  input?: UsageProviderCacheRateTrendInput
 ) {
-  const params = buildQueryParamsV2(period, input);
+  const params = buildQueryParamsV2(period, { ...input, folderKeys: null, dayStartHour: null });
   const limit = normalizeUsageProviderCacheRateTrendLimit(input?.limit);
 
   return invokeGeneratedIpc<UsageProviderCacheRateTrendRowV1[]>({
@@ -413,6 +457,24 @@ export async function usageProviderCacheRateTrendV1(
       limit,
     },
     invoke: () => commands.usageProviderCacheRateTrendV1(params, limit),
+  });
+}
+
+export async function usageLeaderboardCsvExport(filePath: string, csv: string) {
+  const normalizedFilePath = normalizeUsageLeaderboardCsvExportFilePath(filePath);
+  const normalizedCsv = normalizeUsageLeaderboardCsvExportContent(csv);
+
+  return invokeGeneratedIpc<boolean>({
+    title: "导出用量排行 CSV 失败",
+    cmd: "usage_leaderboard_csv_export",
+    args: {
+      filePath: normalizedFilePath,
+      csv: normalizedCsv,
+    },
+    invoke: () =>
+      commands.usageLeaderboardCsvExport(normalizedFilePath, normalizedCsv) as Promise<
+        GeneratedCommandResult<boolean>
+      >,
   });
 }
 

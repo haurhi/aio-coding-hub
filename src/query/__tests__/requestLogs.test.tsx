@@ -195,6 +195,7 @@ describe("query/requestLogs", () => {
         requested_model: "gpt-5",
         created_at_ms: 1_000,
         last_activity_ms: 2_000,
+        current_attempt: null,
       },
     ]);
 

@@ -114,15 +114,6 @@ vi.mock("../../components/home/HomeOverviewPanel", () => ({
   },
 }));
 
-vi.mock("../../components/home/HomeCostPanel", () => ({
-  HomeCostPanel: ({ devPreviewEnabled }: any) => (
-    <div>
-      <div>cost-panel</div>
-      <div>cost-preview:{String(devPreviewEnabled)}</div>
-    </div>
-  ),
-}));
-
 vi.mock("../../components/home/HomeTokenCostPanel", () => ({
   HomeTokenCostPanel: ({ devPreviewEnabled }: any) => (
     <div>
@@ -513,8 +504,8 @@ describe("pages/HomePage", () => {
       fireEvent.click(dialog.getByRole("button", { name: "确认切换" }));
       await Promise.resolve();
       expect(activeSetMutation.mutateAsync).toHaveBeenCalledWith({ cliKey: "claude", modeId: 2 });
-      fireEvent.click(screen.getByRole("tab", { name: "花费" }));
-      expect(screen.getByRole("tab", { name: "花费" })).toHaveAttribute("aria-selected", "true");
+      fireEvent.click(screen.getByRole("tab", { name: "用量" }));
+      expect(screen.getByRole("tab", { name: "用量" })).toHaveAttribute("aria-selected", "true");
       fireEvent.click(screen.getByRole("tab", { name: "概览" }));
       await Promise.resolve();
       expect(requestLogsRefetch).toHaveBeenCalled();
@@ -570,7 +561,7 @@ describe("pages/HomePage", () => {
     );
 
     vi.mocked(emitBackgroundTaskVisibilityTrigger).mockClear();
-    fireEvent.click(screen.getByRole("tab", { name: "花费" }));
+    fireEvent.click(screen.getByRole("tab", { name: "用量" }));
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
 
     await waitFor(() =>
@@ -580,7 +571,7 @@ describe("pages/HomePage", () => {
     );
   });
 
-  it("shows cost and token cost tabs by default", () => {
+  it("shows only overview and usage tabs by default", () => {
     setTauriRuntime();
 
     const client = createTestQueryClient();
@@ -588,7 +579,8 @@ describe("pages/HomePage", () => {
 
     renderWithProviders(client, <HomePage />);
 
-    expect(screen.getByRole("tab", { name: "花费" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "概览" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "花费" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "用量" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "更多" })).not.toBeInTheDocument();
   });
@@ -702,11 +694,11 @@ describe("pages/HomePage", () => {
     renderWithProviders(client, <HomePage />);
 
     expect(screen.getByText("open-circuits:0")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "花费" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "花费" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "用量" })).toBeInTheDocument();
   });
 
-  it("toggles the unified dev preview entry and switches cost tabs with personalized layout", async () => {
+  it("passes the unified dev preview state to the usage tab across personalized layout", async () => {
     setTauriRuntime();
 
     const client = createTestQueryClient();
@@ -722,8 +714,8 @@ describe("pages/HomePage", () => {
     expect(screen.getByRole("button", { name: "Dev关闭预览数据" })).toBeInTheDocument();
     expect(screen.getByText("dev-preview:true")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "花费" }));
-    expect(screen.getByText("cost-preview:true")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "用量" }));
+    expect(screen.getByText("token-preview:true")).toBeInTheDocument();
 
     writeHomeOverviewLogsPrimaryLayoutToStorage(true);
 
@@ -733,7 +725,6 @@ describe("pages/HomePage", () => {
       expect(screen.queryByRole("tab", { name: "更多" })).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "用量" }));
     expect(screen.getByText("token-preview:true")).toBeInTheDocument();
   });
 
@@ -758,7 +749,7 @@ describe("pages/HomePage", () => {
     writeHomeOverviewLogsPrimaryLayoutToStorage(false);
 
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "花费" })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "花费" })).not.toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "用量" })).toBeInTheDocument();
       expect(screen.queryByRole("tab", { name: "更多" })).not.toBeInTheDocument();
     });

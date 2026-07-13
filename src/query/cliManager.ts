@@ -10,6 +10,7 @@ import {
   cliManagerCodexConfigTomlGet,
   cliManagerCodexConfigTomlSet,
   cliManagerCodexInfoGet,
+  cliManagerCodexModelCatalogGet,
   cliManagerGeminiConfigGet,
   cliManagerGeminiConfigSet,
   cliManagerGeminiInfoGet,
@@ -20,11 +21,36 @@ import {
   type ClaudeSettingsState,
   type CodexConfigPatch,
   type CodexConfigState,
+  type CodexModelCatalogState,
   type GeminiConfigPatch,
   type GeminiConfigState,
   type SimpleCliInfo,
 } from "../services/cli/cliManager";
 import { cliManagerKeys } from "./keys";
+
+const CODEX_CONFIG_MUTATION_SCOPE = "codex-config";
+const CODEX_MODEL_CATALOG_STALE_TIME = 5 * 60 * 1000;
+
+export type CodexModelCatalogQuerySnapshot = {
+  configPath?: string | null;
+  executablePath?: string | null;
+  cliVersion?: string | null;
+};
+
+function hasCodexModelCatalogSnapshot(snapshot?: CodexModelCatalogQuerySnapshot) {
+  return Boolean(snapshot?.configPath && snapshot?.executablePath);
+}
+
+function codexModelCatalogQueryOptions(snapshot?: CodexModelCatalogQuerySnapshot) {
+  return {
+    queryKey: cliManagerKeys.codexModelCatalog(snapshot),
+    queryFn: () => cliManagerCodexModelCatalogGet(),
+    staleTime: CODEX_MODEL_CATALOG_STALE_TIME,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  };
+}
 
 export function useCliManagerClaudeInfoQuery(options?: { enabled?: boolean }) {
   return useQuery({
@@ -51,6 +77,34 @@ export function useCliManagerCodexInfoQuery(options?: { enabled?: boolean }) {
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
   });
+}
+
+export function useCliManagerCodexModelCatalogQuery(options?: {
+  enabled?: boolean;
+  snapshot?: CodexModelCatalogQuerySnapshot;
+}) {
+  const snapshot = options?.snapshot;
+  const hasSnapshot = hasCodexModelCatalogSnapshot(snapshot);
+  const enabled = (options?.enabled ?? true) && hasSnapshot;
+  return useQuery<CodexModelCatalogState | null>({
+    ...codexModelCatalogQueryOptions(snapshot),
+    enabled: (query) => enabled && query.state.status !== "error",
+  });
+}
+
+export function useCliManagerCodexModelCatalogRefresh() {
+  const queryClient = useQueryClient();
+  return async (snapshot: CodexModelCatalogQuerySnapshot) => {
+    if (!hasCodexModelCatalogSnapshot(snapshot)) return;
+
+    const queryOptions = codexModelCatalogQueryOptions(snapshot);
+    await queryClient.invalidateQueries({
+      queryKey: queryOptions.queryKey,
+      exact: true,
+      refetchType: "none",
+    });
+    await queryClient.prefetchQuery(queryOptions);
+  };
 }
 
 export function useCliManagerCodexConfigQuery(options?: { enabled?: boolean }) {
@@ -108,6 +162,7 @@ export function useCliManagerCodexConfigSetMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    scope: { id: CODEX_CONFIG_MUTATION_SCOPE },
     mutationFn: (patch: CodexConfigPatch) => cliManagerCodexConfigSet(patch),
     onSuccess: (next) => {
       if (!next) return;
@@ -124,6 +179,7 @@ export function useCliManagerCodexConfigTomlSetMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    scope: { id: CODEX_CONFIG_MUTATION_SCOPE },
     mutationFn: (input: { toml: string }) => cliManagerCodexConfigTomlSet(input.toml),
     onSuccess: (next) => {
       if (!next) return;
