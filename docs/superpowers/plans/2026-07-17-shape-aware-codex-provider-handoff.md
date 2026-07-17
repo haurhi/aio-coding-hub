@@ -42,7 +42,7 @@ git diff --binary
 
 Save the outputs as turn evidence under `/tmp/aio-handoff-baseline/` and record their SHA-256 digests. The cached diff must be empty unless the user already staged something. Never stage an implementation file wholesale.
 
-- [ ] **Step 2: Capture provider, route, and circuit before-images**
+- [ ] **Step 2: Capture an informational provider-state baseline**
 
 Run against `~/.aio-coding-hub/aio-coding-hub.db` with `.timeout 15000`:
 
@@ -55,11 +55,11 @@ ORDER BY provider_id;
 SELECT * FROM provider_circuit_breakers WHERE provider_id IN (10,12,21,30) ORDER BY provider_id;
 ```
 
-Store the JSON output as the authoritative restoration source. Do not assume the values remembered from an earlier test are still current.
+Store this JSON only as an early drift check. It is not authoritative for restoration because the installed gateway remains active during implementation and build work. The authoritative quiescent snapshot is captured after the installed app exits in Task 6.
 
 - [ ] **Step 3: Define the cleanup gate before mutations**
 
-No live setup starts until the exact inverse SQL has been prepared from the before-images. On any failed CLI, build, gateway, or assertion command: stop further tests, execute restoration, stop the generated bundle, relaunch `/Applications/AIO Coding Hub Dev.app`, and verify `/health` before reporting.
+No live setup starts until the exact inverse SQL has been prepared from the quiescent Task 6 before-image. On any failed CLI, gateway, or assertion command: stop further tests, stop the generated bundle and wait for process exit, execute restoration, relaunch `/Applications/AIO Coding Hub Dev.app`, and verify `/health` before reporting.
 
 ### Task 1: RED tests for shape-aware normalization
 
@@ -87,6 +87,8 @@ Cover encrypted reasoning with absent/null/empty content, assistant-only Xunfei 
 
 Also include image content and assert all non-reasoning JSON values remain structurally equal and ordered.
 
+Add `codex_chatgpt_invalid_json_is_byte_identical_and_reports_diagnostic` before changing the byte-level preparation wrapper. It must prove invalid input bytes are unchanged and the diagnostic outcome/event contains only path and body length.
+
 - [ ] **Step 3: Run RED tests**
 
 Run:
@@ -94,6 +96,7 @@ Run:
 ```bash
 cd src-tauri
 cargo test --locked --lib foreign_history
+cargo test --locked --lib codex_chatgpt_invalid_json
 ```
 
 Expected: compilation/test failure because the new outcome type and normalization function do not exist. Confirm the failure is about missing behavior, not malformed fixtures.
@@ -144,6 +147,7 @@ Run:
 cd src-tauri
 cargo test --locked --lib foreign_history
 cargo test --locked --lib codex_chatgpt_request_compat
+cargo test --locked --lib codex_chatgpt_invalid_json
 ```
 
 Expected: all selected tests pass.
@@ -162,7 +166,7 @@ Expected: all selected tests pass.
 
 Add a generic sanitizer test proving a standard Responses body containing assistant output is unchanged. Restore `ir_to_request_assistant_text_becomes_output_text` so it expects `output_text`. Add or update an E2E bridge fixture that preserves assistant output.
 
-Add a ChatGPT no-trigger test proving assistant, image, function-call, and function-call-output values remain structurally equal and ordered. Add an invalid-JSON test proving the exact input bytes are returned; capture the debug event with the repository's existing tracing test support if available, otherwise test a small diagnostic-return helper without adding a new logging dependency.
+Add a ChatGPT no-trigger test proving assistant, image, function-call, and function-call-output values remain structurally equal and ordered. The invalid-JSON RED test already exists from Task 1 and must turn green in Task 2; do not add it after implementation.
 
 - [ ] **Step 2: Run RED preservation tests**
 
@@ -199,7 +203,7 @@ Run the two focused commands again. Expected: pass.
 - Modify: `src-tauri/src/gateway/proxy/handler/failover_loop/prepare/codex_chatgpt.rs`
 - Modify: `src-tauri/src/gateway/proxy/handler/failover_loop/prepare/provider_iterator.rs`
 
-- [ ] **Step 1: Write a failing metadata-shape test**
+- [ ] **Step 1: Write failing metadata and preparation-wiring tests**
 
 Test a helper that converts an applied normalization outcome into:
 
@@ -214,21 +218,27 @@ Test a helper that converts an applied normalization outcome into:
 
 Assert that this value is absent from the serialized upstream body.
 
+Before implementing provider-iterator wiring, add `chatgpt_preparation_records_foreign_history_handoff_without_mutating_shared_body`. It must exercise the actual preparation boundary and assert the normalized outbound body, unchanged shared body, preserved assistant/image/tool/top-level/header values, and exactly one internal special setting.
+
 - [ ] **Step 2: Run RED metadata test**
 
-Run `cargo test --locked --lib foreign_history_handoff_special_setting`. Expected: fail because the helper is missing.
+Run:
+
+```bash
+cd src-tauri
+cargo test --locked --lib foreign_history_handoff_special_setting
+cargo test --locked --lib chatgpt_preparation_records_foreign_history_handoff_without_mutating_shared_body
+```
+
+Expected: both fail for missing metadata/wiring behavior rather than fixture errors.
 
 - [ ] **Step 3: Implement metadata recording**
 
 After ChatGPT preparation returns an applied outcome, call `response_fixer::push_special_setting` through `ctx.special_settings`. The special-setting JSON must match the approved schema verbatim. Put provider ID only in the structured tracing event. Do not log request text or reasoning content.
 
-- [ ] **Step 4: Run GREEN metadata test**
+- [ ] **Step 4: Run GREEN metadata and preparation tests**
 
-Run the focused test again. Expected: pass.
-
-- [ ] **Step 5: Add a preparation-level wiring test**
-
-Exercise the real ChatGPT preparation path with a LongCat-shaped body and a shared request body clone. Assert:
+Run both focused commands from Step 2 again. Expected: pass. The preparation test must assert:
 
 - the prepared outbound JSON has no non-empty plaintext reasoning;
 - assistant marker, image, tool items, ordering, allowed top-level fields, and headers remain unchanged;
@@ -300,20 +310,24 @@ Expected bundle:
 src-tauri/target/release/bundle/macos/AIO Coding Hub Dev.app
 ```
 
-- [ ] **Step 3: Run the bundle without installing it**
+- [ ] **Step 3: Quiesce the installed runtime and capture the authoritative before-image**
 
-Quit the installed Dev app, launch the generated bundle directly, confirm `/health` returns version `0.60.14` with HTTP 200, and verify the process path points into `src-tauri/target/release/bundle`.
+Quit the installed Dev app and wait until its gateway process has exited. Only now capture the authoritative provider/route/circuit JSON for providers 10, 12, 21, and 30 and generate exact inverse SQL. Apply the setup SQL while no gateway process is running.
+
+- [ ] **Step 4: Launch the generated bundle without installing it**
+
+Launch the generated bundle directly, confirm `/health` returns version `0.60.14` with HTTP 200, verify the process path points into `src-tauri/target/release/bundle`, and read back that setup state is loaded. If launch or readback fails, stop the bundle before restoring the database.
 
 ### Task 7: Three new Codex Session regressions
 
 **Files:**
 - Runtime data only: `~/.aio-coding-hub/aio-coding-hub.db`, logs, and Codex session JSONL files.
 
-- [ ] **Step 1: Snapshot provider state**
+- [ ] **Step 1: Verify the quiescent snapshot and loaded setup state**
 
-Record enabled flags, default-route membership, and circuit rows for providers 10, 12, 21, and 30. Temporarily enable/add only disabled providers required for forced-route tests.
+Use the authoritative Task 6 before-image. Verify its saved digest and verify the generated bundle has loaded the intended temporary enabled flags, routes, and cleared test circuit state before sending any provider request.
 
-Use the Task 0 before-images. For providers 21 and 30, the setup SQL is:
+For providers 21 and 30, the setup SQL applied while the gateway was stopped in Task 6 is:
 
 ```sql
 BEGIN IMMEDIATE;
@@ -326,7 +340,7 @@ DELETE FROM provider_circuit_breakers WHERE provider_id IN (10,12,21,30);
 COMMIT;
 ```
 
-Only run this after generating inverse SQL that restores every touched row exactly from the snapshot. Forced provider URLs are:
+Only run this after generating inverse SQL that restores every touched row exactly from the authoritative quiescent snapshot. Forced provider URLs are:
 
 ```text
 ikuncode: http://127.0.0.1:37123/codex/_aio/provider/10/v1
@@ -393,11 +407,11 @@ Temporarily enable provider 21, create another assistant-only marker session, an
 
 - [ ] **Step 1: Restore provider/runtime state**
 
-In a guaranteed cleanup path, restore providers 10, 12, 21, and 30, their route rows, and their circuit rows exactly from the Task 0 snapshots. Do not merely delete all circuit rows if one existed before testing. Stop the generated bundle and relaunch `/Applications/AIO Coding Hub Dev.app` whether tests pass or fail.
+In a guaranteed cleanup path, stop the generated bundle and wait for process exit first. Then restore providers 10, 12, 21, and 30, their route rows, and their circuit rows exactly from the authoritative Task 6 snapshot. Do not merely delete all circuit rows if one existed before testing. Only after database restoration succeeds, relaunch `/Applications/AIO Coding Hub Dev.app` whether tests pass or fail.
 
 - [ ] **Step 2: Fresh verification**
 
-Confirm installed Dev `/health` HTTP 200, provider/route/circuit JSON matches the Task 0 snapshot, all three Session logs have the expected results, `git diff --cached --name-only` contains no implementation file, and the final unstaged diff still contains every pre-existing baseline hunk plus only the intended implementation changes.
+Confirm installed Dev `/health` HTTP 200, provider/route/circuit JSON matches the authoritative Task 6 snapshot, all three Session logs have the expected results, `git diff --cached --name-only` contains no implementation file, and the final unstaged diff still contains every pre-existing Task 0 Git baseline hunk plus only the intended implementation changes.
 
 - [ ] **Step 3: Deliver evidence**
 
