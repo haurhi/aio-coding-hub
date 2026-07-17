@@ -1,4 +1,4 @@
-use super::resolve_session_bound_provider_id;
+use super::{resolve_session_bound_provider_id, SessionBoundResult};
 use crate::circuit_breaker;
 use crate::{providers, session_manager};
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ fn resolve_session_bound_provider_id_skips_disabled_bound_provider() {
     assert_eq!(ids(&enabled), vec![id2]);
 
     let order = vec![id1, id2];
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -134,7 +134,7 @@ fn resolve_session_bound_provider_id_skips_disabled_bound_provider() {
     );
 
     // Disabled provider must NOT be re-inserted; fall through to next enabled provider
-    assert_eq!(selected, None);
+    assert!(matches!(outcome, SessionBoundResult::NoPreference));
     assert_eq!(ids(&enabled), vec![id2]);
 }
 
@@ -165,7 +165,7 @@ fn resolve_session_bound_provider_id_skips_insertion_when_forced_provider_presen
     assert_eq!(ids(&enabled), vec![id2]);
 
     let order = vec![id1, id2];
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -177,7 +177,7 @@ fn resolve_session_bound_provider_id_skips_insertion_when_forced_provider_presen
         Some(&order),
     );
 
-    assert_eq!(selected, None);
+    assert!(matches!(outcome, SessionBoundResult::NoPreference));
     assert_eq!(ids(&enabled), vec![id2]);
 }
 
@@ -208,7 +208,7 @@ fn resolve_session_bound_provider_id_does_not_insert_when_reuse_disabled() {
     assert_eq!(ids(&enabled), vec![id2]);
 
     let order = vec![id1, id2];
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -220,7 +220,7 @@ fn resolve_session_bound_provider_id_does_not_insert_when_reuse_disabled() {
         Some(&order),
     );
 
-    assert_eq!(selected, None);
+    assert!(matches!(outcome, SessionBoundResult::NoPreference));
     assert_eq!(ids(&enabled), vec![id2]);
 }
 
@@ -251,7 +251,7 @@ fn resolve_session_bound_provider_id_clears_stale_binding_when_bound_provider_no
     assert_eq!(ids(&candidates), vec![id2]);
 
     let order = vec![id1, id2];
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -264,7 +264,7 @@ fn resolve_session_bound_provider_id_clears_stale_binding_when_bound_provider_no
     );
 
     // Must NOT re-insert the stale provider; reuse should fall through.
-    assert_eq!(selected, None);
+    assert!(matches!(outcome, SessionBoundResult::NoPreference));
     assert_eq!(ids(&candidates), vec![id2]);
     assert_eq!(session.get_bound_provider("claude", "sess_1", now), None);
 }
@@ -288,7 +288,7 @@ fn default_mode_switches_to_enabled_provider_after_bound_provider_disabled_and_c
         providers::list_enabled_for_gateway_in_mode(&db, "claude", None).expect("list enabled");
     assert_eq!(ids(&enabled), vec![p2.id]);
 
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -301,7 +301,7 @@ fn default_mode_switches_to_enabled_provider_after_bound_provider_disabled_and_c
     );
 
     assert_eq!(ids(&enabled), vec![p2.id]);
-    assert_eq!(selected, None);
+    assert!(matches!(outcome, SessionBoundResult::NoPreference));
     assert_eq!(session.get_bound_provider("claude", "sess_1", now), None);
 }
 
@@ -325,7 +325,7 @@ fn sort_mode_ignores_global_provider_enabled_but_open_circuit_falls_back() {
         .expect("list enabled");
     assert_eq!(ids(&enabled), vec![p1.id, p2.id]);
 
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -338,7 +338,21 @@ fn sort_mode_ignores_global_provider_enabled_but_open_circuit_falls_back() {
     );
 
     assert_eq!(ids(&enabled), vec![p2.id]);
-    assert_eq!(selected, None);
+
+    // Even though p1 is globally disabled, it was still in the sort_mode candidate list.
+    // Circuit denial caused fallback to p2, but the session binding is intentionally left
+    // pointing at p1 (see original test intent).
+    match outcome {
+        SessionBoundResult::DeniedByCircuit {
+            provider_id,
+            snapshot,
+        } => {
+            assert_eq!(provider_id, p1.id);
+            assert_eq!(snapshot.state, circuit_breaker::CircuitState::Open);
+        }
+        other => panic!("expected DeniedByCircuit, got {:?}", other),
+    }
+
     assert_eq!(
         session.get_bound_provider("claude", "sess_1", now),
         Some(p1.id)
@@ -365,7 +379,7 @@ fn acceptance_session_bound_provider_falls_back_when_bound_provider_circuit_is_o
 
     let mut enabled =
         providers::list_enabled_for_gateway_in_mode(&db, "claude", None).expect("list enabled");
-    let selected = resolve_session_bound_provider_id(
+    let outcome = resolve_session_bound_provider_id(
         &session,
         &circuit,
         "claude",
@@ -377,6 +391,16 @@ fn acceptance_session_bound_provider_falls_back_when_bound_provider_circuit_is_o
         Some(&[id1, id2]),
     );
 
-    assert_eq!(selected, None);
+    // This is the important case for observability: single (or last) bound provider denied by circuit.
+    match outcome {
+        SessionBoundResult::DeniedByCircuit {
+            provider_id,
+            snapshot,
+        } => {
+            assert_eq!(provider_id, id1);
+            assert_eq!(snapshot.state, circuit_breaker::CircuitState::Open);
+        }
+        other => panic!("expected DeniedByCircuit, got {:?}", other),
+    }
     assert_eq!(ids(&enabled), vec![id2]);
 }

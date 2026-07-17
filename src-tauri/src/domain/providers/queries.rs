@@ -1116,6 +1116,14 @@ pub fn upsert(
     let requested_auth_mode = auth_mode.unwrap_or(ProviderAuthMode::ApiKey);
     let is_oauth = requested_auth_mode == ProviderAuthMode::Oauth;
 
+    if cli_key == "grok" && claude_models.as_ref().is_some_and(ClaudeModels::has_any) {
+        return Err(
+            "SEC_INVALID_INPUT: claude_models is only supported for cli_key=claude"
+                .to_string()
+                .into(),
+        );
+    }
+
     if let Some(ref bt) = bridge_type {
         if bt != CX2CC_BRIDGE_TYPE
             && bt != R2C_BRIDGE_TYPE

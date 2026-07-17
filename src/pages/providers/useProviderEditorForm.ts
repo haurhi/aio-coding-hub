@@ -520,7 +520,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
           return Boolean(value.trim());
         }).length
       : 0;
-  const supportsOAuth = cliKey === "codex" || cliKey === "gemini";
+  const supportsOAuth = cliKey === "codex" || cliKey === "gemini" || cliKey === "grok";
   const supportsCx2cc = cliKey === "claude";
   const supportsCc2cx = cliKey === "codex";
   const supportsClaudeChatCompletions = cliKey === "claude";

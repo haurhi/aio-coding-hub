@@ -498,7 +498,8 @@ fn codex_request_has_previous_response_id<R: tauri::Runtime>(input: &RequestCont
 }
 
 fn codex_body_has_previous_response_id(cli_key: &str, body: &[u8]) -> bool {
-    if cli_key != "codex" {
+    // grok 与 codex 同走 OpenAI Responses API，rectifier 重试额度同样适用。
+    if !matches!(cli_key, "codex" | "grok") {
         return false;
     }
 
@@ -696,6 +697,7 @@ mod tests {
         }));
 
         assert!(codex_body_has_previous_response_id("codex", &body));
+        assert!(codex_body_has_previous_response_id("grok", &body));
     }
 
     #[test]
@@ -711,6 +713,10 @@ mod tests {
         ));
         assert!(!codex_body_has_previous_response_id(
             "codex",
+            &without_previous
+        ));
+        assert!(!codex_body_has_previous_response_id(
+            "grok",
             &without_previous
         ));
     }
