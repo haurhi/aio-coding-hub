@@ -9,7 +9,7 @@ export function CodexModelMappingSection(props: { form: UseProviderEditorFormRet
   const { cliKey, authMode, saving, modelMappingRows, setModelMappingRows, newModelMappingRow } =
     props.form;
 
-  if (cliKey !== "codex" || authMode !== "r2c") return null;
+  if (cliKey !== "codex" || (authMode !== "api_key" && authMode !== "r2c")) return null;
 
   const configuredCount = configuredModelMappingCount(modelMappingRows);
 

@@ -90,7 +90,6 @@ fn ir_to_request(ir: &InternalRequest, settings: &Cx2ccSettings) -> Result<Value
                     name,
                     input: tool_input,
                 } => {
-                    // Flush accumulated message content first
                     if !message_content.is_empty() {
                         input_items_push(&mut input, role_str, &mut message_content);
                     }
@@ -107,7 +106,6 @@ fn ir_to_request(ir: &InternalRequest, settings: &Cx2ccSettings) -> Result<Value
                     content,
                     ..
                 } => {
-                    // Flush accumulated message content first
                     if !message_content.is_empty() {
                         input_items_push(&mut input, role_str, &mut message_content);
                     }
@@ -1082,7 +1080,9 @@ mod tests {
         };
 
         let result = ir_to_request(&ir, &default_settings()).unwrap();
+        assert_eq!(result["input"][0]["role"], "assistant");
         assert_eq!(result["input"][0]["content"][0]["type"], "output_text");
+        assert_eq!(result["input"][0]["content"][0]["text"], "I can help");
     }
 
     #[test]
@@ -1146,7 +1146,9 @@ mod tests {
         let result = ir_to_request(&ir, &default_settings()).unwrap();
         let input = result["input"].as_array().unwrap();
         assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["role"], "assistant");
         assert_eq!(input[0]["content"][0]["type"], "output_text");
+        assert_eq!(input[0]["content"][0]["text"], "Let me check");
         assert_eq!(input[1]["type"], "function_call");
         assert_eq!(input[1]["call_id"], "call_123");
         assert_eq!(input[1]["name"], "get_weather");
@@ -1211,9 +1213,11 @@ mod tests {
 
         let result = ir_to_request(&ir, &default_settings()).unwrap();
         let input = result["input"].as_array().unwrap();
-        // Only the text block should remain (thinking is skipped)
         assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["role"], "assistant");
+        assert_eq!(input[0]["content"].as_array().unwrap().len(), 1);
         assert_eq!(input[0]["content"][0]["type"], "output_text");
+        assert_eq!(input[0]["content"][0]["text"], "Answer");
     }
 
     #[test]

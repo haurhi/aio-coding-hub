@@ -8,6 +8,31 @@ use crate::gateway::events::ClaudeModelMapping;
 use crate::gateway::proxy::gemini_oauth::GeminiOAuthResponseMode;
 use std::collections::HashSet;
 
+fn apply_chatgpt_compat_and_record(
+    provider_id: i64,
+    special_settings: &std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    forwarded_path: &mut String,
+    upstream_body_bytes: &mut Bytes,
+    strip_request_content_encoding: &mut bool,
+) {
+    let outcome = maybe_apply_codex_chatgpt_request_compat(
+        forwarded_path,
+        upstream_body_bytes,
+        strip_request_content_encoding,
+    );
+    let Some(setting) = codex_chatgpt::foreign_history_handoff_special_setting(outcome) else {
+        return;
+    };
+
+    crate::gateway::response_fixer::push_special_setting(special_settings, setting);
+    tracing::info!(
+        provider_id,
+        reasoning_items_removed = outcome.reasoning_items_removed,
+        previous_response_id_removed = outcome.previous_response_id_removed,
+        "normalized foreign Responses history for ChatGPT handoff"
+    );
+}
+
 /// All mutable state accumulated by the provider preparation phase that the
 /// retry loop (and later finalization) needs.
 pub(super) struct PreparedProvider {
@@ -348,6 +373,15 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         }
     }
 
+    if !direct_bridge_applied
+        && !cx2cc_active
+        && provider.auth_mode == crate::providers::ProviderAuthMode::ApiKey.as_str()
+        && apply_codex_api_key_model_mapping(&mut upstream_body_bytes, &provider.model_mapping)
+            .is_some()
+    {
+        strip_request_content_encoding = true;
+    }
+
     let circuit_snapshot = gate_allow.circuit_after;
     counters.providers_tried = counters.providers_tried.saturating_add(1);
     let provider_index = counters.providers_tried as u32;
@@ -399,11 +433,28 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         },
     );
 
+    let body_len_before_compat = upstream_body_bytes.len();
     if use_codex_chatgpt_backend {
-        maybe_apply_codex_chatgpt_request_compat(
+        tracing::info!(
+            provider_id,
+            forwarded_path = %upstream_forwarded_path,
+            body_len = body_len_before_compat,
+            "provider_iterator: entering chatgpt_backend compat path"
+        );
+        apply_chatgpt_compat_and_record(
+            provider_id,
+            ctx.special_settings,
             &mut upstream_forwarded_path,
             &mut upstream_body_bytes,
             &mut strip_request_content_encoding,
+        );
+    }
+    if upstream_body_bytes.len() != body_len_before_compat {
+        tracing::info!(
+            provider_id,
+            before = body_len_before_compat,
+            after = upstream_body_bytes.len(),
+            "provider_iterator: body size changed after chatgpt compatibility normalization"
         );
     }
 
@@ -528,14 +579,111 @@ fn translate_direct_bridge_request(
     })
 }
 
+fn apply_codex_api_key_model_mapping(
+    body_bytes: &mut Bytes,
+    model_mapping: &crate::providers::ProviderModelMapping,
+) -> Option<(String, String)> {
+    if model_mapping.is_empty() {
+        return None;
+    }
+
+    let mut body_val: serde_json::Value = serde_json::from_slice(body_bytes.as_ref()).ok()?;
+    let requested_model = body_val.get("model")?.as_str()?.to_string();
+    let mapped_model = crate::providers::map_provider_model(model_mapping, &requested_model);
+    if mapped_model == requested_model {
+        return None;
+    }
+
+    body_val["model"] = serde_json::Value::String(mapped_model.clone());
+    *body_bytes = Bytes::from(serde_json::to_vec(&body_val).ok()?);
+    Some((requested_model, mapped_model))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_chatgpt_compat_and_record, apply_codex_api_key_model_mapping,
         codex_body_has_previous_response_id, is_anthropic_messages_request_path,
         is_responses_request_path, provider_max_attempts_for_request,
         translate_direct_bridge_request,
     };
     use axum::body::Bytes;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn chatgpt_preparation_records_foreign_history_handoff_without_mutating_shared_body() {
+        let shared = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "gpt-5",
+                "instructions": "keep instructions",
+                "input": [
+                    {"role": "user", "content": [
+                        {"type": "input_text", "text": "marker"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,abc"}
+                    ]},
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "prior answer"}]},
+                    {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "foreign reasoning"}]},
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "ok"}
+                ],
+                "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+                "include": ["reasoning.encrypted_content"],
+                "previous_response_id": "resp_longcat",
+                "stream": false,
+                "store": true,
+                "unsupported": "drop me"
+            }))
+            .unwrap(),
+        );
+        let original = shared.clone();
+        let mut outbound = shared.clone();
+        let mut path = "/v1/responses".to_string();
+        let mut strip_content_encoding = false;
+        let special_settings = Arc::new(Mutex::new(Vec::new()));
+
+        apply_chatgpt_compat_and_record(
+            12,
+            &special_settings,
+            &mut path,
+            &mut outbound,
+            &mut strip_content_encoding,
+        );
+
+        assert_eq!(
+            shared, original,
+            "shared request body must remain byte-identical"
+        );
+        assert_eq!(path, "/responses");
+        assert!(strip_content_encoding);
+        let body: serde_json::Value = serde_json::from_slice(&outbound).unwrap();
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 4);
+        assert_eq!(input[0]["content"][0]["text"], "marker");
+        assert_eq!(input[0]["content"][1]["type"], "input_image");
+        assert_eq!(input[1]["role"], "assistant");
+        assert_eq!(input[1]["content"][0]["text"], "prior answer");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(body["instructions"], "keep instructions");
+        assert_eq!(body["tools"][0]["name"], "lookup");
+        assert_eq!(body["include"][0], "reasoning.encrypted_content");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+        assert!(body.get("previous_response_id").is_none());
+        assert!(body.get("unsupported").is_none());
+        assert!(!outbound
+            .windows(b"foreign_history_handoff".len())
+            .any(|window| window == b"foreign_history_handoff"));
+        assert_eq!(
+            *special_settings.lock().unwrap(),
+            vec![serde_json::json!({
+                "type": "foreign_history_handoff",
+                "trigger": "plaintext_reasoning_content",
+                "reasoning_items_removed": 1,
+                "previous_response_id_removed": true
+            })]
+        );
+    }
 
     fn body(value: serde_json::Value) -> Vec<u8> {
         serde_json::to_vec(&value).expect("serialize body")
@@ -695,6 +843,31 @@ mod tests {
             serde_json::from_slice(translated.body_bytes.as_ref()).unwrap();
 
         assert_eq!(translated_body["model"], "DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn apply_codex_api_key_model_mapping_rewrites_passthrough_model() {
+        let mut body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "gpt-5.5",
+                "input": "hi"
+            }))
+            .unwrap(),
+        );
+        let mapping = crate::providers::ProviderModelMapping::from_iter([(
+            "gpt-5.5".to_string(),
+            "LongCat-Flash-Chat".to_string(),
+        )]);
+
+        let applied = apply_codex_api_key_model_mapping(&mut body, &mapping);
+        let translated_body: serde_json::Value = serde_json::from_slice(body.as_ref()).unwrap();
+
+        assert_eq!(
+            applied,
+            Some(("gpt-5.5".to_string(), "LongCat-Flash-Chat".to_string()))
+        );
+        assert_eq!(translated_body["model"], "LongCat-Flash-Chat");
+        assert_eq!(translated_body["input"], "hi");
     }
 
     #[test]

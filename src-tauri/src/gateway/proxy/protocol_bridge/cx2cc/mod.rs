@@ -77,6 +77,53 @@ pub(crate) const CODEX_CHATGPT_RESPONSES_ALLOWED_KEYS: &[&str] = &[
     "previous_response_id",
 ];
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ForeignHistoryNormalization {
+    pub(crate) reasoning_items_removed: usize,
+    pub(crate) previous_response_id_removed: bool,
+}
+
+impl ForeignHistoryNormalization {
+    pub(crate) fn applied(self) -> bool {
+        self.reasoning_items_removed > 0
+    }
+}
+
+pub(crate) fn normalize_foreign_responses_history_for_chatgpt(
+    root: &mut Value,
+) -> ForeignHistoryNormalization {
+    let Some(obj) = root.as_object_mut() else {
+        return ForeignHistoryNormalization::default();
+    };
+
+    let reasoning_items_removed = {
+        let Some(items) = obj.get_mut("input").and_then(Value::as_array_mut) else {
+            return ForeignHistoryNormalization::default();
+        };
+        let before = items.len();
+        items.retain(|item| {
+            let is_plaintext_reasoning = item.get("type").and_then(Value::as_str)
+                == Some("reasoning")
+                && item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|content| !content.is_empty());
+            !is_plaintext_reasoning
+        });
+        before - items.len()
+    };
+
+    if reasoning_items_removed == 0 {
+        return ForeignHistoryNormalization::default();
+    }
+
+    let previous_response_id_removed = obj.remove("previous_response_id").is_some();
+    ForeignHistoryNormalization {
+        reasoning_items_removed,
+        previous_response_id_removed,
+    }
+}
+
 /// Filter a request body to only the ChatGPT Responses API allowed keys, then
 /// force `stream: true`, `store: false`, and coerce `instructions` to a string.
 ///
@@ -253,6 +300,101 @@ mod tests {
     // ── ChatGPT compat filter ──────────────────────────────────────────────
 
     #[test]
+    fn foreign_history_normalizes_plaintext_reasoning_without_rewriting_other_items() {
+        let expected_input = json!([
+            {"role": "developer", "content": [{"type": "input_text", "text": "system"}]},
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "make marker"},
+                {"type": "input_image", "image_url": "data:image/png;base64,abc"}
+            ]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "AU_MARKER"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+            {"role": "user", "content": [{"type": "input_text", "text": "repeat marker"}]}
+        ]);
+        let mut root = json!({
+            "model": "gpt-5.5",
+            "previous_response_id": "resp_longcat",
+            "input": [
+                {"role": "developer", "content": [{"type": "input_text", "text": "system"}]},
+                {"role": "user", "content": [
+                    {"type": "input_text", "text": "make marker"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,abc"}
+                ]},
+                {"type": "reasoning", "id": "rs_longcat", "content": [
+                    {"type": "reasoning_text", "text": "plaintext reasoning must be discarded"}
+                ]},
+                {"role": "assistant", "content": [{"type": "output_text", "text": "AU_MARKER"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+                {"role": "user", "content": [{"type": "input_text", "text": "repeat marker"}]}
+            ]
+        });
+
+        let outcome = normalize_foreign_responses_history_for_chatgpt(&mut root);
+
+        assert_eq!(outcome.reasoning_items_removed, 1);
+        assert!(outcome.previous_response_id_removed);
+        assert_eq!(root["input"], expected_input);
+        assert_eq!(root["input"][2]["role"], "assistant");
+        assert_eq!(root["input"][2]["content"][0]["text"], "AU_MARKER");
+        assert!(root.get("previous_response_id").is_none());
+        assert!(!root.to_string().contains("plaintext reasoning"));
+    }
+
+    #[test]
+    fn foreign_history_compatible_shapes_are_noops() {
+        let cases = [
+            json!({
+                "input": [
+                    {"type": "reasoning", "content": null, "encrypted_content": "ciphertext"},
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "IK_MARKER"}]}
+                ]
+            }),
+            json!({
+                "input": [
+                    {"type": "reasoning", "content": [], "encrypted_content": "ciphertext"},
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "IK_MARKER"}]}
+                ]
+            }),
+            json!({
+                "input": [
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "XF_MARKER"}]}
+                ]
+            }),
+            json!({"input": "hello"}),
+        ];
+
+        for original in cases {
+            let mut root = original.clone();
+            let outcome = normalize_foreign_responses_history_for_chatgpt(&mut root);
+            assert!(!outcome.applied());
+            assert_eq!(root, original);
+        }
+    }
+
+    #[test]
+    fn foreign_history_normalization_is_idempotent_for_tool_only_input() {
+        let mut root = json!({
+            "previous_response_id": "resp_longcat",
+            "input": [
+                {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "drop"}]},
+                {"type": "function_call_output", "call_id": "call_1", "output": "tool result"}
+            ]
+        });
+
+        let first = normalize_foreign_responses_history_for_chatgpt(&mut root);
+        let once = root.clone();
+        let second = normalize_foreign_responses_history_for_chatgpt(&mut root);
+
+        assert_eq!(first.reasoning_items_removed, 1);
+        assert!(first.previous_response_id_removed);
+        assert!(!second.applied());
+        assert_eq!(root, once);
+        assert_eq!(root["input"][0]["type"], "function_call_output");
+    }
+
+    #[test]
     fn compat_keeps_allowed_keys_only() {
         let root = json!({
             "model": "gpt-5",
@@ -269,6 +411,30 @@ mod tests {
         // Stripped fields
         assert!(next.get("temperature").is_none());
         assert!(next.get("extra_field").is_none());
+    }
+
+    #[test]
+    fn compat_preserves_assistant_messages_for_chatgpt_backend() {
+        let root = json!({
+            "model": "gpt-5",
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                {"role": "assistant", "content": [{"type": "output_text", "text": "old reply"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "ok"}
+            ]
+        });
+
+        let next = codex_chatgpt_request_compat_value(&root);
+        let input = next["input"].as_array().expect("input array");
+
+        assert_eq!(input.len(), 4);
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(input[1]["role"], "assistant");
+        assert_eq!(input[1]["content"][0]["text"], "old reply");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[3]["type"], "function_call_output");
     }
 
     #[test]

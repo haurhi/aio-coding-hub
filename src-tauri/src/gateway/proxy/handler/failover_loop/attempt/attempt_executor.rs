@@ -193,6 +193,7 @@ where
     }
 
     headers = semantic_headers;
+
     let upstream_body = body_state_for_attempt
         .finalize_for_upstream(&mut headers, crate::gateway::util::max_request_body_bytes());
 

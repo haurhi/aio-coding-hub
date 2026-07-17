@@ -458,6 +458,28 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         }
     }
 
+    // When an upstream returns a 400 with a Responses API schema mismatch
+    // (e.g. "input[45].content: array too long"), the provider does not support
+    // the Responses format. Treat this as a provider error so failover can
+    // try the next provider instead of aborting immediately.
+    if !is_count_tokens
+        && status.as_u16() == 400
+        && matched_rule_id.is_none()
+        && !matches!(decision, FailoverDecision::SwitchProvider)
+    {
+        if let Some(ref bytes) = abort_body_bytes {
+            let body_text = String::from_utf8_lossy(bytes);
+            if body_text.contains("input[")
+                && body_text.contains("content")
+                && body_text.contains("array too long")
+            {
+                category = ErrorCategory::ProviderError;
+                decision = FailoverDecision::SwitchProvider;
+                matched_rule_id = Some("responses_api_schema_mismatch");
+            }
+        }
+    }
+
     if !is_count_tokens
         && upstream_client_error_rules::should_abort_unmatched_client_error(status, matched_rule_id)
     {

@@ -986,28 +986,12 @@ mod tests {
         });
 
         let translated = bridge.translate_request(anthropic_req, &ctx).unwrap();
-        let input = translated.body.get("input").unwrap().as_array().unwrap();
 
-        // Thinking should be dropped, only text preserved
-        let types: Vec<&str> = input
-            .iter()
-            .flat_map(|item| {
-                // Check top-level type or inside role wrapper
-                let top = item.get("type").and_then(|t| t.as_str());
-                let nested: Vec<&str> = item
-                    .get("content")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|b| b.get("type").and_then(|t| t.as_str()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                top.into_iter().chain(nested)
-            })
-            .collect();
-        assert!(!types.contains(&"thinking"));
-        assert!(types.contains(&"output_text"));
+        let input = translated.body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1);
+        let content = input[0]["content"].as_array().unwrap();
+        assert!(content.iter().all(|block| block["type"] != "thinking"));
+        assert!(content.iter().any(|block| block["type"] == "output_text"));
     }
 
     // ── Response round-trip ─────────────────────────────────────────────

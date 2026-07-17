@@ -434,6 +434,58 @@ describe("pages/providers/ProviderEditorDialog", () => {
     );
   });
 
+  it("saves codex api-key model mappings from the editor", async () => {
+    vi.mocked(providerUpsert).mockResolvedValue(
+      makeProvider({
+        id: 5,
+        cli_key: "codex",
+        name: "GPT-Greix Shyti-8",
+        base_urls: ["https://api.greix.example/v1"],
+        model_mapping: { "gpt-5.5": "LongCat-Flash-Chat" },
+        api_key_configured: true,
+      })
+    );
+
+    render(
+      <ProviderEditorDialog
+        mode="create"
+        open={true}
+        cliKey="codex"
+        onSaved={vi.fn()}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(dialog.getByText("Codex 模型映射"));
+    fireEvent.change(dialog.getByPlaceholderText("gpt-5.5"), {
+      target: { value: "gpt-5.5" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("DeepSeek-V4-Pro"), {
+      target: { value: "LongCat-Flash-Chat" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("default"), {
+      target: { value: "GPT-Greix Shyti-8" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("sk-…"), { target: { value: "sk-greix" } });
+    fireEvent.change(dialog.getByPlaceholderText(/中转 endpoint/), {
+      target: { value: "https://api.greix.example/v1" },
+    });
+
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(providerUpsert)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliKey: "codex",
+          authMode: "api_key",
+          bridgeType: null,
+          modelMapping: { "gpt-5.5": "LongCat-Flash-Chat" },
+        })
+      )
+    );
+  });
+
   it("saves claude chat-completions bridge from the auth mode tabs", async () => {
     vi.mocked(providerUpsert).mockResolvedValue(
       makeProvider({

@@ -4994,4 +4994,108 @@ module.exports.activate = function activate(api) {
 
         upstream_task.abort();
     }
+
+    /// Test that a 400 error with Responses API schema mismatch (e.g.
+    /// "input[45].content: array too long") triggers failover to the next provider.
+    /// This verifies the fix for the error when Responses API format is forwarded
+    /// to providers that don't fully support it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_responses_400_schema_mismatch_failovers_to_next_provider() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let app_settings = settings::AppSettings::default();
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-responses-400-failover-test.sqlite"),
+        )
+        .expect("init test db");
+
+        // Provider 1: Returns 400 with Responses API schema mismatch error (simulates LongCat)
+        let mismatch_body = r#"{"error":{"message":"Invalid 'input[45].content': array too long. Expected an array with maximum length 0, but got an array with length 1 instead."}}"#;
+        let (mismatch_base_url, mismatch_task) =
+            spawn_status_json_upstream("400 Bad Request", mismatch_body).await;
+        let mismatch_provider_id = insert_codex_provider_with_priority(
+            &db,
+            "Schema Mismatch Stub (LongCat-like)",
+            mismatch_base_url,
+            0,
+        );
+
+        // Provider 2: Normal provider that returns success
+        let success_body = r#"{"id":"success-ok","object":"response","model":"gpt-success"}"#;
+        let (success_base_url, success_task) = spawn_json_upstream(success_body).await;
+        let success_provider_id =
+            insert_codex_provider_with_priority(&db, "Success Stub", success_base_url, 1);
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db.clone(), log_tx));
+
+        // Send a Responses API format request (with `input` array)
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        // Should failover to the second provider and return 200
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        assert_eq!(log.error_code, None);
+
+        // Verify the first provider was attempted and failed with switch decision
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        let attempts = attempts.as_array().expect("attempt array");
+        assert!(
+            attempts.len() >= 2,
+            "expected at least two attempts (first fails, second succeeds)"
+        );
+
+        let first_attempt = &attempts[0];
+        assert_eq!(
+            first_attempt.get("provider_id").and_then(Value::as_i64),
+            Some(mismatch_provider_id)
+        );
+        assert_eq!(
+            first_attempt.get("decision").and_then(Value::as_str),
+            Some("switch"),
+            "first provider should be switched after 400 schema mismatch"
+        );
+
+        // Verify the second provider succeeded
+        let provider_chain: Value =
+            serde_json::from_str(log.provider_chain_json.as_deref().expect("provider chain"))
+                .expect("provider chain json");
+        let chain = provider_chain.as_array().expect("provider chain array");
+        assert!(!chain.is_empty(), "provider chain should not be empty");
+        let last_provider = chain.last().expect("last provider in chain");
+        assert_eq!(
+            last_provider.get("provider_id").and_then(Value::as_i64),
+            Some(success_provider_id),
+            "final provider should be the success provider"
+        );
+        assert_eq!(
+            last_provider.get("status").and_then(Value::as_i64),
+            Some(200),
+            "final provider should have status 200"
+        );
+
+        mismatch_task.abort();
+        success_task.abort();
+    }
 }

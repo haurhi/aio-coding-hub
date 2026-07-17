@@ -29,8 +29,13 @@ pub(super) fn clean_body<R: tauri::Runtime>(
     if input.cli_key == "claude" && prepared.oauth_adapter.is_some() {
         return clean_claude_oauth_body(&prepared.upstream_body_bytes);
     }
+
+    clean_non_claude_body(&prepared.upstream_body_bytes)
+}
+
+fn clean_non_claude_body(upstream_body_bytes: &Bytes) -> CleanBodyOutcome {
     CleanBodyOutcome {
-        body: prepared.upstream_body_bytes.clone(),
+        body: upstream_body_bytes.clone(),
         removed_empty_text_blocks: 0,
     }
 }
@@ -115,5 +120,21 @@ mod tests {
 
         assert_eq!(outcome.removed_empty_text_blocks, 0);
         assert_eq!(outcome.body, encoded);
+    }
+
+    #[test]
+    fn standard_responses_body_preserves_assistant() {
+        let body = serde_json::json!({
+            "input": [{
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "prior answer"}]
+            }]
+        });
+        let encoded = Bytes::from(serde_json::to_vec(&body).unwrap());
+
+        let outcome = clean_non_claude_body(&encoded);
+
+        assert_eq!(outcome.body, encoded);
+        assert!(!outcome.changed());
     }
 }

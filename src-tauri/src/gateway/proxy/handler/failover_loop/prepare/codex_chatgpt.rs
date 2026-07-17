@@ -129,22 +129,43 @@ pub(super) fn maybe_apply_codex_chatgpt_request_compat(
     forwarded_path: &mut String,
     upstream_body_bytes: &mut Bytes,
     strip_request_content_encoding: &mut bool,
-) {
+) -> bridge_cx2cc::ForeignHistoryNormalization {
     *forwarded_path = normalize_codex_chatgpt_forwarded_path(forwarded_path);
     if forwarded_path.as_str() != "/responses" {
-        return;
+        return bridge_cx2cc::ForeignHistoryNormalization::default();
     }
-    let Ok(root) = serde_json::from_slice::<serde_json::Value>(upstream_body_bytes.as_ref()) else {
-        return;
+    let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(upstream_body_bytes.as_ref())
+    else {
+        tracing::debug!(
+            forwarded_path = %forwarded_path,
+            body_len = upstream_body_bytes.len(),
+            "codex chatgpt compat: request body JSON parse failed"
+        );
+        return bridge_cx2cc::ForeignHistoryNormalization::default();
     };
+    let outcome = bridge_cx2cc::normalize_foreign_responses_history_for_chatgpt(&mut root);
     let next = codex_chatgpt_request_compat_value(&root);
     if next == root {
-        return;
+        return outcome;
     }
     if let Ok(encoded) = serde_json::to_vec(&next) {
         *upstream_body_bytes = Bytes::from(encoded);
         *strip_request_content_encoding = true;
     }
+    outcome
+}
+
+pub(super) fn foreign_history_handoff_special_setting(
+    outcome: bridge_cx2cc::ForeignHistoryNormalization,
+) -> Option<serde_json::Value> {
+    outcome.applied().then(|| {
+        serde_json::json!({
+            "type": "foreign_history_handoff",
+            "trigger": "plaintext_reasoning_content",
+            "reasoning_items_removed": outcome.reasoning_items_removed,
+            "previous_response_id_removed": outcome.previous_response_id_removed
+        })
+    })
 }
 
 pub(super) fn should_apply_claude_model_mapping(cx2cc_active: bool, forwarded_path: &str) -> bool {
@@ -161,13 +182,39 @@ pub(super) fn should_apply_claude_model_mapping(cx2cc_active: bool, forwarded_pa
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_chatgpt_request_compat_value, maybe_apply_codex_chatgpt_request_compat,
-        maybe_inject_codex_chatgpt_headers, normalize_codex_chatgpt_forwarded_path,
-        should_apply_claude_model_mapping, strip_incompatible_protocol_headers,
+        codex_chatgpt_request_compat_value, foreign_history_handoff_special_setting,
+        maybe_apply_codex_chatgpt_request_compat, maybe_inject_codex_chatgpt_headers,
+        normalize_codex_chatgpt_forwarded_path, should_apply_claude_model_mapping,
+        strip_incompatible_protocol_headers,
     };
+    use crate::gateway::proxy::protocol_bridge::cx2cc as bridge_cx2cc;
     use axum::body::Bytes;
     use axum::http::{header, HeaderMap, HeaderValue};
     use serde_json::json;
+
+    #[test]
+    fn foreign_history_handoff_special_setting_has_approved_shape() {
+        let outcome = bridge_cx2cc::ForeignHistoryNormalization {
+            reasoning_items_removed: 1,
+            previous_response_id_removed: true,
+        };
+
+        assert_eq!(
+            foreign_history_handoff_special_setting(outcome),
+            Some(json!({
+                "type": "foreign_history_handoff",
+                "trigger": "plaintext_reasoning_content",
+                "reasoning_items_removed": 1,
+                "previous_response_id_removed": true
+            }))
+        );
+        assert_eq!(
+            foreign_history_handoff_special_setting(
+                bridge_cx2cc::ForeignHistoryNormalization::default()
+            ),
+            None
+        );
+    }
 
     #[test]
     fn skips_claude_model_mapping_for_cx2cc_responses_requests() {
@@ -234,6 +281,61 @@ mod tests {
         assert_eq!(next["store"], false);
         assert!(next.get("max_output_tokens").is_none());
         assert!(next.get("temperature").is_none());
+        assert!(strip_request_content_encoding);
+    }
+
+    #[test]
+    fn codex_chatgpt_invalid_json_is_byte_identical_and_reports_diagnostic() {
+        let mut forwarded_path = "/v1/responses".to_string();
+        let original = Bytes::from_static(b"{not-json");
+        let mut upstream_body_bytes = original.clone();
+        let mut strip_request_content_encoding = false;
+
+        let outcome = maybe_apply_codex_chatgpt_request_compat(
+            &mut forwarded_path,
+            &mut upstream_body_bytes,
+            &mut strip_request_content_encoding,
+        );
+
+        assert!(!outcome.applied());
+        assert_eq!(forwarded_path, "/responses");
+        assert_eq!(upstream_body_bytes, original);
+        assert!(!strip_request_content_encoding);
+    }
+
+    #[test]
+    fn codex_chatgpt_request_compat_preserves_assistant_messages() {
+        let mut forwarded_path = "/v1/responses".to_string();
+        let mut upstream_body_bytes = Bytes::from(
+            serde_json::to_vec(&json!({
+                "model": "gpt-5",
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "old reply"}]},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "ok"}
+                ],
+                "stream": false
+            }))
+            .unwrap(),
+        );
+        let mut strip_request_content_encoding = false;
+
+        maybe_apply_codex_chatgpt_request_compat(
+            &mut forwarded_path,
+            &mut upstream_body_bytes,
+            &mut strip_request_content_encoding,
+        );
+
+        let next: serde_json::Value = serde_json::from_slice(&upstream_body_bytes).unwrap();
+        let input = next["input"].as_array().expect("input array");
+
+        assert_eq!(forwarded_path, "/responses");
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(input[1]["role"], "assistant");
+        assert_eq!(input[1]["content"][0]["text"], "old reply");
+        assert_eq!(input[2]["type"], "function_call_output");
         assert!(strip_request_content_encoding);
     }
 
