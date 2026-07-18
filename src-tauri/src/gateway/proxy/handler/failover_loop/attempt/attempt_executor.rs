@@ -16,6 +16,7 @@ pub(super) struct RetryLoopState {
     pub(super) oauth_reactive_refreshed_once: bool,
     pub(super) codex_previous_response_id_rectifier_retried: bool,
     pub(super) codex_reasoning_context_rectifier_retried: bool,
+    pub(super) codex_reasoning_context_retry_pending: bool,
     pub(super) thinking_signature_rectifier_retried: bool,
     pub(super) thinking_budget_rectifier_retried: bool,
 }
@@ -27,6 +28,7 @@ impl RetryLoopState {
             oauth_reactive_refreshed_once: false,
             codex_previous_response_id_rectifier_retried: false,
             codex_reasoning_context_rectifier_retried: false,
+            codex_reasoning_context_retry_pending: false,
             thinking_signature_rectifier_retried: false,
             thinking_budget_rectifier_retried: false,
         }

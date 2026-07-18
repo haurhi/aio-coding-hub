@@ -61,7 +61,16 @@ where
         .await;
 
         match ctrl {
-            LoopControl::ContinueRetry => continue,
+            LoopControl::ContinueRetry => {
+                let reasoning_context_retry_pending =
+                    std::mem::take(&mut retry_state.codex_reasoning_context_retry_pending);
+                if retry_index < prepared.provider_regular_max_attempts
+                    || reasoning_context_retry_pending
+                {
+                    continue;
+                }
+                break;
+            }
             LoopControl::BreakRetry => break,
             LoopControl::Return(resp) => return Some(resp),
         }

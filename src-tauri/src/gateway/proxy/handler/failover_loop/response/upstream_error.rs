@@ -163,6 +163,7 @@ pub(super) struct UpstreamRequestState<'a> {
     pub(super) strip_request_content_encoding: &'a mut bool,
     pub(super) codex_previous_response_id_rectifier_retried: &'a mut bool,
     pub(super) codex_reasoning_context_rectifier_retried: &'a mut bool,
+    pub(super) codex_reasoning_context_retry_pending: &'a mut bool,
     pub(super) thinking_signature_rectifier_retried: &'a mut bool,
     pub(super) thinking_budget_rectifier_retried: &'a mut bool,
 }
@@ -545,6 +546,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                 upstream.upstream_body_bytes,
             ) {
                 *upstream.strip_request_content_encoding = true;
+                *upstream.codex_reasoning_context_retry_pending = true;
                 response_fixer::push_special_setting(
                     ctx.special_settings,
                     serde_json::json!({
