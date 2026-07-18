@@ -168,6 +168,11 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         gate_allow.circuit_after.failure_threshold,
         provider.auth_mode == "oauth",
         codex_request_has_previous_response_id(input),
+        codex_body_has_reasoning_context(
+            &input.cli_key,
+            &input.forwarded_path,
+            input.body_bytes.as_ref(),
+        ),
         input.is_codex_model_discovery,
     );
 
@@ -514,11 +519,23 @@ fn codex_body_has_previous_response_id(cli_key: &str, body: &[u8]) -> bool {
         .is_some_and(|value| !value.is_empty())
 }
 
+fn codex_body_has_reasoning_context(cli_key: &str, forwarded_path: &str, body: &[u8]) -> bool {
+    if !matches!(cli_key, "codex" | "grok") || !is_responses_request_path(forwarded_path) {
+        return false;
+    }
+
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|root| root.get("reasoning")?.as_object().cloned())
+        .is_some_and(|reasoning| reasoning.contains_key("context"))
+}
+
 fn provider_max_attempts_for_request(
     configured_max_attempts: u32,
     circuit_failure_threshold: u32,
     needs_oauth_reactive_refresh_retry: bool,
     needs_codex_previous_response_id_retry: bool,
+    needs_codex_reasoning_context_retry: bool,
     strict_configured_limit: bool,
 ) -> u32 {
     if strict_configured_limit {
@@ -526,7 +543,8 @@ fn provider_max_attempts_for_request(
     }
 
     let required_internal_retries = u32::from(needs_oauth_reactive_refresh_retry)
-        + u32::from(needs_codex_previous_response_id_retry);
+        + u32::from(needs_codex_previous_response_id_retry)
+        + u32::from(needs_codex_reasoning_context_retry);
     configured_max_attempts
         .max(circuit_failure_threshold.max(1))
         .max(1 + required_internal_retries)
@@ -604,9 +622,9 @@ fn apply_codex_api_key_model_mapping(
 mod tests {
     use super::{
         apply_chatgpt_compat_and_record, apply_codex_api_key_model_mapping,
-        codex_body_has_previous_response_id, is_anthropic_messages_request_path,
-        is_responses_request_path, provider_max_attempts_for_request,
-        translate_direct_bridge_request,
+        codex_body_has_previous_response_id, codex_body_has_reasoning_context,
+        is_anthropic_messages_request_path, is_responses_request_path,
+        provider_max_attempts_for_request, translate_direct_bridge_request,
     };
     use axum::body::Bytes;
     use std::sync::{Arc, Mutex};
@@ -722,25 +740,70 @@ mod tests {
     }
 
     #[test]
+    fn codex_body_reasoning_context_requires_internal_retry_budget() {
+        let body = body(serde_json::json!({
+            "reasoning": {"effort": "low", "context": "all_turns"}
+        }));
+
+        assert!(codex_body_has_reasoning_context(
+            "codex",
+            "/v1/responses",
+            &body
+        ));
+        assert!(codex_body_has_reasoning_context(
+            "grok",
+            "/responses/",
+            &body
+        ));
+        assert!(!codex_body_has_reasoning_context(
+            "codex",
+            "/v1/models",
+            &body
+        ));
+        assert!(!codex_body_has_reasoning_context(
+            "claude",
+            "/v1/responses",
+            &body
+        ));
+    }
+
+    #[test]
+    fn codex_body_reasoning_context_rejects_incompatible_shapes() {
+        for body in [
+            b"not-json".to_vec(),
+            body(serde_json::json!({})),
+            body(serde_json::json!({"reasoning": null})),
+            body(serde_json::json!({"reasoning": "all_turns"})),
+            body(serde_json::json!({"reasoning": {"effort": "low"}})),
+        ] {
+            assert!(!codex_body_has_reasoning_context(
+                "codex",
+                "/v1/responses",
+                &body
+            ));
+        }
+    }
+
+    #[test]
     fn provider_max_attempts_reserves_budget_for_internal_retries() {
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, false, false),
+            provider_max_attempts_for_request(1, 1, false, false, false, false),
             1
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, true, false, false),
+            provider_max_attempts_for_request(1, 1, true, false, false, false),
             2
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, true, false),
+            provider_max_attempts_for_request(1, 1, false, true, false, false),
             2
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, true, true, false),
+            provider_max_attempts_for_request(1, 1, true, true, false, false),
             3
         );
         assert_eq!(
-            provider_max_attempts_for_request(5, 1, true, true, false),
+            provider_max_attempts_for_request(5, 1, true, true, false, false),
             5
         );
     }
@@ -748,22 +811,37 @@ mod tests {
     #[test]
     fn provider_max_attempts_respects_circuit_failure_threshold() {
         assert_eq!(
-            provider_max_attempts_for_request(1, 5, false, false, false),
+            provider_max_attempts_for_request(1, 5, false, false, false, false),
             5
         );
         assert_eq!(
-            provider_max_attempts_for_request(3, 5, true, true, false),
+            provider_max_attempts_for_request(3, 5, true, true, false, false),
             5
         );
         assert_eq!(
-            provider_max_attempts_for_request(10, 5, false, false, false),
+            provider_max_attempts_for_request(10, 5, false, false, false, false),
             10
         );
     }
 
     #[test]
     fn provider_max_attempts_honors_strict_request_limit() {
-        assert_eq!(provider_max_attempts_for_request(1, 5, true, true, true), 1);
+        assert_eq!(
+            provider_max_attempts_for_request(1, 5, true, true, true, true),
+            1
+        );
+    }
+
+    #[test]
+    fn provider_max_attempts_reserves_reasoning_context_rectifier_attempt() {
+        assert_eq!(
+            provider_max_attempts_for_request(1, 1, false, false, true, false),
+            2
+        );
+        assert_eq!(
+            provider_max_attempts_for_request(1, 1, false, false, true, true),
+            1
+        );
     }
 
     #[test]
