@@ -462,6 +462,50 @@ mod tests {
         (format!("http://{addr}"), rx, task)
     }
 
+    async fn spawn_codex_reasoning_context_retry_upstream() -> (
+        String,
+        tokio::sync::mpsc::Receiver<CapturedRawRequest>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind reasoning context retry upstream stub");
+        let addr = listener
+            .local_addr()
+            .expect("reasoning context upstream addr");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(async move {
+            for index in 0..2 {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let request =
+                    split_raw_http_request(read_complete_http_request_bytes(&mut socket).await);
+                let _ = tx.send(request).await;
+                let (status_line, body) = if index == 0 {
+                    (
+                        "400 Bad Request",
+                        r#"{"error":{"message":"unknown field in strict mode: 'reasoning.context'","type":"invalid_request_error","param":"reasoning.context","code":"unsupported_field"}}"#,
+                    )
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"id":"strict-ok","object":"response","model":"LongCat-2.0","output":[]}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), rx, task)
+    }
+
     fn gzip_bytes(input: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(input).expect("gzip write");
@@ -5888,6 +5932,193 @@ module.exports.activate = function activate(api) {
         let log = recv_terminal_request_log(&mut log_rx).await;
         assert_eq!(log.status, Some(200));
         assert_eq!(log.error_code, None);
+
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_reasoning_context_rectifier_retries_same_provider() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-reasoning-context-rectifier.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, mut captured_rx, upstream_task) =
+            spawn_codex_reasoning_context_retry_upstream().await;
+        let provider_id =
+            insert_codex_provider_with_priority(&db, "Strict Responses Stub", upstream_base_url, 0);
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig::default(),
+            HashMap::new(),
+            None,
+        ));
+        let session = Arc::new(session_manager::SessionManager::new());
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            Arc::clone(&circuit),
+            session,
+        ));
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "reasoning": {"effort": "low", "context": "all_turns"},
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "KEEP"}]}],
+            "tools": [{"type": "function", "name": "lookup"}],
+            "store": false
+        });
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/codex/_aio/provider/{provider_id}/v1/responses"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(original.to_string()))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let first = tokio::time::timeout(Duration::from_secs(2), captured_rx.recv())
+            .await
+            .expect("first captured request")
+            .expect("first request");
+        let second = tokio::time::timeout(Duration::from_secs(2), captured_rx.recv())
+            .await
+            .expect("second captured request")
+            .expect("second request");
+        let first_body: Value = serde_json::from_slice(&first.body).expect("first request JSON");
+        let second_body: Value = serde_json::from_slice(&second.body).expect("second request JSON");
+        assert_eq!(first_body, original);
+        assert_eq!(
+            second_body["reasoning"],
+            serde_json::json!({"effort": "low"})
+        );
+        assert_eq!(second_body["input"], original["input"]);
+        assert_eq!(second_body["tools"], original["tools"]);
+        assert_eq!(second_body["store"], original["store"]);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings JSON"),
+        )
+        .expect("valid special settings JSON");
+        let entries = special_settings.as_array().expect("special settings array");
+        let rectifiers: Vec<&Value> = entries
+            .iter()
+            .filter(|entry| {
+                entry.get("type").and_then(Value::as_str)
+                    == Some("codex_reasoning_context_rectifier")
+            })
+            .collect();
+        assert_eq!(rectifiers.len(), 1);
+        let rectifier = rectifiers[0].as_object().expect("rectifier object");
+        assert_eq!(rectifier.len(), 8);
+        assert_eq!(
+            rectifier.get("action").and_then(Value::as_str),
+            Some("remove_reasoning_context_and_retry")
+        );
+        assert_eq!(
+            rectifier.get("providerId").and_then(Value::as_i64),
+            Some(provider_id)
+        );
+        assert_eq!(rectifier.get("status").and_then(Value::as_u64), Some(400));
+        assert_eq!(
+            rectifier.get("retryAttemptNumber").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            rectifier
+                .get("retryAttemptNumberNext")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let circuit_snapshot = circuit.snapshot(provider_id, 0);
+        assert_eq!(circuit_snapshot.failure_count, 0);
+
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_reasoning_context_compatible_provider_is_unchanged() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-reasoning-context-compatible.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, captured_rx, upstream_task) = spawn_capturing_raw_upstream(
+            r#"{"id":"compatible-ok","object":"response","output":[]}"#,
+        )
+        .await;
+        let provider_id = insert_codex_provider_with_priority(
+            &db,
+            "Compatible Responses Stub",
+            upstream_base_url,
+            0,
+        );
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let original = r#"{"model":"gpt-compatible","reasoning":{"effort":"low","context":"all_turns"},"input":[{"role":"user","content":[{"type":"input_text","text":"KEEP"}]}],"store":false}"#;
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/codex/_aio/provider/{provider_id}/v1/responses"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(original))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = tokio::time::timeout(Duration::from_secs(2), captured_rx)
+            .await
+            .expect("captured upstream request")
+            .expect("captured request");
+        assert_eq!(captured.body.as_slice(), original.as_bytes());
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        if let Some(json) = log.special_settings_json.as_deref() {
+            let special_settings: Value =
+                serde_json::from_str(json).expect("special settings JSON");
+            let entries = special_settings.as_array().expect("special settings array");
+            assert!(entries.iter().all(|entry| {
+                entry.get("type").and_then(Value::as_str)
+                    != Some("codex_reasoning_context_rectifier")
+            }));
+        }
 
         upstream_task.abort();
     }
