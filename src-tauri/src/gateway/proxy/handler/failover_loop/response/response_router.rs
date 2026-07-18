@@ -60,7 +60,7 @@ where
     let attempt_ctx = AttemptCtx {
         attempt_index: indices.attempt_index,
         retry_index: indices.retry_index,
-        provider_max_attempts: prepared.provider_max_attempts,
+        provider_max_attempts: prepared.provider_regular_max_attempts,
         attempt_started_ms: timing.attempt_started_ms,
         attempt_started: timing.attempt_started,
         circuit_before: &circuit_before,
@@ -162,7 +162,7 @@ where
     let attempt_ctx = AttemptCtx {
         attempt_index: indices.attempt_index,
         retry_index: indices.retry_index,
-        provider_max_attempts: prepared.provider_max_attempts,
+        provider_max_attempts: prepared.provider_regular_max_attempts,
         attempt_started_ms: timing.attempt_started_ms,
         attempt_started: timing.attempt_started,
         circuit_before: &circuit_before,
@@ -236,7 +236,7 @@ fn should_try_claude_auth_fallback<R: tauri::Runtime>(
         && prepared.oauth_adapter.is_none()
         && !prepared.cx2cc_active
         && !retry_state.claude_api_key_bearer_fallback
-        && retry_index < prepared.provider_max_attempts
+        && retry_index < prepared.provider_regular_max_attempts
         && matches!(status.as_u16(), 401 | 403)
 }
 

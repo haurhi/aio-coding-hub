@@ -47,6 +47,7 @@ pub(super) struct PreparedProvider {
     pub(super) provider_bridged: bool,
     pub(super) session_reuse: Option<bool>,
     pub(super) effective_credential: String,
+    pub(super) provider_regular_max_attempts: u32,
     pub(super) provider_max_attempts: u32,
     pub(super) oauth_adapter:
         Option<&'static dyn crate::gateway::oauth::provider_trait::OAuthProvider>,
@@ -163,16 +164,25 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         }
     };
 
+    let needs_codex_reasoning_context_retry = codex_body_has_reasoning_context(
+        &input.cli_key,
+        &input.forwarded_path,
+        input.body_bytes.as_ref(),
+    );
+    let provider_regular_max_attempts = provider_max_attempts_for_request(
+        input.max_attempts_per_provider,
+        gate_allow.circuit_after.failure_threshold,
+        provider.auth_mode == "oauth",
+        codex_request_has_previous_response_id(input),
+        false,
+        input.is_codex_model_discovery,
+    );
     let provider_max_attempts = provider_max_attempts_for_request(
         input.max_attempts_per_provider,
         gate_allow.circuit_after.failure_threshold,
         provider.auth_mode == "oauth",
         codex_request_has_previous_response_id(input),
-        codex_body_has_reasoning_context(
-            &input.cli_key,
-            &input.forwarded_path,
-            input.body_bytes.as_ref(),
-        ),
+        needs_codex_reasoning_context_retry,
         input.is_codex_model_discovery,
     );
 
@@ -477,6 +487,7 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         provider_bridged: is_cx2cc_bridge,
         session_reuse,
         effective_credential,
+        provider_regular_max_attempts,
         provider_max_attempts,
         oauth_adapter,
         upstream_forwarded_path,

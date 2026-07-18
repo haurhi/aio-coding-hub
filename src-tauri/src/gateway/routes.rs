@@ -6123,6 +6123,73 @@ module.exports.activate = function activate(api) {
         upstream_task.abort();
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_reasoning_context_unrelated_500_does_not_use_rectifier_budget() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 1;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-reasoning-context-unrelated-500.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, call_count, upstream_task) = spawn_counting_status_upstream(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"error":{"message":"unrelated upstream failure"}}"#,
+        )
+        .await;
+        insert_codex_provider_with_priority(&db, "Unrelated 500 Stub", upstream_base_url, 0);
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit,
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"LongCat-2.0","reasoning":{"effort":"low","context":"all_turns"},"client_metadata":{"x-codex-turn-metadata":"{\"thread_source\":\"system\"}"},"input":"hello"}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert!(!response.status().is_success());
+        let _log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an unrelated 500 must not consume the reasoning-context rectifier allowance"
+        );
+
+        upstream_task.abort();
+    }
+
     /// Test that a 400 error with Responses API schema mismatch (e.g.
     /// "input[45].content: array too long") triggers failover to the next provider.
     /// This verifies the fix for the error when Responses API format is forwarded
