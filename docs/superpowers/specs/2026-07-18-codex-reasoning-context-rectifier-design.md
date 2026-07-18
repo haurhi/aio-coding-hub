@@ -50,10 +50,13 @@ The rectifier activates only when all of these conditions are true. Top-level
 6. this provider attempt has not already applied this rectifier.
 
 When activated, it removes only `reasoning.context`, preserves every other
-request value and ordering, marks the content encoding for regeneration, and
-retries the same provider exactly once. If removing `context` leaves an empty
-`reasoning` object, the empty top-level object may be removed as a defensive
-cleanup; otherwise the object and fields such as `effort` remain intact.
+semantic JSON value and all array ordering, marks the content encoding for
+regeneration, and retries the same provider exactly once. JSON object key order
+is not contractual and may be canonicalized during re-encoding. Requests that
+succeed without rectification remain byte-for-byte unchanged. If removing
+`context` leaves an empty `reasoning` object, the empty top-level object may be
+removed as a defensive cleanup; otherwise the object and fields such as
+`effort` remain intact.
 
 ## Rejected Approaches
 
@@ -84,8 +87,9 @@ the exact structured `code` and `param` pair. It must not trigger from an error
 message containing similar text when the structured fields differ.
 
 The body rectifier parses the outbound request JSON, removes the one nested
-field, preserves all siblings and top-level values, and reports whether it
-changed the body. Invalid JSON and missing/non-object `reasoning` are no-ops.
+field, preserves all sibling/top-level semantic values and array ordering, and
+reports whether it changed the body. Object key ordering is not a protocol
+requirement. Invalid JSON and missing/non-object `reasoning` are no-ops.
 
 ### Per-provider retry state
 
