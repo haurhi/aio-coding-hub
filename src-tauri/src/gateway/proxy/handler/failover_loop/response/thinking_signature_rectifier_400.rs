@@ -93,7 +93,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
     {
         let buffered_body =
             match super::upstream_error::read_response_body_for_error_scan(resp).await {
-                Ok(bytes) => bytes,
+                Ok(super::upstream_error::BoundedResponseBody { body, truncated: _ }) => body,
                 Err(err) => {
                     let duration_ms = started.elapsed().as_millis();
                     let client_attempts = if ctx.verbose_provider_error {

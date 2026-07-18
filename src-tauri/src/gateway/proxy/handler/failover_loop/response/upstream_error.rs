@@ -73,36 +73,43 @@ fn reqwest_error_decision(
     }
 }
 
+pub(super) struct BoundedResponseBody {
+    pub(super) body: Bytes,
+    pub(super) truncated: bool,
+}
+
 async fn read_response_body_with_limit(
     mut resp: reqwest::Response,
     max_bytes: u64,
-) -> Result<Bytes, reqwest::Error> {
+) -> Result<BoundedResponseBody, reqwest::Error> {
     let limit = max_bytes.min(usize::MAX as u64) as usize;
-    if limit == 0 {
-        return Ok(Bytes::new());
-    }
-
     let mut out = Vec::with_capacity(limit.min(16 * 1024));
+    let content_length = resp.content_length();
+    let mut truncated = content_length.is_some_and(|length| length > max_bytes);
 
-    loop {
+    while out.len() < limit {
         let Some(chunk) = resp.chunk().await? else {
             break;
         };
 
-        if out.len() >= limit {
-            break;
-        }
-
         let remaining = limit - out.len();
         if chunk.len() > remaining {
             out.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
             break;
         }
 
         out.extend_from_slice(&chunk);
     }
 
-    Ok(Bytes::from(out))
+    if out.len() == limit && content_length.is_none() && resp.chunk().await?.is_some() {
+        truncated = true;
+    }
+
+    Ok(BoundedResponseBody {
+        body: Bytes::from(out),
+        truncated,
+    })
 }
 
 fn error_body_scan_limit_bytes() -> u64 {
@@ -145,7 +152,7 @@ fn save_oauth_quota_exhausted_snapshot(
 
 pub(super) async fn read_response_body_for_error_scan(
     resp: reqwest::Response,
-) -> Result<Bytes, reqwest::Error> {
+) -> Result<BoundedResponseBody, reqwest::Error> {
     read_response_body_with_limit(resp, error_body_scan_limit_bytes()).await
 }
 
@@ -221,6 +228,53 @@ fn remove_codex_previous_response_id(body: &mut Bytes) -> bool {
     };
     if obj.remove("previous_response_id").is_none() {
         return false;
+    }
+
+    match serde_json::to_vec(&root) {
+        Ok(next) => {
+            *body = Bytes::from(next);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn matches_codex_reasoning_context_error(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+
+    root.pointer("/error/code")
+        .and_then(serde_json::Value::as_str)
+        == Some("unsupported_field")
+        && root
+            .pointer("/error/param")
+            .and_then(serde_json::Value::as_str)
+            == Some("reasoning.context")
+}
+
+fn remove_codex_reasoning_context(body: &mut Bytes) -> bool {
+    let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(root_obj) = root.as_object_mut() else {
+        return false;
+    };
+    let Some(reasoning) = root_obj
+        .get_mut("reasoning")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+    if reasoning.remove("context").is_none() {
+        return false;
+    }
+    if reasoning.is_empty() {
+        root_obj.remove("reasoning");
     }
 
     match serde_json::to_vec(&root) {
@@ -354,11 +408,15 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
     if need_client_error_scan || need_error_body_preview || need_codex_previous_response_id_scan {
         if let Some(r) = resp.take() {
             let read_result = read_response_body_for_error_scan(r).await;
-            if let Ok(bytes) = read_result {
+            if let Ok(BoundedResponseBody {
+                body: buffered_body,
+                truncated: _,
+            }) = read_result
+            {
                 let mut headers_for_scan = response_headers.clone();
                 strip_hop_headers(&mut headers_for_scan);
                 let body_for_scan = maybe_gunzip_response_body_bytes_with_limit(
-                    bytes,
+                    buffered_body,
                     &mut headers_for_scan,
                     error_body_scan_limit_usize(),
                 );
@@ -880,8 +938,9 @@ pub(super) async fn handle_reqwest_error<R: tauri::Runtime>(
 mod tests {
     use super::{
         error_body_scan_limit_usize, matches_codex_previous_response_id_error,
-        read_response_body_for_error_scan, remove_codex_previous_response_id,
-        reqwest_error_decision, retry_after_reset_at, should_scan_codex_previous_response_id_error,
+        matches_codex_reasoning_context_error, read_response_body_for_error_scan,
+        remove_codex_previous_response_id, remove_codex_reasoning_context, reqwest_error_decision,
+        retry_after_reset_at, should_scan_codex_previous_response_id_error,
         upstream_error_decision, FailoverDecision,
     };
     use axum::body::Bytes;
@@ -908,6 +967,41 @@ mod tests {
             );
             let _ = socket.write_all(headers.as_bytes()).await;
             let _ = socket.write_all(&body).await;
+        });
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/error"))
+            .send()
+            .await
+            .expect("fetch test response");
+        (response, task)
+    }
+
+    async fn unknown_length_response(
+        chunks: Vec<Vec<u8>>,
+    ) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test upstream");
+        let addr = listener.local_addr().expect("local addr");
+        let task = tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request_buf = [0u8; 1024];
+            let _ = socket.read(&mut request_buf).await;
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            for chunk in chunks {
+                let _ = socket
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await;
+                let _ = socket.write_all(&chunk).await;
+                let _ = socket.write_all(b"\r\n").await;
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
         });
         let response = reqwest::Client::new()
             .get(format!("http://{addr}/error"))
@@ -946,19 +1040,148 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn error_scan_body_reader_truncates_known_length_bodies() {
+    async fn error_body_read_reports_truncation_for_known_oversized_body() {
         let limit = error_body_scan_limit_usize();
         let payload = vec![b'x'; limit + 4096];
         let (response, server_task) = known_length_response(payload).await;
 
         assert_eq!(response.content_length(), Some((limit + 4096) as u64));
-        let body = read_response_body_for_error_scan(response)
+        let result = read_response_body_for_error_scan(response)
             .await
             .expect("read limited body");
         server_task.abort();
 
-        assert_eq!(body.len(), limit);
-        assert!(body.iter().all(|byte| *byte == b'x'));
+        assert_eq!(result.body.len(), limit);
+        assert!(result.body.iter().all(|byte| *byte == b'x'));
+        assert!(result.truncated);
+    }
+
+    #[tokio::test]
+    async fn error_body_read_reports_truncation_for_unknown_oversized_body() {
+        let limit = error_body_scan_limit_usize();
+        let (response, server_task) =
+            unknown_length_response(vec![vec![b'x'; limit], vec![b'y']]).await;
+
+        assert_eq!(response.content_length(), None);
+        let result = read_response_body_for_error_scan(response)
+            .await
+            .expect("read limited body");
+        server_task.abort();
+
+        assert_eq!(result.body.len(), limit);
+        assert!(result.body.iter().all(|byte| *byte == b'x'));
+        assert!(result.truncated);
+    }
+
+    #[tokio::test]
+    async fn error_body_read_reports_truncation_false_at_exact_limit() {
+        let limit = error_body_scan_limit_usize();
+        let (response, server_task) = unknown_length_response(vec![vec![b'x'; limit]]).await;
+
+        let result = read_response_body_for_error_scan(response)
+            .await
+            .expect("read limited body");
+        server_task.abort();
+
+        assert_eq!(result.body.len(), limit);
+        assert!(!result.truncated);
+    }
+
+    #[tokio::test]
+    async fn error_body_read_reports_truncation_false_below_limit() {
+        let limit = error_body_scan_limit_usize();
+        let (response, server_task) = known_length_response(vec![b'x'; limit - 1]).await;
+
+        let result = read_response_body_for_error_scan(response)
+            .await
+            .expect("read limited body");
+        server_task.abort();
+
+        assert_eq!(result.body.len(), limit - 1);
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn matches_exact_reasoning_context_unsupported_field() {
+        let body = br#"{"error":{"message":"unknown field in strict mode: 'reasoning.context'","type":"invalid_request_error","param":"reasoning.context","code":"unsupported_field"}}"#;
+
+        assert!(matches_codex_reasoning_context_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+        ));
+    }
+
+    #[test]
+    fn matches_exact_reasoning_context_unsupported_field_rejects_near_misses() {
+        let exact = br#"{"error":{"param":"reasoning.context","code":"unsupported_field"}}"#;
+        assert!(!matches_codex_reasoning_context_error(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            exact,
+        ));
+
+        for body in [
+            br#"{"code":"unsupported_field","param":"reasoning.context"}"#.as_slice(),
+            br#"{"response":{"error":{"code":"unsupported_field","param":"reasoning.context"}}}"#
+                .as_slice(),
+            br#"{"error":{"code":"invalid_field","param":"reasoning.context"}}"#.as_slice(),
+            br#"{"error":{"code":"unsupported_field","param":"reasoning.effort"}}"#.as_slice(),
+            br#"{"error":{"message":"unknown field in strict mode: 'reasoning.context'"}}"#
+                .as_slice(),
+            b"not-json".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(!matches_codex_reasoning_context_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                body,
+            ));
+        }
+    }
+
+    #[test]
+    fn removes_only_reasoning_context_and_preserves_payload() {
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "reasoning": {"effort": "low", "context": "all_turns"},
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "KEEP"}]}],
+            "tools": [{"type": "function", "name": "lookup"}],
+            "store": false
+        });
+        let mut body = Bytes::from(serde_json::to_vec(&original).expect("serialize request"));
+
+        assert!(remove_codex_reasoning_context(&mut body));
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(next["reasoning"], serde_json::json!({"effort": "low"}));
+        assert_eq!(next["input"], original["input"]);
+        assert_eq!(next["tools"], original["tools"]);
+        assert_eq!(next["model"], original["model"]);
+        assert_eq!(next["store"], original["store"]);
+        assert!(!remove_codex_reasoning_context(&mut body));
+    }
+
+    #[test]
+    fn removes_only_reasoning_context_drops_empty_reasoning_object() {
+        let mut body =
+            Bytes::from_static(br#"{"model":"LongCat-2.0","reasoning":{"context":"all_turns"}}"#);
+
+        assert!(remove_codex_reasoning_context(&mut body));
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(next, serde_json::json!({"model": "LongCat-2.0"}));
+    }
+
+    #[test]
+    fn removes_only_reasoning_context_rejects_incompatible_shapes() {
+        for original in [
+            b"not-json".as_slice(),
+            br#"[]"#.as_slice(),
+            br#"{}"#.as_slice(),
+            br#"{"reasoning":null}"#.as_slice(),
+            br#"{"reasoning":"all_turns"}"#.as_slice(),
+            br#"{"reasoning":{"effort":"low"}}"#.as_slice(),
+        ] {
+            let mut body = Bytes::copy_from_slice(original);
+            assert!(!remove_codex_reasoning_context(&mut body));
+            assert_eq!(body.as_ref(), original);
+        }
     }
 
     #[test]
