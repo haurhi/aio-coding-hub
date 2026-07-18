@@ -550,7 +550,7 @@ fn provider_max_attempts_for_request(
         .max(1 + required_internal_retries)
 }
 
-fn is_responses_request_path(path: &str) -> bool {
+pub(super) fn is_responses_request_path(path: &str) -> bool {
     matches!(path.trim_end_matches('/'), "/v1/responses" | "/responses")
 }
 

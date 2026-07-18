@@ -15,6 +15,7 @@ pub(super) struct RetryLoopState {
     pub(super) claude_api_key_bearer_fallback: bool,
     pub(super) oauth_reactive_refreshed_once: bool,
     pub(super) codex_previous_response_id_rectifier_retried: bool,
+    pub(super) codex_reasoning_context_rectifier_retried: bool,
     pub(super) thinking_signature_rectifier_retried: bool,
     pub(super) thinking_budget_rectifier_retried: bool,
 }
@@ -25,6 +26,7 @@ impl RetryLoopState {
             claude_api_key_bearer_fallback: false,
             oauth_reactive_refreshed_once: false,
             codex_previous_response_id_rectifier_retried: false,
+            codex_reasoning_context_rectifier_retried: false,
             thinking_signature_rectifier_retried: false,
             thinking_budget_rectifier_retried: false,
         }

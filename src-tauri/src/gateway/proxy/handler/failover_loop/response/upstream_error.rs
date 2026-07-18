@@ -37,6 +37,8 @@ use crate::shared::mutex_ext::MutexExt;
 use axum::body::{Body, Bytes};
 use axum::http::{header, HeaderValue};
 
+use super::provider_iterator::is_responses_request_path;
+
 fn upstream_error_decision(
     is_count_tokens: bool,
     base_decision: FailoverDecision,
@@ -160,6 +162,7 @@ pub(super) struct UpstreamRequestState<'a> {
     pub(super) upstream_body_bytes: &'a mut Bytes,
     pub(super) strip_request_content_encoding: &'a mut bool,
     pub(super) codex_previous_response_id_rectifier_retried: &'a mut bool,
+    pub(super) codex_reasoning_context_rectifier_retried: &'a mut bool,
     pub(super) thinking_signature_rectifier_retried: &'a mut bool,
     pub(super) thinking_budget_rectifier_retried: &'a mut bool,
 }
@@ -286,6 +289,29 @@ fn remove_codex_reasoning_context(body: &mut Bytes) -> bool {
     }
 }
 
+fn maybe_rectify_codex_reasoning_context(
+    cli_key: &str,
+    forwarded_path: &str,
+    status: reqwest::StatusCode,
+    error_body: &[u8],
+    error_body_truncated: bool,
+    already_retried: &mut bool,
+    upstream_body: &mut Bytes,
+) -> Option<LoopControl> {
+    if !matches!(cli_key, "codex" | "grok")
+        || !is_responses_request_path(forwarded_path)
+        || error_body_truncated
+        || *already_retried
+        || !matches_codex_reasoning_context_error(status, error_body)
+        || !remove_codex_reasoning_context(upstream_body)
+    {
+        return None;
+    }
+
+    *already_retried = true;
+    Some(LoopControl::ContinueRetry)
+}
+
 pub(super) struct HandleNonSuccessResponseInput<'a, R: tauri::Runtime = tauri::Wry> {
     pub(super) ctx: CommonCtx<'a, R>,
     pub(super) provider_ctx: ProviderCtx<'a>,
@@ -384,6 +410,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
 
     let mut abort_body_bytes: Option<Bytes> = None;
     let mut abort_response_headers: Option<axum::http::HeaderMap> = None;
+    let mut abort_body_truncated = false;
     let mut matched_rule_id: Option<&'static str> = None;
     let mut matched_429_concurrency_limit = false;
     // Body preview for errors where preserving the upstream diagnostic text matters.
@@ -405,14 +432,24 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
             *upstream.codex_previous_response_id_rectifier_retried,
             upstream.upstream_body_bytes,
         );
-    if need_client_error_scan || need_error_body_preview || need_codex_previous_response_id_scan {
+    let need_codex_reasoning_context_scan = !is_count_tokens
+        && matches!(ctx.cli_key.as_str(), "codex" | "grok")
+        && is_responses_request_path(ctx.forwarded_path.as_str())
+        && status == reqwest::StatusCode::BAD_REQUEST
+        && !*upstream.codex_reasoning_context_rectifier_retried;
+    if need_client_error_scan
+        || need_error_body_preview
+        || need_codex_previous_response_id_scan
+        || need_codex_reasoning_context_scan
+    {
         if let Some(r) = resp.take() {
             let read_result = read_response_body_for_error_scan(r).await;
             if let Ok(BoundedResponseBody {
                 body: buffered_body,
-                truncated: _,
+                truncated,
             }) = read_result
             {
+                abort_body_truncated = truncated;
                 let mut headers_for_scan = response_headers.clone();
                 strip_hop_headers(&mut headers_for_scan);
                 let body_for_scan = maybe_gunzip_response_body_bytes_with_limit(
@@ -492,6 +529,36 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                     abort_body_bytes = Some(body_for_scan);
                     abort_response_headers = Some(headers_for_scan);
                 }
+            }
+        }
+    }
+
+    if need_codex_reasoning_context_scan {
+        if let Some(body) = abort_body_bytes.as_deref() {
+            if let Some(control) = maybe_rectify_codex_reasoning_context(
+                ctx.cli_key.as_str(),
+                ctx.forwarded_path.as_str(),
+                status,
+                body,
+                abort_body_truncated,
+                upstream.codex_reasoning_context_rectifier_retried,
+                upstream.upstream_body_bytes,
+            ) {
+                *upstream.strip_request_content_encoding = true;
+                response_fixer::push_special_setting(
+                    ctx.special_settings,
+                    serde_json::json!({
+                        "type": "codex_reasoning_context_rectifier",
+                        "scope": "attempt",
+                        "hit": true,
+                        "action": "remove_reasoning_context_and_retry",
+                        "providerId": provider_id,
+                        "status": status.as_u16(),
+                        "retryAttemptNumber": retry_index,
+                        "retryAttemptNumberNext": retry_index + 1,
+                    }),
+                );
+                return control;
             }
         }
     }
@@ -938,10 +1005,10 @@ pub(super) async fn handle_reqwest_error<R: tauri::Runtime>(
 mod tests {
     use super::{
         error_body_scan_limit_usize, matches_codex_previous_response_id_error,
-        matches_codex_reasoning_context_error, read_response_body_for_error_scan,
-        remove_codex_previous_response_id, remove_codex_reasoning_context, reqwest_error_decision,
-        retry_after_reset_at, should_scan_codex_previous_response_id_error,
-        upstream_error_decision, FailoverDecision,
+        matches_codex_reasoning_context_error, maybe_rectify_codex_reasoning_context,
+        read_response_body_for_error_scan, remove_codex_previous_response_id,
+        remove_codex_reasoning_context, reqwest_error_decision, retry_after_reset_at,
+        should_scan_codex_previous_response_id_error, upstream_error_decision, FailoverDecision,
     };
     use axum::body::Bytes;
     use axum::http::{header, HeaderMap, HeaderValue};
@@ -1182,6 +1249,77 @@ mod tests {
             assert!(!remove_codex_reasoning_context(&mut body));
             assert_eq!(body.as_ref(), original);
         }
+    }
+
+    #[test]
+    fn reasoning_context_rectifier_retries_once() {
+        let error = br#"{"error":{"code":"unsupported_field","param":"reasoning.context"}}"#;
+        let original = Bytes::from_static(
+            br#"{"model":"LongCat-2.0","reasoning":{"effort":"low","context":"all_turns"}}"#,
+        );
+        let mut body = original.clone();
+        let mut already_retried = false;
+
+        let first = maybe_rectify_codex_reasoning_context(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut already_retried,
+            &mut body,
+        );
+        assert!(matches!(first, Some(super::LoopControl::ContinueRetry)));
+        assert!(already_retried);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("parse rectified request"),
+            serde_json::json!({
+                "model": "LongCat-2.0",
+                "reasoning": {"effort": "low"}
+            })
+        );
+
+        let mut second_body = original.clone();
+        let second = maybe_rectify_codex_reasoning_context(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut already_retried,
+            &mut second_body,
+        );
+        assert!(second.is_none());
+        assert_eq!(second_body, original);
+
+        let mut missing_field_body = Bytes::from_static(br#"{"model":"LongCat-2.0"}"#);
+        let mut missing_field_retried = false;
+        let missing_field = maybe_rectify_codex_reasoning_context(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut missing_field_retried,
+            &mut missing_field_body,
+        );
+        assert!(missing_field.is_none());
+        assert!(!missing_field_retried);
+
+        let mut truncated_body = original.clone();
+        let mut truncated_retried = false;
+        let truncated = maybe_rectify_codex_reasoning_context(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            true,
+            &mut truncated_retried,
+            &mut truncated_body,
+        );
+        assert!(truncated.is_none());
+        assert!(!truncated_retried);
+        assert_eq!(truncated_body, original);
     }
 
     #[test]

@@ -200,6 +200,8 @@ where
                 strip_request_content_encoding: &mut prepared.strip_request_content_encoding,
                 codex_previous_response_id_rectifier_retried: &mut retry_state
                     .codex_previous_response_id_rectifier_retried,
+                codex_reasoning_context_rectifier_retried: &mut retry_state
+                    .codex_reasoning_context_rectifier_retried,
                 thinking_signature_rectifier_retried: &mut retry_state
                     .thinking_signature_rectifier_retried,
                 thinking_budget_rectifier_retried: &mut retry_state
