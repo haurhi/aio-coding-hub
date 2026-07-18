@@ -506,6 +506,53 @@ mod tests {
         (format!("http://{addr}"), rx, task)
     }
 
+    async fn spawn_codex_reasoning_context_after_500_upstream() -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind reasoning context sequence upstream stub");
+        let addr = listener
+            .local_addr()
+            .expect("reasoning context sequence upstream addr");
+        let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let task_call_count = Arc::clone(&call_count);
+        let task = tokio::spawn(async move {
+            for index in 0..3 {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let _ = read_complete_http_request_bytes(&mut socket).await;
+                task_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (status_line, body) = match index {
+                    0 => (
+                        "500 Internal Server Error",
+                        r#"{"error":{"message":"transient upstream failure"}}"#,
+                    ),
+                    1 => (
+                        "400 Bad Request",
+                        r#"{"error":{"message":"unknown field in strict mode: 'reasoning.context'","type":"invalid_request_error","param":"reasoning.context","code":"unsupported_field"}}"#,
+                    ),
+                    _ => (
+                        "200 OK",
+                        r#"{"id":"sequence-ok","object":"response","output":[]}"#,
+                    ),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), call_count, task)
+    }
+
     fn gzip_bytes(input: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(input).expect("gzip write");
@@ -6185,6 +6232,71 @@ module.exports.activate = function activate(api) {
             call_count.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "an unrelated 500 must not consume the reasoning-context rectifier allowance"
+        );
+
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_reasoning_context_rectifier_keeps_slot_after_regular_retry() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 2;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-reasoning-context-after-500.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, call_count, upstream_task) =
+            spawn_codex_reasoning_context_after_500_upstream().await;
+        insert_codex_provider_with_priority(&db, "500 Then Strict Stub", upstream_base_url, 0);
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 2,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit,
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"LongCat-2.0","reasoning":{"effort":"low","context":"all_turns"},"input":"hello"}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "the exact rectifier must retain one slot after regular retries"
         );
 
         upstream_task.abort();

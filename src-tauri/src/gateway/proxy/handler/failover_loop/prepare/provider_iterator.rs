@@ -169,19 +169,15 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         &input.forwarded_path,
         input.body_bytes.as_ref(),
     );
-    let provider_regular_max_attempts = provider_max_attempts_for_request(
+    let provider_regular_max_attempts = provider_regular_max_attempts_for_request(
         input.max_attempts_per_provider,
         gate_allow.circuit_after.failure_threshold,
         provider.auth_mode == "oauth",
         codex_request_has_previous_response_id(input),
-        false,
         input.is_codex_model_discovery,
     );
-    let provider_max_attempts = provider_max_attempts_for_request(
-        input.max_attempts_per_provider,
-        gate_allow.circuit_after.failure_threshold,
-        provider.auth_mode == "oauth",
-        codex_request_has_previous_response_id(input),
+    let provider_max_attempts = provider_total_max_attempts_for_request(
+        provider_regular_max_attempts,
         needs_codex_reasoning_context_retry,
         input.is_codex_model_discovery,
     );
@@ -541,12 +537,11 @@ fn codex_body_has_reasoning_context(cli_key: &str, forwarded_path: &str, body: &
         .is_some_and(|reasoning| reasoning.contains_key("context"))
 }
 
-fn provider_max_attempts_for_request(
+fn provider_regular_max_attempts_for_request(
     configured_max_attempts: u32,
     circuit_failure_threshold: u32,
     needs_oauth_reactive_refresh_retry: bool,
     needs_codex_previous_response_id_retry: bool,
-    needs_codex_reasoning_context_retry: bool,
     strict_configured_limit: bool,
 ) -> u32 {
     if strict_configured_limit {
@@ -554,11 +549,22 @@ fn provider_max_attempts_for_request(
     }
 
     let required_internal_retries = u32::from(needs_oauth_reactive_refresh_retry)
-        + u32::from(needs_codex_previous_response_id_retry)
-        + u32::from(needs_codex_reasoning_context_retry);
+        + u32::from(needs_codex_previous_response_id_retry);
     configured_max_attempts
         .max(circuit_failure_threshold.max(1))
         .max(1 + required_internal_retries)
+}
+
+fn provider_total_max_attempts_for_request(
+    provider_regular_max_attempts: u32,
+    needs_codex_reasoning_context_retry: bool,
+    strict_configured_limit: bool,
+) -> u32 {
+    if strict_configured_limit || !needs_codex_reasoning_context_retry {
+        provider_regular_max_attempts
+    } else {
+        provider_regular_max_attempts.saturating_add(1)
+    }
 }
 
 pub(super) fn is_responses_request_path(path: &str) -> bool {
@@ -635,7 +641,8 @@ mod tests {
         apply_chatgpt_compat_and_record, apply_codex_api_key_model_mapping,
         codex_body_has_previous_response_id, codex_body_has_reasoning_context,
         is_anthropic_messages_request_path, is_responses_request_path,
-        provider_max_attempts_for_request, translate_direct_bridge_request,
+        provider_regular_max_attempts_for_request, provider_total_max_attempts_for_request,
+        translate_direct_bridge_request,
     };
     use axum::body::Bytes;
     use std::sync::{Arc, Mutex};
@@ -798,23 +805,23 @@ mod tests {
     #[test]
     fn provider_max_attempts_reserves_budget_for_internal_retries() {
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, false, false, false),
+            provider_regular_max_attempts_for_request(1, 1, false, false, false),
             1
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, true, false, false, false),
+            provider_regular_max_attempts_for_request(1, 1, true, false, false),
             2
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, true, false, false),
+            provider_regular_max_attempts_for_request(1, 1, false, true, false),
             2
         );
         assert_eq!(
-            provider_max_attempts_for_request(1, 1, true, true, false, false),
+            provider_regular_max_attempts_for_request(1, 1, true, true, false),
             3
         );
         assert_eq!(
-            provider_max_attempts_for_request(5, 1, true, true, false, false),
+            provider_regular_max_attempts_for_request(5, 1, true, true, false),
             5
         );
     }
@@ -822,15 +829,15 @@ mod tests {
     #[test]
     fn provider_max_attempts_respects_circuit_failure_threshold() {
         assert_eq!(
-            provider_max_attempts_for_request(1, 5, false, false, false, false),
+            provider_regular_max_attempts_for_request(1, 5, false, false, false),
             5
         );
         assert_eq!(
-            provider_max_attempts_for_request(3, 5, true, true, false, false),
+            provider_regular_max_attempts_for_request(3, 5, true, true, false),
             5
         );
         assert_eq!(
-            provider_max_attempts_for_request(10, 5, false, false, false, false),
+            provider_regular_max_attempts_for_request(10, 5, false, false, false),
             10
         );
     }
@@ -838,21 +845,16 @@ mod tests {
     #[test]
     fn provider_max_attempts_honors_strict_request_limit() {
         assert_eq!(
-            provider_max_attempts_for_request(1, 5, true, true, true, true),
+            provider_regular_max_attempts_for_request(1, 5, true, true, true),
             1
         );
     }
 
     #[test]
     fn provider_max_attempts_reserves_reasoning_context_rectifier_attempt() {
-        assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, false, true, false),
-            2
-        );
-        assert_eq!(
-            provider_max_attempts_for_request(1, 1, false, false, true, true),
-            1
-        );
+        assert_eq!(provider_total_max_attempts_for_request(1, true, false), 2);
+        assert_eq!(provider_total_max_attempts_for_request(2, true, false), 3);
+        assert_eq!(provider_total_max_attempts_for_request(1, true, true), 1);
     }
 
     #[test]
