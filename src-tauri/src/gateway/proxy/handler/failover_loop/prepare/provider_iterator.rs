@@ -169,6 +169,16 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
         &input.forwarded_path,
         input.body_bytes.as_ref(),
     );
+    let needs_codex_additional_tools_retry = codex_body_has_additional_tools(
+        &input.cli_key,
+        &input.forwarded_path,
+        input.body_bytes.as_ref(),
+    );
+    let needs_codex_agent_message_retry = codex_body_has_agent_message(
+        &input.cli_key,
+        &input.forwarded_path,
+        input.body_bytes.as_ref(),
+    );
     let provider_regular_max_attempts = provider_regular_max_attempts_for_request(
         input.max_attempts_per_provider,
         gate_allow.circuit_after.failure_threshold,
@@ -179,6 +189,8 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
     let provider_max_attempts = provider_total_max_attempts_for_request(
         provider_regular_max_attempts,
         needs_codex_reasoning_context_retry,
+        needs_codex_additional_tools_retry,
+        needs_codex_agent_message_retry,
         input.is_codex_model_discovery,
     );
 
@@ -537,6 +549,36 @@ fn codex_body_has_reasoning_context(cli_key: &str, forwarded_path: &str, body: &
         .is_some_and(|reasoning| reasoning.contains_key("context"))
 }
 
+fn codex_body_has_additional_tools(cli_key: &str, forwarded_path: &str, body: &[u8]) -> bool {
+    if !matches!(cli_key, "codex" | "grok") || !is_responses_request_path(forwarded_path) {
+        return false;
+    }
+
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|root| root.get("input")?.as_array().cloned())
+        .is_some_and(|input| {
+            input.iter().any(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("additional_tools")
+            })
+        })
+}
+
+fn codex_body_has_agent_message(cli_key: &str, forwarded_path: &str, body: &[u8]) -> bool {
+    if !matches!(cli_key, "codex" | "grok") || !is_responses_request_path(forwarded_path) {
+        return false;
+    }
+
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|root| root.get("input")?.as_array().cloned())
+        .is_some_and(|input| {
+            input.iter().any(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message")
+            })
+        })
+}
+
 fn provider_regular_max_attempts_for_request(
     configured_max_attempts: u32,
     circuit_failure_threshold: u32,
@@ -558,12 +600,18 @@ fn provider_regular_max_attempts_for_request(
 fn provider_total_max_attempts_for_request(
     provider_regular_max_attempts: u32,
     needs_codex_reasoning_context_retry: bool,
+    needs_codex_additional_tools_retry: bool,
+    needs_codex_agent_message_retry: bool,
     strict_configured_limit: bool,
 ) -> u32 {
-    if strict_configured_limit || !needs_codex_reasoning_context_retry {
+    if strict_configured_limit {
         provider_regular_max_attempts
     } else {
-        provider_regular_max_attempts.saturating_add(1)
+        provider_regular_max_attempts.saturating_add(
+            u32::from(needs_codex_reasoning_context_retry)
+                + u32::from(needs_codex_additional_tools_retry)
+                + u32::from(needs_codex_agent_message_retry),
+        )
     }
 }
 
@@ -639,6 +687,7 @@ fn apply_codex_api_key_model_mapping(
 mod tests {
     use super::{
         apply_chatgpt_compat_and_record, apply_codex_api_key_model_mapping,
+        codex_body_has_additional_tools, codex_body_has_agent_message,
         codex_body_has_previous_response_id, codex_body_has_reasoning_context,
         is_anthropic_messages_request_path, is_responses_request_path,
         provider_regular_max_attempts_for_request, provider_total_max_attempts_for_request,
@@ -803,6 +852,94 @@ mod tests {
     }
 
     #[test]
+    fn codex_body_additional_tools_requires_internal_retry_budget() {
+        let body = body(serde_json::json!({
+            "input": [
+                {"type": "additional_tools", "tools": []},
+                {"role": "user", "content": "KEEP"}
+            ]
+        }));
+
+        assert!(codex_body_has_additional_tools(
+            "codex",
+            "/v1/responses",
+            &body
+        ));
+        assert!(codex_body_has_additional_tools(
+            "grok",
+            "/responses/",
+            &body
+        ));
+        assert!(!codex_body_has_additional_tools(
+            "codex",
+            "/v1/models",
+            &body
+        ));
+        assert!(!codex_body_has_additional_tools(
+            "claude",
+            "/v1/responses",
+            &body
+        ));
+    }
+
+    #[test]
+    fn codex_body_additional_tools_rejects_incompatible_shapes() {
+        for body in [
+            b"not-json".to_vec(),
+            body(serde_json::json!({})),
+            body(serde_json::json!({"input": "hello"})),
+            body(serde_json::json!({"input": [{"type": "message"}]})),
+            body(serde_json::json!({"input": [{"additional_tools": []}]})),
+        ] {
+            assert!(!codex_body_has_additional_tools(
+                "codex",
+                "/v1/responses",
+                &body
+            ));
+        }
+    }
+
+    #[test]
+    fn codex_body_agent_message_requires_internal_retry_budget() {
+        let body = body(serde_json::json!({
+            "input": [
+                {"type": "agent_message", "content": [{"type": "input_text", "text": "KEEP"}]},
+                {"role": "user", "content": "CONTINUE"}
+            ]
+        }));
+
+        assert!(codex_body_has_agent_message(
+            "codex",
+            "/v1/responses",
+            &body
+        ));
+        assert!(codex_body_has_agent_message("grok", "/responses/", &body));
+        assert!(!codex_body_has_agent_message("codex", "/v1/models", &body));
+        assert!(!codex_body_has_agent_message(
+            "claude",
+            "/v1/responses",
+            &body
+        ));
+    }
+
+    #[test]
+    fn codex_body_agent_message_rejects_incompatible_shapes() {
+        for body in [
+            b"not-json".to_vec(),
+            body(serde_json::json!({})),
+            body(serde_json::json!({"input": "hello"})),
+            body(serde_json::json!({"input": [{"type": "message"}]})),
+            body(serde_json::json!({"input": [{"agent_message": []}]})),
+        ] {
+            assert!(!codex_body_has_agent_message(
+                "codex",
+                "/v1/responses",
+                &body
+            ));
+        }
+    }
+
+    #[test]
     fn provider_max_attempts_reserves_budget_for_internal_retries() {
         assert_eq!(
             provider_regular_max_attempts_for_request(1, 1, false, false, false),
@@ -852,9 +989,38 @@ mod tests {
 
     #[test]
     fn provider_max_attempts_reserves_reasoning_context_rectifier_attempt() {
-        assert_eq!(provider_total_max_attempts_for_request(1, true, false), 2);
-        assert_eq!(provider_total_max_attempts_for_request(2, true, false), 3);
-        assert_eq!(provider_total_max_attempts_for_request(1, true, true), 1);
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, true, false, false, false),
+            2
+        );
+        assert_eq!(
+            provider_total_max_attempts_for_request(2, true, false, false, false),
+            3
+        );
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, true, false, false, true),
+            1
+        );
+    }
+
+    #[test]
+    fn provider_max_attempts_reserves_chained_codex_rectifier_attempts() {
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, true, true, false, false),
+            3
+        );
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, false, true, false, false),
+            2
+        );
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, true, true, true, false),
+            4
+        );
+        assert_eq!(
+            provider_total_max_attempts_for_request(1, false, false, true, false),
+            2
+        );
     }
 
     #[test]

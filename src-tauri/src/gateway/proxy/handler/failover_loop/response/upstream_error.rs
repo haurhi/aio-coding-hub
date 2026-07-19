@@ -164,6 +164,10 @@ pub(super) struct UpstreamRequestState<'a> {
     pub(super) codex_previous_response_id_rectifier_retried: &'a mut bool,
     pub(super) codex_reasoning_context_rectifier_retried: &'a mut bool,
     pub(super) codex_reasoning_context_retry_pending: &'a mut bool,
+    pub(super) codex_additional_tools_rectifier_retried: &'a mut bool,
+    pub(super) codex_additional_tools_retry_pending: &'a mut bool,
+    pub(super) codex_agent_message_rectifier_retried: &'a mut bool,
+    pub(super) codex_agent_message_retry_pending: &'a mut bool,
     pub(super) thinking_signature_rectifier_retried: &'a mut bool,
     pub(super) thinking_budget_rectifier_retried: &'a mut bool,
 }
@@ -313,6 +317,166 @@ fn maybe_rectify_codex_reasoning_context(
     Some(LoopControl::ContinueRetry)
 }
 
+fn matches_codex_additional_tools_error(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let param_matches = root
+        .pointer("/error/param")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|param| param.strip_prefix("input["))
+        .and_then(|param| param.strip_suffix("].type"))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()));
+
+    root.pointer("/error/type")
+        .and_then(serde_json::Value::as_str)
+        == Some("invalid_request_error")
+        && root
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_str)
+            == Some("invalid_request")
+        && root
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some("unsupported input item type: additional_tools")
+        && param_matches
+}
+
+fn remove_codex_additional_tools_input_items(body: &mut Bytes) -> Option<usize> {
+    let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return None;
+    };
+    let input = root.get_mut("input")?.as_array_mut()?;
+    let original_len = input.len();
+    input.retain(|item| {
+        item.get("type").and_then(serde_json::Value::as_str) != Some("additional_tools")
+    });
+    let removed = original_len.saturating_sub(input.len());
+    if removed == 0 {
+        return None;
+    }
+
+    let next = serde_json::to_vec(&root).ok()?;
+    *body = Bytes::from(next);
+    Some(removed)
+}
+
+fn maybe_rectify_codex_additional_tools(
+    cli_key: &str,
+    forwarded_path: &str,
+    status: reqwest::StatusCode,
+    error_body: &[u8],
+    error_body_truncated: bool,
+    already_retried: &mut bool,
+    upstream_body: &mut Bytes,
+) -> Option<usize> {
+    if !matches!(cli_key, "codex" | "grok")
+        || !is_responses_request_path(forwarded_path)
+        || error_body_truncated
+        || *already_retried
+        || !matches_codex_additional_tools_error(status, error_body)
+    {
+        return None;
+    }
+
+    let removed = remove_codex_additional_tools_input_items(upstream_body)?;
+    *already_retried = true;
+    Some(removed)
+}
+
+fn matches_codex_agent_message_error(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let param_matches = root
+        .pointer("/error/param")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|param| param.strip_prefix("input["))
+        .and_then(|param| param.strip_suffix("].type"))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()));
+
+    root.pointer("/error/type")
+        .and_then(serde_json::Value::as_str)
+        == Some("invalid_request_error")
+        && root
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_str)
+            == Some("invalid_request")
+        && root
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some("unsupported input item type: agent_message")
+        && param_matches
+}
+
+fn convert_codex_agent_messages_to_user_messages(body: &mut Bytes) -> Option<usize> {
+    let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return None;
+    };
+    let input = root.get_mut("input")?.as_array_mut()?;
+    let mut converted = 0usize;
+    for item in input {
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+        if item_obj.get("type").and_then(serde_json::Value::as_str) != Some("agent_message") {
+            continue;
+        }
+        let Some(content) = item_obj.get("content").cloned() else {
+            continue;
+        };
+        if !content.is_array() {
+            continue;
+        }
+        *item = serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": content,
+        });
+        converted = converted.saturating_add(1);
+    }
+    if converted == 0 {
+        return None;
+    }
+
+    let next = serde_json::to_vec(&root).ok()?;
+    *body = Bytes::from(next);
+    Some(converted)
+}
+
+fn maybe_rectify_codex_agent_messages(
+    cli_key: &str,
+    forwarded_path: &str,
+    status: reqwest::StatusCode,
+    error_body: &[u8],
+    error_body_truncated: bool,
+    already_retried: &mut bool,
+    upstream_body: &mut Bytes,
+) -> Option<usize> {
+    if !matches!(cli_key, "codex" | "grok")
+        || !is_responses_request_path(forwarded_path)
+        || error_body_truncated
+        || *already_retried
+        || !matches_codex_agent_message_error(status, error_body)
+    {
+        return None;
+    }
+
+    let converted = convert_codex_agent_messages_to_user_messages(upstream_body)?;
+    *already_retried = true;
+    Some(converted)
+}
+
 pub(super) struct HandleNonSuccessResponseInput<'a, R: tauri::Runtime = tauri::Wry> {
     pub(super) ctx: CommonCtx<'a, R>,
     pub(super) provider_ctx: ProviderCtx<'a>,
@@ -438,10 +602,22 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         && is_responses_request_path(ctx.forwarded_path.as_str())
         && status == reqwest::StatusCode::BAD_REQUEST
         && !*upstream.codex_reasoning_context_rectifier_retried;
+    let need_codex_additional_tools_scan = !is_count_tokens
+        && matches!(ctx.cli_key.as_str(), "codex" | "grok")
+        && is_responses_request_path(ctx.forwarded_path.as_str())
+        && status == reqwest::StatusCode::BAD_REQUEST
+        && !*upstream.codex_additional_tools_rectifier_retried;
+    let need_codex_agent_message_scan = !is_count_tokens
+        && matches!(ctx.cli_key.as_str(), "codex" | "grok")
+        && is_responses_request_path(ctx.forwarded_path.as_str())
+        && status == reqwest::StatusCode::BAD_REQUEST
+        && !*upstream.codex_agent_message_rectifier_retried;
     if need_client_error_scan
         || need_error_body_preview
         || need_codex_previous_response_id_scan
         || need_codex_reasoning_context_scan
+        || need_codex_additional_tools_scan
+        || need_codex_agent_message_scan
     {
         if let Some(r) = resp.take() {
             let read_result = read_response_body_for_error_scan(r).await;
@@ -561,6 +737,70 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                     }),
                 );
                 return control;
+            }
+        }
+    }
+
+    if need_codex_additional_tools_scan {
+        if let Some(body) = abort_body_bytes.as_deref() {
+            if let Some(items_removed) = maybe_rectify_codex_additional_tools(
+                ctx.cli_key.as_str(),
+                ctx.forwarded_path.as_str(),
+                status,
+                body,
+                abort_body_truncated,
+                upstream.codex_additional_tools_rectifier_retried,
+                upstream.upstream_body_bytes,
+            ) {
+                *upstream.strip_request_content_encoding = true;
+                *upstream.codex_additional_tools_retry_pending = true;
+                response_fixer::push_special_setting(
+                    ctx.special_settings,
+                    serde_json::json!({
+                        "type": "codex_additional_tools_rectifier",
+                        "scope": "attempt",
+                        "hit": true,
+                        "action": "remove_additional_tools_input_items_and_retry",
+                        "providerId": provider_id,
+                        "status": status.as_u16(),
+                        "retryAttemptNumber": retry_index,
+                        "retryAttemptNumberNext": retry_index + 1,
+                        "itemsRemoved": items_removed,
+                    }),
+                );
+                return LoopControl::ContinueRetry;
+            }
+        }
+    }
+
+    if need_codex_agent_message_scan {
+        if let Some(body) = abort_body_bytes.as_deref() {
+            if let Some(items_converted) = maybe_rectify_codex_agent_messages(
+                ctx.cli_key.as_str(),
+                ctx.forwarded_path.as_str(),
+                status,
+                body,
+                abort_body_truncated,
+                upstream.codex_agent_message_rectifier_retried,
+                upstream.upstream_body_bytes,
+            ) {
+                *upstream.strip_request_content_encoding = true;
+                *upstream.codex_agent_message_retry_pending = true;
+                response_fixer::push_special_setting(
+                    ctx.special_settings,
+                    serde_json::json!({
+                        "type": "codex_agent_message_rectifier",
+                        "scope": "attempt",
+                        "hit": true,
+                        "action": "convert_agent_messages_to_user_messages_and_retry",
+                        "providerId": provider_id,
+                        "status": status.as_u16(),
+                        "retryAttemptNumber": retry_index,
+                        "retryAttemptNumberNext": retry_index + 1,
+                        "itemsConverted": items_converted,
+                    }),
+                );
+                return LoopControl::ContinueRetry;
             }
         }
     }
@@ -1006,9 +1246,12 @@ pub(super) async fn handle_reqwest_error<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        error_body_scan_limit_usize, matches_codex_previous_response_id_error,
-        matches_codex_reasoning_context_error, maybe_rectify_codex_reasoning_context,
-        read_response_body_for_error_scan, remove_codex_previous_response_id,
+        convert_codex_agent_messages_to_user_messages, error_body_scan_limit_usize,
+        matches_codex_additional_tools_error, matches_codex_agent_message_error,
+        matches_codex_previous_response_id_error, matches_codex_reasoning_context_error,
+        maybe_rectify_codex_additional_tools, maybe_rectify_codex_agent_messages,
+        maybe_rectify_codex_reasoning_context, read_response_body_for_error_scan,
+        remove_codex_additional_tools_input_items, remove_codex_previous_response_id,
         remove_codex_reasoning_context, reqwest_error_decision, retry_after_reset_at,
         should_scan_codex_previous_response_id_error, upstream_error_decision, FailoverDecision,
     };
@@ -1251,6 +1494,243 @@ mod tests {
             assert!(!remove_codex_reasoning_context(&mut body));
             assert_eq!(body.as_ref(), original);
         }
+    }
+
+    #[test]
+    fn matches_exact_additional_tools_invalid_request() {
+        let body = br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
+
+        assert!(matches_codex_additional_tools_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+        ));
+    }
+
+    #[test]
+    fn matches_exact_additional_tools_invalid_request_rejects_near_misses() {
+        let exact = br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[12].type","code":"invalid_request"}}"#;
+        assert!(!matches_codex_additional_tools_error(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            exact,
+        ));
+
+        for body in [
+            br#"{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: custom_tool_call","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[].type","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[0].content","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[0].type","code":"unsupported_field"}}"#.as_slice(),
+            b"not-json".as_slice(),
+        ] {
+            assert!(!matches_codex_additional_tools_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                body,
+            ));
+        }
+    }
+
+    #[test]
+    fn removes_only_additional_tools_input_items_and_preserves_payload() {
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "reasoning": {"effort": "low"},
+            "input": [
+                {"type": "additional_tools", "tools": [{"name": "spawn_agent"}]},
+                {"role": "user", "content": [{"type": "input_text", "text": "KEEP"}]},
+                {"type": "additional_tools", "tools": [{"name": "wait_agent"}]},
+                {"type": "function_call_output", "call_id": "call-1", "output": "KEEP"}
+            ],
+            "tools": [{"type": "function", "name": "lookup"}],
+            "store": false
+        });
+        let mut body = Bytes::from(serde_json::to_vec(&original).expect("serialize request"));
+
+        assert_eq!(
+            remove_codex_additional_tools_input_items(&mut body),
+            Some(2)
+        );
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(
+            next["input"],
+            serde_json::json!([
+                {"role": "user", "content": [{"type": "input_text", "text": "KEEP"}]},
+                {"type": "function_call_output", "call_id": "call-1", "output": "KEEP"}
+            ])
+        );
+        assert_eq!(next["reasoning"], original["reasoning"]);
+        assert_eq!(next["tools"], original["tools"]);
+        assert_eq!(next["model"], original["model"]);
+        assert_eq!(next["store"], original["store"]);
+        assert_eq!(remove_codex_additional_tools_input_items(&mut body), None);
+    }
+
+    #[test]
+    fn additional_tools_rectifier_retries_once() {
+        let error = br#"{"error":{"message":"unsupported input item type: additional_tools","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
+        let original = Bytes::from_static(
+            br#"{"model":"LongCat-2.0","input":[{"type":"additional_tools","tools":[]},{"role":"user","content":"KEEP"}]}"#,
+        );
+        let mut body = original.clone();
+        let mut already_retried = false;
+
+        assert_eq!(
+            maybe_rectify_codex_additional_tools(
+                "codex",
+                "/v1/responses",
+                reqwest::StatusCode::BAD_REQUEST,
+                error,
+                false,
+                &mut already_retried,
+                &mut body,
+            ),
+            Some(1)
+        );
+        assert!(already_retried);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("parse rectified request"),
+            serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [{"role": "user", "content": "KEEP"}]
+            })
+        );
+
+        let mut second_body = original.clone();
+        assert_eq!(
+            maybe_rectify_codex_additional_tools(
+                "codex",
+                "/v1/responses",
+                reqwest::StatusCode::BAD_REQUEST,
+                error,
+                false,
+                &mut already_retried,
+                &mut second_body,
+            ),
+            None
+        );
+        assert_eq!(second_body, original);
+    }
+
+    #[test]
+    fn matches_exact_agent_message_invalid_request() {
+        let body = br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[219].type","code":"invalid_request"}}"#;
+
+        assert!(matches_codex_agent_message_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+        ));
+    }
+
+    #[test]
+    fn matches_exact_agent_message_invalid_request_rejects_near_misses() {
+        let exact = br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
+        assert!(!matches_codex_agent_message_error(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            exact,
+        ));
+
+        for body in [
+            br#"{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[x].type","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].content","code":"invalid_request"}}"#.as_slice(),
+            br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"unsupported_field"}}"#.as_slice(),
+            b"not-json".as_slice(),
+        ] {
+            assert!(!matches_codex_agent_message_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                body,
+            ));
+        }
+    }
+
+    #[test]
+    fn converts_agent_messages_to_user_messages_and_preserves_content() {
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "input": [
+                {
+                    "type": "agent_message",
+                    "author": "/root/reviewer",
+                    "recipient": "/root",
+                    "content": [{"type": "input_text", "text": "KEEP_REVIEW"}]
+                },
+                {"type": "function_call_output", "call_id": "call-1", "output": "KEEP_TOOL"},
+                {
+                    "type": "agent_message",
+                    "author": "/root/worker",
+                    "recipient": "/root",
+                    "content": [{"type": "input_text", "text": "KEEP_RESULT"}]
+                }
+            ],
+            "store": false
+        });
+        let mut body = Bytes::from(serde_json::to_vec(&original).expect("serialize request"));
+
+        assert_eq!(
+            convert_codex_agent_messages_to_user_messages(&mut body),
+            Some(2)
+        );
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(
+            next["input"],
+            serde_json::json!([
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "KEEP_REVIEW"}]},
+                {"type": "function_call_output", "call_id": "call-1", "output": "KEEP_TOOL"},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "KEEP_RESULT"}]}
+            ])
+        );
+        assert_eq!(next["model"], original["model"]);
+        assert_eq!(next["store"], original["store"]);
+        assert_eq!(
+            convert_codex_agent_messages_to_user_messages(&mut body),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_message_rectifier_retries_once() {
+        let error = br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
+        let original = Bytes::from_static(
+            br#"{"model":"LongCat-2.0","input":[{"type":"agent_message","author":"/root/worker","recipient":"/root","content":[{"type":"input_text","text":"KEEP"}]}]}"#,
+        );
+        let mut body = original.clone();
+        let mut already_retried = false;
+
+        assert_eq!(
+            maybe_rectify_codex_agent_messages(
+                "codex",
+                "/v1/responses",
+                reqwest::StatusCode::BAD_REQUEST,
+                error,
+                false,
+                &mut already_retried,
+                &mut body,
+            ),
+            Some(1)
+        );
+        assert!(already_retried);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("parse rectified request"),
+            serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "KEEP"}]}]
+            })
+        );
+
+        let mut second_body = original.clone();
+        assert_eq!(
+            maybe_rectify_codex_agent_messages(
+                "codex",
+                "/v1/responses",
+                reqwest::StatusCode::BAD_REQUEST,
+                error,
+                false,
+                &mut already_retried,
+                &mut second_body,
+            ),
+            None
+        );
+        assert_eq!(second_body, original);
     }
 
     #[test]

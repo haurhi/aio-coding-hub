@@ -64,8 +64,14 @@ where
             LoopControl::ContinueRetry => {
                 let reasoning_context_retry_pending =
                     std::mem::take(&mut retry_state.codex_reasoning_context_retry_pending);
+                let additional_tools_retry_pending =
+                    std::mem::take(&mut retry_state.codex_additional_tools_retry_pending);
+                let agent_message_retry_pending =
+                    std::mem::take(&mut retry_state.codex_agent_message_retry_pending);
                 if retry_index < prepared.provider_regular_max_attempts
                     || reasoning_context_retry_pending
+                    || additional_tools_retry_pending
+                    || agent_message_retry_pending
                 {
                     continue;
                 }

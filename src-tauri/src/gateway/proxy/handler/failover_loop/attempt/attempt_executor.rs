@@ -17,6 +17,10 @@ pub(super) struct RetryLoopState {
     pub(super) codex_previous_response_id_rectifier_retried: bool,
     pub(super) codex_reasoning_context_rectifier_retried: bool,
     pub(super) codex_reasoning_context_retry_pending: bool,
+    pub(super) codex_additional_tools_rectifier_retried: bool,
+    pub(super) codex_additional_tools_retry_pending: bool,
+    pub(super) codex_agent_message_rectifier_retried: bool,
+    pub(super) codex_agent_message_retry_pending: bool,
     pub(super) thinking_signature_rectifier_retried: bool,
     pub(super) thinking_budget_rectifier_retried: bool,
 }
@@ -29,6 +33,10 @@ impl RetryLoopState {
             codex_previous_response_id_rectifier_retried: false,
             codex_reasoning_context_rectifier_retried: false,
             codex_reasoning_context_retry_pending: false,
+            codex_additional_tools_rectifier_retried: false,
+            codex_additional_tools_retry_pending: false,
+            codex_agent_message_rectifier_retried: false,
+            codex_agent_message_retry_pending: false,
             thinking_signature_rectifier_retried: false,
             thinking_budget_rectifier_retried: false,
         }

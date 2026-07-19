@@ -204,6 +204,14 @@ where
                     .codex_reasoning_context_rectifier_retried,
                 codex_reasoning_context_retry_pending: &mut retry_state
                     .codex_reasoning_context_retry_pending,
+                codex_additional_tools_rectifier_retried: &mut retry_state
+                    .codex_additional_tools_rectifier_retried,
+                codex_additional_tools_retry_pending: &mut retry_state
+                    .codex_additional_tools_retry_pending,
+                codex_agent_message_rectifier_retried: &mut retry_state
+                    .codex_agent_message_rectifier_retried,
+                codex_agent_message_retry_pending: &mut retry_state
+                    .codex_agent_message_retry_pending,
                 thinking_signature_rectifier_retried: &mut retry_state
                     .thinking_signature_rectifier_retried,
                 thinking_budget_rectifier_retried: &mut retry_state
