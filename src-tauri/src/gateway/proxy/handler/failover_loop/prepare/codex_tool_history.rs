@@ -90,9 +90,8 @@ pub(super) fn normalize_interleaved_function_history(
 
     let eligible_ids: HashSet<String> = call_counts
         .iter()
-        .filter_map(|(call_id, count)| {
-            (*count == 1 && !ambiguous_ids.contains(call_id)).then(|| call_id.clone())
-        })
+        .filter(|(call_id, count)| **count == 1 && !ambiguous_ids.contains(*call_id))
+        .map(|(call_id, _)| call_id.clone())
         .collect();
 
     let mut next = Vec::with_capacity(items.len());
