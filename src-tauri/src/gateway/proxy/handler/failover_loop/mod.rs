@@ -26,6 +26,8 @@ mod codex_chatgpt;
 mod codex_service_tier;
 #[path = "prepare/codex_session_id_completion.rs"]
 mod codex_session_id_completion;
+#[path = "prepare/codex_tool_history.rs"]
+mod codex_tool_history;
 #[path = "prepare/cx2cc_preparation.rs"]
 mod cx2cc_preparation;
 #[path = "prepare/oauth.rs"]
