@@ -1,6 +1,8 @@
 //! Usage: normalize interleaved Codex Responses function-call history for strict providers.
 
 use axum::body::Bytes;
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CodexToolHistoryNormalization {
@@ -19,9 +21,189 @@ impl CodexToolHistoryNormalization {
 }
 
 pub(super) fn normalize_interleaved_function_history(
-    _body: &mut Bytes,
+    body: &mut Bytes,
 ) -> CodexToolHistoryNormalization {
-    CodexToolHistoryNormalization::default()
+    let Ok(mut root) = serde_json::from_slice::<Value>(body) else {
+        return CodexToolHistoryNormalization::default();
+    };
+    let Some(items) = root.get("input").and_then(Value::as_array).cloned() else {
+        return CodexToolHistoryNormalization::default();
+    };
+
+    let mut outcome = CodexToolHistoryNormalization::default();
+    let mut call_counts: HashMap<String, usize> = HashMap::new();
+    let mut output_positions: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (index, item) in items.iter().enumerate() {
+        match item_type(item) {
+            Some("function_call") => {
+                outcome.calls_examined += 1;
+                if let Some(call_id) = non_empty_call_id(item) {
+                    *call_counts.entry(call_id.to_string()).or_default() += 1;
+                } else {
+                    outcome.malformed_ids_skipped += 1;
+                }
+            }
+            Some("function_call_output") => {
+                if let Some(call_id) = non_empty_call_id(item) {
+                    output_positions
+                        .entry(call_id.to_string())
+                        .or_default()
+                        .push(index);
+                } else {
+                    outcome.malformed_ids_skipped += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let ambiguous_ids: HashSet<String> = call_counts
+        .iter()
+        .filter_map(|(call_id, count)| {
+            let output_count = output_positions.get(call_id).map_or(0, Vec::len);
+            (*count > 1 || output_count > 1).then(|| call_id.clone())
+        })
+        .collect();
+    outcome.duplicate_ids_skipped = ambiguous_ids.len();
+
+    let eligible_ids: HashSet<String> = call_counts
+        .iter()
+        .filter_map(|(call_id, count)| {
+            (*count == 1 && !ambiguous_ids.contains(call_id)).then(|| call_id.clone())
+        })
+        .collect();
+
+    let mut next = Vec::with_capacity(items.len());
+    let mut pending_order: Vec<String> = Vec::new();
+    let mut pending: HashSet<String> = HashSet::new();
+    let mut relocated_positions: HashSet<usize> = HashSet::new();
+
+    for (index, item) in items.iter().enumerate() {
+        if relocated_positions.contains(&index) {
+            continue;
+        }
+
+        match item_type(item) {
+            Some("function_call") => {
+                if let Some(call_id) = non_empty_call_id(item) {
+                    if eligible_ids.contains(call_id) && pending.insert(call_id.to_string()) {
+                        pending_order.push(call_id.to_string());
+                    }
+                }
+                next.push(item.clone());
+            }
+            Some("function_call_output") => {
+                if let Some(call_id) = non_empty_call_id(item) {
+                    pending.remove(call_id);
+                }
+                next.push(item.clone());
+            }
+            Some("additional_tools") => next.push(item.clone()),
+            _ => {
+                if close_pending_calls(
+                    &items,
+                    index,
+                    &output_positions,
+                    &mut pending,
+                    &pending_order,
+                    &mut relocated_positions,
+                    &mut next,
+                    &mut outcome,
+                ) {
+                    outcome.barriers_repaired += 1;
+                }
+                next.push(item.clone());
+            }
+        }
+    }
+
+    if close_pending_calls(
+        &items,
+        items.len(),
+        &output_positions,
+        &mut pending,
+        &pending_order,
+        &mut relocated_positions,
+        &mut next,
+        &mut outcome,
+    ) {
+        outcome.barriers_repaired += 1;
+    }
+
+    if !outcome.changed() {
+        return outcome;
+    }
+
+    root["input"] = Value::Array(next);
+    let Ok(encoded) = serde_json::to_vec(&root) else {
+        return CodexToolHistoryNormalization::default();
+    };
+    *body = Bytes::from(encoded);
+    outcome
+}
+
+fn item_type(item: &Value) -> Option<&str> {
+    item.get("type").and_then(Value::as_str)
+}
+
+fn non_empty_call_id(item: &Value) -> Option<&str> {
+    item.get("call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|call_id| !call_id.is_empty())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_pending_calls(
+    source: &[Value],
+    boundary_index: usize,
+    output_positions: &HashMap<String, Vec<usize>>,
+    pending: &mut HashSet<String>,
+    pending_order: &[String],
+    relocated_positions: &mut HashSet<usize>,
+    next: &mut Vec<Value>,
+    outcome: &mut CodexToolHistoryNormalization,
+) -> bool {
+    if pending.is_empty() {
+        return false;
+    }
+
+    let mut relocations: Vec<(usize, String)> = pending_order
+        .iter()
+        .filter(|call_id| pending.contains(call_id.as_str()))
+        .filter_map(|call_id| {
+            let positions = output_positions.get(call_id)?;
+            let position = *positions.first()?;
+            (position > boundary_index && !relocated_positions.contains(&position))
+                .then(|| (position, call_id.clone()))
+        })
+        .collect();
+    relocations.sort_by_key(|(position, _)| *position);
+
+    let mut changed = false;
+    for (position, call_id) in relocations {
+        next.push(source[position].clone());
+        relocated_positions.insert(position);
+        pending.remove(call_id.as_str());
+        outcome.outputs_relocated += 1;
+        changed = true;
+    }
+
+    for call_id in pending_order {
+        if !pending.remove(call_id.as_str()) {
+            continue;
+        }
+        next.push(json!({
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": "aborted"
+        }));
+        outcome.aborted_outputs_synthesized += 1;
+        changed = true;
+    }
+
+    changed
 }
 
 #[cfg(test)]
@@ -275,5 +457,24 @@ mod tests {
             );
             assert_eq!(candidate, original);
         }
+    }
+
+    #[test]
+    fn second_pass_is_noop_after_repair() {
+        let mut candidate = body(json!({
+            "input": [
+                {"type":"function_call","call_id":"call_late","name":"exec","arguments":"{}"},
+                {"type":"reasoning","summary":[]},
+                {"type":"function_call_output","call_id":"call_late","output":"REAL"}
+            ]
+        }));
+
+        let first = normalize_interleaved_function_history(&mut candidate);
+        let after_first = candidate.clone();
+        let second = normalize_interleaved_function_history(&mut candidate);
+
+        assert!(first.changed());
+        assert!(!second.changed());
+        assert_eq!(candidate, after_first);
     }
 }
