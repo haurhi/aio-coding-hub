@@ -20,6 +20,27 @@ impl CodexToolHistoryNormalization {
     }
 }
 
+pub(super) fn special_setting(
+    provider_id: i64,
+    outcome: CodexToolHistoryNormalization,
+) -> Option<Value> {
+    outcome.changed().then(|| {
+        json!({
+            "type": "codex_interleaved_tool_history_normalizer",
+            "scope": "attempt",
+            "hit": true,
+            "action": "close_tool_transactions_before_history_barriers",
+            "providerId": provider_id,
+            "callsExamined": outcome.calls_examined,
+            "outputsRelocated": outcome.outputs_relocated,
+            "abortedOutputsSynthesized": outcome.aborted_outputs_synthesized,
+            "barriersRepaired": outcome.barriers_repaired,
+            "malformedIdsSkipped": outcome.malformed_ids_skipped,
+            "duplicateIdsSkipped": outcome.duplicate_ids_skipped,
+        })
+    })
+}
+
 pub(super) fn normalize_interleaved_function_history(
     body: &mut Bytes,
 ) -> CodexToolHistoryNormalization {
@@ -476,5 +497,56 @@ mod tests {
         assert!(first.changed());
         assert!(!second.changed());
         assert_eq!(candidate, after_first);
+    }
+
+    #[test]
+    fn diagnostic_setting_has_exact_privacy_safe_shape() {
+        let setting = special_setting(
+            30,
+            CodexToolHistoryNormalization {
+                calls_examined: 2,
+                outputs_relocated: 1,
+                aborted_outputs_synthesized: 0,
+                barriers_repaired: 1,
+                malformed_ids_skipped: 0,
+                duplicate_ids_skipped: 0,
+            },
+        )
+        .expect("changed outcome should produce a setting");
+        let object = setting.as_object().expect("setting object");
+        let keys: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from([
+                "abortedOutputsSynthesized",
+                "action",
+                "barriersRepaired",
+                "callsExamined",
+                "duplicateIdsSkipped",
+                "hit",
+                "malformedIdsSkipped",
+                "outputsRelocated",
+                "providerId",
+                "scope",
+                "type",
+            ])
+        );
+        let serialized = serde_json::to_string(&setting).unwrap();
+        for forbidden in [
+            "call_a",
+            "call_b",
+            "A_REAL",
+            "B_REAL",
+            "arguments",
+            "\"output\"",
+            "\"body\"",
+            "\"content\"",
+            "\"text\"",
+            "\"data\"",
+            "\"payload\"",
+            "\"request\"",
+        ] {
+            assert!(!serialized.contains(forbidden), "leaked {forbidden}");
+        }
     }
 }
