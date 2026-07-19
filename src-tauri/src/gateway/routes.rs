@@ -6322,6 +6322,204 @@ module.exports.activate = function activate(api) {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_normalizes_interleaved_codex_tool_history_before_send() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-codex-tool-history.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, captured_rx, upstream_task) = spawn_capturing_raw_upstream(
+            r#"{"id":"tool-history-ok","object":"response","output":[]}"#,
+        )
+        .await;
+        let provider_id = insert_codex_provider_with_priority(
+            &db,
+            "Interleaved Tool History Responses Stub",
+            upstream_base_url,
+            0,
+        );
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_private_a",
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"PRIVATE_ARGUMENT\"}"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_private_b",
+                    "name": "wait",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_private_b",
+                    "output": "PRIVATE_OUTPUT_B"
+                },
+                {"type": "reasoning", "summary": []},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_private_a",
+                    "output": "PRIVATE_OUTPUT_A"
+                }
+            ],
+            "store": false
+        });
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/codex/_aio/provider/{provider_id}/v1/responses"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(original.to_string()))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let captured = tokio::time::timeout(Duration::from_secs(2), captured_rx)
+            .await
+            .expect("captured upstream request")
+            .expect("captured request");
+        let captured_body: Value =
+            serde_json::from_slice(&captured.body).expect("captured request JSON");
+        assert_eq!(captured_body["input"][0], original["input"][0]);
+        assert_eq!(captured_body["input"][1], original["input"][1]);
+        assert_eq!(captured_body["input"][2], original["input"][2]);
+        assert_eq!(captured_body["input"][3], original["input"][4]);
+        assert_eq!(captured_body["input"][4], original["input"][3]);
+        assert_eq!(captured_body["store"], original["store"]);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings JSON"),
+        )
+        .expect("valid special settings JSON");
+        let normalizer = special_settings
+            .as_array()
+            .expect("special settings array")
+            .iter()
+            .find(|entry| {
+                entry.get("type").and_then(Value::as_str)
+                    == Some("codex_interleaved_tool_history_normalizer")
+            })
+            .expect("tool-history normalizer setting");
+        assert_eq!(normalizer["callsExamined"], 2);
+        assert_eq!(normalizer["outputsRelocated"], 1);
+        assert_eq!(normalizer["abortedOutputsSynthesized"], 0);
+        assert_eq!(normalizer["barriersRepaired"], 1);
+        let serialized_setting = serde_json::to_string(normalizer).unwrap();
+        for private in [
+            "call_private_a",
+            "call_private_b",
+            "PRIVATE_ARGUMENT",
+            "PRIVATE_OUTPUT_A",
+            "PRIVATE_OUTPUT_B",
+        ] {
+            assert!(!serialized_setting.contains(private), "leaked {private}");
+        }
+
+        upstream_task.await.expect("upstream task");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_keeps_legal_codex_tool_history_unchanged() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.enable_codex_session_id_completion = false;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-legal-codex-tool-history.sqlite"),
+        )
+        .expect("init test db");
+        let (upstream_base_url, captured_rx, upstream_task) = spawn_capturing_raw_upstream(
+            r#"{"id":"legal-tool-history-ok","object":"response","output":[]}"#,
+        )
+        .await;
+        let provider_id = insert_codex_provider_with_priority(
+            &db,
+            "Legal Tool History Responses Stub",
+            upstream_base_url,
+            0,
+        );
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let original = serde_json::json!({
+            "model": "LongCat-2.0",
+            "input": [
+                {"type":"function_call","call_id":"call_a","name":"a","arguments":"{}"},
+                {"type":"function_call","call_id":"call_b","name":"b","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_b","output":"B"},
+                {"type":"function_call_output","call_id":"call_a","output":"A"},
+                {"type":"message","role":"assistant","content":[]}
+            ],
+            "store": false
+        });
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/codex/_aio/provider/{provider_id}/v1/responses"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(original.to_string()))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = tokio::time::timeout(Duration::from_secs(2), captured_rx)
+            .await
+            .expect("captured upstream request")
+            .expect("captured request");
+        let captured_body: Value =
+            serde_json::from_slice(&captured.body).expect("captured request JSON");
+        assert_eq!(captured_body, original);
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        if let Some(encoded) = log.special_settings_json.as_deref() {
+            let settings: Value = serde_json::from_str(encoded).expect("special settings JSON");
+            assert!(!settings.as_array().unwrap().iter().any(|entry| {
+                entry.get("type").and_then(Value::as_str)
+                    == Some("codex_interleaved_tool_history_normalizer")
+            }));
+        }
+
+        upstream_task.await.expect("upstream task");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn mock_runtime_router_converts_agent_messages_for_strict_responses_provider() {
         let _env_lock = crate::test_support::test_env_lock();
         let home = tempfile::tempdir().expect("home dir");
