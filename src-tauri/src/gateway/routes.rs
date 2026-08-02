@@ -5351,6 +5351,8 @@ module.exports.activate = function activate(api) {
             folder_keys: None,
             exclude_cx2cc_gateway_bridge: Some(false),
             day_start_hour: None,
+            full_idle_gap_minutes: None,
+            session_break_gap_minutes: None,
         };
         let summary = usage_stats::summary_v2(&db, &usage_params, |_| Vec::new())
             .expect("usage summary includes r2c translated stream");
