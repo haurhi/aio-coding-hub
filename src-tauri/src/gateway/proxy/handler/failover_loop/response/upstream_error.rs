@@ -419,39 +419,79 @@ fn matches_codex_agent_message_error(status: reqwest::StatusCode, body: &[u8]) -
         && param_matches
 }
 
-fn convert_codex_agent_messages_to_user_messages(body: &mut Bytes) -> Option<usize> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CodexAgentMessageRectificationOutcome {
+    items_converted: usize,
+    encrypted_content_parts_removed: usize,
+    empty_items_removed: usize,
+}
+
+impl CodexAgentMessageRectificationOutcome {
+    fn changed(self) -> bool {
+        self.items_converted > 0 || self.empty_items_removed > 0
+    }
+}
+
+fn convert_codex_agent_messages_to_user_messages(
+    body: &mut Bytes,
+) -> Option<CodexAgentMessageRectificationOutcome> {
     let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(body) else {
         return None;
     };
     let input = root.get_mut("input")?.as_array_mut()?;
-    let mut converted = 0usize;
-    for item in input {
+    let mut next_input = Vec::with_capacity(input.len());
+    let mut outcome = CodexAgentMessageRectificationOutcome {
+        items_converted: 0,
+        encrypted_content_parts_removed: 0,
+        empty_items_removed: 0,
+    };
+
+    for item in std::mem::take(input) {
         let Some(item_obj) = item.as_object() else {
+            next_input.push(item);
             continue;
         };
         if item_obj.get("type").and_then(serde_json::Value::as_str) != Some("agent_message") {
+            next_input.push(item);
             continue;
         }
-        let Some(content) = item_obj.get("content").cloned() else {
+        let Some(mut content) = item_obj
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+        else {
+            next_input.push(item);
             continue;
         };
-        if !content.is_array() {
+
+        let content_len_before = content.len();
+        content.retain(|part| {
+            part.get("type").and_then(serde_json::Value::as_str) != Some("encrypted_content")
+        });
+        outcome.encrypted_content_parts_removed = outcome
+            .encrypted_content_parts_removed
+            .saturating_add(content_len_before.saturating_sub(content.len()));
+
+        if content.is_empty() {
+            outcome.empty_items_removed = outcome.empty_items_removed.saturating_add(1);
             continue;
         }
-        *item = serde_json::json!({
+
+        next_input.push(serde_json::json!({
             "type": "message",
             "role": "user",
             "content": content,
-        });
-        converted = converted.saturating_add(1);
+        }));
+        outcome.items_converted = outcome.items_converted.saturating_add(1);
     }
-    if converted == 0 {
+    if !outcome.changed() {
         return None;
     }
+    *input = next_input;
 
     let next = serde_json::to_vec(&root).ok()?;
     *body = Bytes::from(next);
-    Some(converted)
+    Some(outcome)
 }
 
 fn maybe_rectify_codex_agent_messages(
@@ -462,7 +502,7 @@ fn maybe_rectify_codex_agent_messages(
     error_body_truncated: bool,
     already_retried: &mut bool,
     upstream_body: &mut Bytes,
-) -> Option<usize> {
+) -> Option<CodexAgentMessageRectificationOutcome> {
     if !matches!(cli_key, "codex" | "grok")
         || !is_responses_request_path(forwarded_path)
         || error_body_truncated
@@ -472,9 +512,56 @@ fn maybe_rectify_codex_agent_messages(
         return None;
     }
 
-    let converted = convert_codex_agent_messages_to_user_messages(upstream_body)?;
+    let outcome = convert_codex_agent_messages_to_user_messages(upstream_body)?;
     *already_retried = true;
-    Some(converted)
+    Some(outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_prepare_codex_agent_message_retry(
+    cli_key: &str,
+    forwarded_path: &str,
+    status: reqwest::StatusCode,
+    error_body: &[u8],
+    error_body_truncated: bool,
+    already_retried: &mut bool,
+    retry_pending: &mut bool,
+    strip_request_content_encoding: &mut bool,
+    upstream_body: &mut Bytes,
+) -> Option<(LoopControl, CodexAgentMessageRectificationOutcome)> {
+    let outcome = maybe_rectify_codex_agent_messages(
+        cli_key,
+        forwarded_path,
+        status,
+        error_body,
+        error_body_truncated,
+        already_retried,
+        upstream_body,
+    )?;
+    *strip_request_content_encoding = true;
+    *retry_pending = true;
+    Some((LoopControl::ContinueRetry, outcome))
+}
+
+fn codex_agent_message_rectifier_special_setting(
+    provider_id: i64,
+    status: reqwest::StatusCode,
+    retry_index: u32,
+    outcome: CodexAgentMessageRectificationOutcome,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "codex_agent_message_rectifier",
+        "scope": "attempt",
+        "hit": true,
+        "action": "convert_agent_messages_to_user_messages_and_retry",
+        "providerId": provider_id,
+        "status": status.as_u16(),
+        "retryAttemptNumber": retry_index,
+        "retryAttemptNumberNext": retry_index + 1,
+        "itemsConverted": outcome.items_converted,
+        "encryptedContentPartsRemoved": outcome.encrypted_content_parts_removed,
+        "emptyItemsRemoved": outcome.empty_items_removed,
+    })
 }
 
 pub(super) struct HandleNonSuccessResponseInput<'a, R: tauri::Runtime = tauri::Wry> {
@@ -775,32 +862,27 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
 
     if need_codex_agent_message_scan {
         if let Some(body) = abort_body_bytes.as_deref() {
-            if let Some(items_converted) = maybe_rectify_codex_agent_messages(
+            if let Some((control, outcome)) = maybe_prepare_codex_agent_message_retry(
                 ctx.cli_key.as_str(),
                 ctx.forwarded_path.as_str(),
                 status,
                 body,
                 abort_body_truncated,
                 upstream.codex_agent_message_rectifier_retried,
+                upstream.codex_agent_message_retry_pending,
+                upstream.strip_request_content_encoding,
                 upstream.upstream_body_bytes,
             ) {
-                *upstream.strip_request_content_encoding = true;
-                *upstream.codex_agent_message_retry_pending = true;
                 response_fixer::push_special_setting(
                     ctx.special_settings,
-                    serde_json::json!({
-                        "type": "codex_agent_message_rectifier",
-                        "scope": "attempt",
-                        "hit": true,
-                        "action": "convert_agent_messages_to_user_messages_and_retry",
-                        "providerId": provider_id,
-                        "status": status.as_u16(),
-                        "retryAttemptNumber": retry_index,
-                        "retryAttemptNumberNext": retry_index + 1,
-                        "itemsConverted": items_converted,
-                    }),
+                    codex_agent_message_rectifier_special_setting(
+                        provider_id,
+                        status,
+                        retry_index,
+                        outcome,
+                    ),
                 );
-                return LoopControl::ContinueRetry;
+                return control;
             }
         }
     }
@@ -1666,10 +1748,11 @@ mod tests {
         });
         let mut body = Bytes::from(serde_json::to_vec(&original).expect("serialize request"));
 
-        assert_eq!(
-            convert_codex_agent_messages_to_user_messages(&mut body),
-            Some(2)
-        );
+        let outcome = convert_codex_agent_messages_to_user_messages(&mut body)
+            .expect("rectification outcome");
+        assert_eq!(outcome.items_converted, 2);
+        assert_eq!(outcome.encrypted_content_parts_removed, 0);
+        assert_eq!(outcome.empty_items_removed, 0);
         let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
         assert_eq!(
             next["input"],
@@ -1688,6 +1771,263 @@ mod tests {
     }
 
     #[test]
+    fn agent_message_rectifier_removes_encrypted_content_and_preserves_portable_parts() {
+        let mut body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [{
+                    "type": "agent_message",
+                    "content": [
+                        {"type": "input_text", "text": "KEEP_BEFORE"},
+                        {"type": "encrypted_content", "data": "DROP_ONE"},
+                        {"type": "output_text", "text": "KEEP_AFTER"},
+                        {"type": "encrypted_content", "data": "DROP_TWO"}
+                    ]
+                }]
+            }))
+            .expect("serialize request"),
+        );
+
+        let outcome = convert_codex_agent_messages_to_user_messages(&mut body)
+            .expect("rectification outcome");
+        assert_eq!(outcome.items_converted, 1);
+        assert_eq!(outcome.encrypted_content_parts_removed, 2);
+        assert_eq!(outcome.empty_items_removed, 0);
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(
+            next["input"],
+            serde_json::json!([{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "KEEP_BEFORE"},
+                    {"type": "output_text", "text": "KEEP_AFTER"}
+                ]
+            }])
+        );
+        let serialized = serde_json::to_string(&next).expect("serialize rectified body");
+        assert!(!serialized.contains("DROP_ONE"));
+        assert!(!serialized.contains("DROP_TWO"));
+    }
+
+    #[test]
+    fn agent_message_rectifier_removes_encrypted_only_item() {
+        let mut body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [
+                    {"type": "message", "role": "user", "content": "KEEP_BEFORE"},
+                    {
+                        "type": "agent_message",
+                        "content": [{"type": "encrypted_content", "data": "DROP_ONLY"}]
+                    },
+                    {"type": "function_call_output", "call_id": "call-1", "output": "KEEP_AFTER"}
+                ]
+            }))
+            .expect("serialize request"),
+        );
+
+        let outcome = convert_codex_agent_messages_to_user_messages(&mut body)
+            .expect("rectification outcome");
+        assert_eq!(outcome.items_converted, 0);
+        assert_eq!(outcome.encrypted_content_parts_removed, 1);
+        assert_eq!(outcome.empty_items_removed, 1);
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(
+            next["input"],
+            serde_json::json!([
+                {"type": "message", "role": "user", "content": "KEEP_BEFORE"},
+                {"type": "function_call_output", "call_id": "call-1", "output": "KEEP_AFTER"}
+            ])
+        );
+        assert!(!serde_json::to_string(&next)
+            .expect("serialize rectified body")
+            .contains("DROP_ONLY"));
+    }
+
+    #[test]
+    fn agent_message_rectifier_reports_structured_counts_for_mixed_input() {
+        let non_agent_item = serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "encrypted_content", "data": "KEEP_NON_AGENT"}]
+        });
+        let mut body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [
+                    {
+                        "type": "agent_message",
+                        "content": [
+                            {"type": "input_text", "text": "KEEP_PORTABLE"},
+                            {"type": "encrypted_content", "data": "DROP_ONE"},
+                            {"type": "encrypted_content", "data": "DROP_TWO"}
+                        ]
+                    },
+                    {
+                        "type": "agent_message",
+                        "content": [{"type": "encrypted_content", "data": "DROP_ONLY"}]
+                    },
+                    non_agent_item.clone()
+                ]
+            }))
+            .expect("serialize request"),
+        );
+
+        let outcome = convert_codex_agent_messages_to_user_messages(&mut body)
+            .expect("rectification outcome");
+        assert_eq!(outcome.items_converted, 1);
+        assert_eq!(outcome.encrypted_content_parts_removed, 3);
+        assert_eq!(outcome.empty_items_removed, 1);
+        assert!(outcome.changed());
+
+        let next: serde_json::Value = serde_json::from_slice(&body).expect("parse rectified body");
+        assert_eq!(
+            next["input"],
+            serde_json::json!([
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "KEEP_PORTABLE"}]
+                },
+                non_agent_item
+            ])
+        );
+    }
+
+    #[test]
+    fn agent_message_rectifier_preserves_out_of_scope_shapes() {
+        let original = serde_json::json!({
+            "input": [
+                {"type": "agent_message", "content": "not-an-array"},
+                {"type": "agent_message", "author": "/root/worker"},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "encrypted_content", "data": "KEEP_NON_AGENT"}]
+                }
+            ]
+        });
+        let mut body = Bytes::from(serde_json::to_vec(&original).expect("serialize request"));
+
+        assert_eq!(
+            convert_codex_agent_messages_to_user_messages(&mut body),
+            None
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("parse preserved body"),
+            original
+        );
+    }
+
+    #[test]
+    fn agent_message_encrypted_only_rectifier_schedules_retry() {
+        let error = br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
+        let mut body = Bytes::from_static(
+            br#"{"model":"LongCat-2.0","input":[{"type":"agent_message","content":[{"type":"encrypted_content","data":"DROP_ONLY"}]}]}"#,
+        );
+        let mut already_retried = false;
+        let mut retry_pending = false;
+        let mut strip_request_content_encoding = false;
+
+        let (control, outcome) = super::maybe_prepare_codex_agent_message_retry(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut already_retried,
+            &mut retry_pending,
+            &mut strip_request_content_encoding,
+            &mut body,
+        )
+        .expect("retry preparation");
+
+        assert!(already_retried);
+        assert!(retry_pending);
+        assert!(strip_request_content_encoding);
+        assert!(matches!(control, super::LoopControl::ContinueRetry));
+        assert_eq!(outcome.items_converted, 0);
+        assert_eq!(outcome.encrypted_content_parts_removed, 1);
+        assert_eq!(outcome.empty_items_removed, 1);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("parse rectified body"),
+            serde_json::json!({"model": "LongCat-2.0", "input": []})
+        );
+
+        let second_original = Bytes::from_static(
+            br#"{"model":"LongCat-2.0","input":[{"type":"agent_message","content":[{"type":"input_text","text":"KEEP_SECOND"}]}]}"#,
+        );
+        let mut second_body = second_original.clone();
+        retry_pending = false;
+        strip_request_content_encoding = false;
+        assert!(super::maybe_prepare_codex_agent_message_retry(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut already_retried,
+            &mut retry_pending,
+            &mut strip_request_content_encoding,
+            &mut second_body,
+        )
+        .is_none());
+        assert!(!retry_pending);
+        assert!(!strip_request_content_encoding);
+        assert_eq!(second_body, second_original);
+    }
+
+    #[test]
+    fn codex_agent_message_rectifier_special_setting_has_approved_shape() {
+        let setting = super::codex_agent_message_rectifier_special_setting(
+            30,
+            reqwest::StatusCode::BAD_REQUEST,
+            2,
+            super::CodexAgentMessageRectificationOutcome {
+                items_converted: 1,
+                encrypted_content_parts_removed: 3,
+                empty_items_removed: 1,
+            },
+        );
+        let object = setting.as_object().expect("special setting object");
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        let mut expected = vec![
+            "action",
+            "emptyItemsRemoved",
+            "encryptedContentPartsRemoved",
+            "hit",
+            "itemsConverted",
+            "providerId",
+            "retryAttemptNumber",
+            "retryAttemptNumberNext",
+            "scope",
+            "status",
+            "type",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        for key in [
+            "itemsConverted",
+            "encryptedContentPartsRemoved",
+            "emptyItemsRemoved",
+        ] {
+            assert!(
+                setting[key].as_u64().is_some(),
+                "{key} must be non-negative"
+            );
+        }
+        for forbidden in ["body", "content", "text", "data", "payload", "request"] {
+            assert!(!object.contains_key(forbidden));
+        }
+        let serialized = serde_json::to_string(&setting).expect("serialize special setting");
+        for sentinel in ["KEEP_BEFORE", "KEEP_AFTER", "DROP_ONE", "DROP_TWO"] {
+            assert!(!serialized.contains(sentinel));
+        }
+    }
+
+    #[test]
     fn agent_message_rectifier_retries_once() {
         let error = br#"{"error":{"message":"unsupported input item type: agent_message","type":"invalid_request_error","param":"input[0].type","code":"invalid_request"}}"#;
         let original = Bytes::from_static(
@@ -1696,18 +2036,19 @@ mod tests {
         let mut body = original.clone();
         let mut already_retried = false;
 
-        assert_eq!(
-            maybe_rectify_codex_agent_messages(
-                "codex",
-                "/v1/responses",
-                reqwest::StatusCode::BAD_REQUEST,
-                error,
-                false,
-                &mut already_retried,
-                &mut body,
-            ),
-            Some(1)
-        );
+        let outcome = maybe_rectify_codex_agent_messages(
+            "codex",
+            "/v1/responses",
+            reqwest::StatusCode::BAD_REQUEST,
+            error,
+            false,
+            &mut already_retried,
+            &mut body,
+        )
+        .expect("rectification outcome");
+        assert_eq!(outcome.items_converted, 1);
+        assert_eq!(outcome.encrypted_content_parts_removed, 0);
+        assert_eq!(outcome.empty_items_removed, 0);
         assert!(already_retried);
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).expect("parse rectified request"),

@@ -33,6 +33,42 @@ fn apply_chatgpt_compat_and_record(
     );
 }
 
+fn apply_codex_tool_history_normalization_if_needed(
+    cli_key: &str,
+    forwarded_path: &str,
+    use_codex_chatgpt_backend: bool,
+    provider_id: i64,
+    special_settings: &std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    body: &mut Bytes,
+    strip_request_content_encoding: &mut bool,
+) -> codex_tool_history::CodexToolHistoryNormalization {
+    if cli_key != "codex" || use_codex_chatgpt_backend || !is_responses_request_path(forwarded_path)
+    {
+        return codex_tool_history::CodexToolHistoryNormalization::default();
+    }
+
+    let outcome = codex_tool_history::normalize_interleaved_function_history(body);
+    if !outcome.changed() {
+        return outcome;
+    }
+
+    *strip_request_content_encoding = true;
+    if let Some(setting) = codex_tool_history::special_setting(provider_id, outcome) {
+        crate::gateway::response_fixer::push_special_setting(special_settings, setting);
+    }
+    tracing::info!(
+        provider_id,
+        calls_examined = outcome.calls_examined,
+        outputs_relocated = outcome.outputs_relocated,
+        aborted_outputs_synthesized = outcome.aborted_outputs_synthesized,
+        barriers_repaired = outcome.barriers_repaired,
+        malformed_ids_skipped = outcome.malformed_ids_skipped,
+        duplicate_ids_skipped = outcome.duplicate_ids_skipped,
+        "normalized interleaved Codex tool history for foreign Responses provider"
+    );
+    outcome
+}
+
 /// All mutable state accumulated by the provider preparation phase that the
 /// retry loop (and later finalization) needs.
 pub(super) struct PreparedProvider {
@@ -471,6 +507,16 @@ pub(super) async fn prepare_provider<R: tauri::Runtime>(
             &mut upstream_body_bytes,
             &mut strip_request_content_encoding,
         );
+    } else {
+        apply_codex_tool_history_normalization_if_needed(
+            input.cli_key.as_str(),
+            upstream_forwarded_path.as_str(),
+            false,
+            provider_id,
+            ctx.special_settings,
+            &mut upstream_body_bytes,
+            &mut strip_request_content_encoding,
+        );
     }
     if upstream_body_bytes.len() != body_len_before_compat {
         tracing::info!(
@@ -687,11 +733,11 @@ fn apply_codex_api_key_model_mapping(
 mod tests {
     use super::{
         apply_chatgpt_compat_and_record, apply_codex_api_key_model_mapping,
-        codex_body_has_additional_tools, codex_body_has_agent_message,
-        codex_body_has_previous_response_id, codex_body_has_reasoning_context,
-        is_anthropic_messages_request_path, is_responses_request_path,
-        provider_regular_max_attempts_for_request, provider_total_max_attempts_for_request,
-        translate_direct_bridge_request,
+        apply_codex_tool_history_normalization_if_needed, codex_body_has_additional_tools,
+        codex_body_has_agent_message, codex_body_has_previous_response_id,
+        codex_body_has_reasoning_context, is_anthropic_messages_request_path,
+        is_responses_request_path, provider_regular_max_attempts_for_request,
+        provider_total_max_attempts_for_request, translate_direct_bridge_request,
     };
     use axum::body::Bytes;
     use std::sync::{Arc, Mutex};
@@ -769,6 +815,81 @@ mod tests {
                 "previous_response_id_removed": true
             })]
         );
+    }
+
+    fn interleaved_tool_history_body() -> Bytes {
+        Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": "LongCat-2.0",
+                "input": [
+                    {"type":"function_call","call_id":"call_a","name":"exec","arguments":"{}"},
+                    {"type":"reasoning","summary":[]},
+                    {"type":"function_call_output","call_id":"call_a","output":"REAL"}
+                ]
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn codex_non_chatgpt_preparation_repairs_interleaved_history() {
+        let shared = interleaved_tool_history_body();
+        let original = shared.clone();
+        let mut outbound = shared.clone();
+        let mut strip_content_encoding = false;
+        let settings = Arc::new(Mutex::new(Vec::new()));
+
+        let outcome = apply_codex_tool_history_normalization_if_needed(
+            "codex",
+            "/v1/responses",
+            false,
+            30,
+            &settings,
+            &mut outbound,
+            &mut strip_content_encoding,
+        );
+
+        assert_eq!(shared, original);
+        assert!(outcome.changed());
+        assert!(strip_content_encoding);
+        let root: serde_json::Value = serde_json::from_slice(&outbound).unwrap();
+        assert_eq!(root["input"][1]["type"], "function_call_output");
+        assert_eq!(root["input"][1]["output"], "REAL");
+        assert_eq!(root["input"][2]["type"], "reasoning");
+        assert_eq!(settings.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tool_history_preparation_excludes_chatgpt_grok_claude_and_non_responses() {
+        for (cli_key, path, chatgpt) in [
+            ("codex", "/v1/responses", true),
+            ("grok", "/v1/responses", false),
+            ("claude", "/v1/responses", false),
+            ("codex", "/v1/models", false),
+        ] {
+            let original = interleaved_tool_history_body();
+            let mut outbound = original.clone();
+            let mut strip_content_encoding = false;
+            let settings = Arc::new(Mutex::new(Vec::new()));
+
+            let outcome = apply_codex_tool_history_normalization_if_needed(
+                cli_key,
+                path,
+                chatgpt,
+                30,
+                &settings,
+                &mut outbound,
+                &mut strip_content_encoding,
+            );
+
+            assert!(
+                !outcome.changed(),
+                "unexpected mutation for {cli_key} {path}"
+            );
+            assert_eq!(outbound, original);
+            assert!(!strip_content_encoding);
+            assert!(settings.lock().unwrap().is_empty());
+        }
     }
 
     fn body(value: serde_json::Value) -> Vec<u8> {
