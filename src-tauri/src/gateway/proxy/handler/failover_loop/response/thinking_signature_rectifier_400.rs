@@ -24,16 +24,28 @@ pub(super) struct HandleThinkingRectifiers400Input<'a, R: tauri::Runtime = tauri
     pub(super) upstream: super::upstream_error::UpstreamRequestState<'a>,
 }
 
+struct RectifyRequestContext<'a> {
+    trigger: &'static str,
+    provider_id: i64,
+    provider_name: &'a str,
+    retry_index: u32,
+    protocol_bridge_type: Option<&'a str>,
+    provider_base_url: Option<&'a str>,
+}
+
 fn rectify_request(
     kind: ReactiveRectifierKind,
     message: &mut serde_json::Value,
-    trigger: &'static str,
-    provider_id: i64,
-    provider_name: &str,
-    retry_index: u32,
-    protocol_bridge_type: Option<&str>,
-    provider_base_url: Option<&str>,
+    ctx: RectifyRequestContext<'_>,
 ) -> (bool, serde_json::Value) {
+    let RectifyRequestContext {
+        trigger,
+        provider_id,
+        provider_name,
+        retry_index,
+        protocol_bridge_type,
+        provider_base_url,
+    } = ctx;
     let common = || {
         serde_json::json!({
             "type": kind.as_str(),
@@ -303,12 +315,14 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                 let (mutation_applied, mut audit) = rectify_request(
                     matched.kind,
                     &mut message_value,
-                    matched.trigger,
-                    provider_id,
-                    provider_name_base.as_str(),
-                    retry_index,
-                    protocol_bridge_type,
-                    Some(provider_base_url_base.as_str()),
+                    RectifyRequestContext {
+                        trigger: matched.trigger,
+                        provider_id,
+                        provider_name: provider_name_base.as_str(),
+                        retry_index,
+                        protocol_bridge_type,
+                        provider_base_url: Some(provider_base_url_base.as_str()),
+                    },
                 );
 
                 if mutation_applied {
