@@ -6,7 +6,7 @@ describe("MSW defaults", () => {
     resetMswState();
 
     expect(getSettingsState()).toEqual({
-      schema_version: 36,
+      schema_version: 37,
       preferred_port: 37123,
       show_home_heatmap: true,
       show_home_usage: true,
@@ -38,11 +38,15 @@ describe("MSW defaults", () => {
       circuit_breaker_failure_threshold: 5,
       circuit_breaker_open_duration_minutes: 30,
       enable_circuit_breaker_notice: false,
-      verbose_provider_error: true,
-      intercept_anthropic_warmup_requests: true,
+      verbose_provider_error: false,
+      intercept_anthropic_warmup_requests: false,
+      enable_thinking_effort_conflict_rectifier: true,
       enable_thinking_signature_rectifier: true,
       enable_thinking_budget_rectifier: true,
-      enable_billing_header_rectifier: false,
+      enable_gemini_function_id_rectifier: true,
+      enable_response_input_rectifier: true,
+      codex_priority_billing_source: "requested",
+      enable_billing_header_rectifier: true,
       enable_codex_session_id_completion: true,
       enable_claude_metadata_user_id_injection: true,
       enable_cache_anomaly_monitor: false,

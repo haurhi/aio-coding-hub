@@ -440,4 +440,43 @@ describe("components/home/RealtimeTraceCards", () => {
 
     vi.useRealTimers();
   });
+
+  it("shows reasoning effort only after a realtime trace settles", () => {
+    const baseTime = 1_700_000_000_000;
+    const active = traceBase({
+      trace_id: "active",
+      first_seen_ms: baseTime,
+      last_seen_ms: baseTime,
+    });
+    const settling = traceBase({
+      trace_id: "settling",
+      first_seen_ms: baseTime - 1000,
+      last_seen_ms: baseTime,
+      summary: {
+        trace_id: "settling",
+        cli_key: "claude",
+        method: "POST",
+        path: "/v1/messages",
+        query: null,
+        status: 200,
+        error_code: null,
+        duration_ms: 100,
+        ttfb_ms: 10,
+        reasoning_effort: "max",
+      },
+    });
+
+    render(
+      <RealtimeTraceCards
+        folderLookupBySessionKey={new Map()}
+        cards={cards([active, settling])}
+        nowMs={baseTime}
+        formatUnixSeconds={(ts) => String(ts)}
+        showCustomTooltip={false}
+      />
+    );
+
+    expect(screen.getByTitle("思考等级：max")).toHaveTextContent("思考max");
+    expect(screen.getAllByText("思考")).toHaveLength(1);
+  });
 });

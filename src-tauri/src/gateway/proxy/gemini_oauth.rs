@@ -737,7 +737,7 @@ mod tests {
                     }]
                 }]
             }),
-            None,
+            Some("mapped-gemini-model"),
             Some("projects/test-project"),
         )
         .expect("prepare request");
@@ -750,7 +750,7 @@ mod tests {
             serde_json::from_slice(prepared.body_bytes.as_ref()).expect("payload json");
         assert_eq!(
             payload.get("model").and_then(Value::as_str),
-            Some("gemini-2.5-flash-lite")
+            Some("mapped-gemini-model")
         );
         assert_eq!(
             payload.get("project").and_then(Value::as_str),
@@ -775,6 +775,32 @@ mod tests {
     }
 
     #[test]
+    fn prepare_upstream_request_with_project_maps_stream_generate_content() {
+        let prepared = prepare_upstream_request_with_project(
+            "/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent",
+            Some("alt=sse"),
+            serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+            }),
+            Some("mapped-stream-model"),
+            Some("projects/test-project"),
+        )
+        .expect("prepare request");
+
+        assert_eq!(
+            prepared.response_mode,
+            GeminiOAuthResponseMode::StreamGenerateContent
+        );
+        assert_eq!(prepared.forwarded_path, "/v1internal:streamGenerateContent");
+        let payload: Value =
+            serde_json::from_slice(prepared.body_bytes.as_ref()).expect("payload json");
+        assert_eq!(
+            payload.get("model").and_then(Value::as_str),
+            Some("mapped-stream-model")
+        );
+    }
+
+    #[test]
     fn prepare_upstream_request_with_project_builds_count_tokens_payload() {
         let prepared = prepare_upstream_request_with_project(
             "/v1beta/models/gemini-2.5-flash-lite:countTokens",
@@ -783,7 +809,7 @@ mod tests {
                 "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
                 "safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT"}]
             }),
-            None,
+            Some("mapped-count-model"),
             None,
         )
         .expect("prepare request");
@@ -796,7 +822,7 @@ mod tests {
                 .get("request")
                 .and_then(|v| v.get("model"))
                 .and_then(Value::as_str),
-            Some("models/gemini-2.5-flash-lite")
+            Some("models/mapped-count-model")
         );
         assert!(payload
             .get("request")

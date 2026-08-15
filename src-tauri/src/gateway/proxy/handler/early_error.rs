@@ -27,6 +27,9 @@ pub(super) enum EarlyErrorKind {
     LargeBodyMissingModel,
     InvalidCliKey,
     NoEnabledProvider,
+    ForcedProviderNotEligibleForModel,
+    NoEligibleProviderForModel,
+    ModelPolicyInvalid,
     // Provider selection failed for infrastructure reasons (DB / blocking
     // pool), not because of anything the client sent.
     ProviderSelectionFailed,
@@ -69,6 +72,24 @@ pub(super) fn early_error_contract(kind: EarlyErrorKind) -> EarlyErrorContract {
         EarlyErrorKind::NoEnabledProvider => EarlyErrorContract {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error_code: GatewayErrorCode::NoEnabledProvider.as_str(),
+            error_category: None,
+            excluded_from_stats: false,
+        },
+        EarlyErrorKind::ForcedProviderNotEligibleForModel => EarlyErrorContract {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error_code: GatewayErrorCode::ForcedProviderNotEligibleForModel.as_str(),
+            error_category: None,
+            excluded_from_stats: false,
+        },
+        EarlyErrorKind::NoEligibleProviderForModel => EarlyErrorContract {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error_code: GatewayErrorCode::NoEligibleProviderForModel.as_str(),
+            error_category: None,
+            excluded_from_stats: false,
+        },
+        EarlyErrorKind::ModelPolicyInvalid => EarlyErrorContract {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error_code: GatewayErrorCode::ModelPolicyInvalid.as_str(),
             error_category: None,
             excluded_from_stats: false,
         },

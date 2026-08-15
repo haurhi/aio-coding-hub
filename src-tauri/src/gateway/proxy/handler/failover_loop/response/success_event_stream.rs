@@ -195,10 +195,15 @@ where
             FirstChunkProbe::Skipped => {}
         }
 
+        let fake_200_profile = crate::gateway::proxy::Fake200Profile::for_request(
+            common.cli_key.as_str(),
+            common.forwarded_path.as_str(),
+        );
         if upstream_first_byte_timeout.is_some()
             && first_chunk.is_none()
             && initial_first_byte_ms.is_none()
             && probe_is_empty_event_stream
+            && !fake_200_profile.detects_empty_stream()
         {
             let error_code = GatewayErrorCode::StreamError.as_str();
             let decision = if retry_index < max_attempts_per_provider {
@@ -263,6 +268,10 @@ where
             circuit_trigger_error_code: None,
             provider_bridged: Some(provider_ctx_owned.provider_bridged),
             timeout_secs: None,
+            reasoning_effort: attempt_ctx.reasoning_effort.map(str::to_string),
+            upstream_sent: attempt_ctx.upstream_sent,
+            claude_model_mapping: provider_ctx_owned.claude_model_mapping.clone(),
+            model_redirect: provider_ctx_owned.model_redirect.clone(),
         });
 
         emit_attempt_event_and_log_with_circuit_before(
@@ -276,6 +285,7 @@ where
 
         codex_service_tier::append_result_if_detected(
             common.cli_key.as_str(),
+            common.codex_priority_billing_source,
             common.introspection_body.as_slice(),
             None,
             &common.special_settings,

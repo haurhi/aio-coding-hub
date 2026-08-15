@@ -30,9 +30,11 @@ export function buildConfigImportSuccessMessage(result: ConfigImportResult) {
 }
 
 export function buildModelPricesSyncMessage(report: ModelPricesSyncReport) {
-  if (report.status === "not_modified") {
-    return "模型定价已是最新（无变更）";
+  if (report.status === "failed") {
+    return `定价同步失败${report.error ? `：${report.error}` : ""}`;
   }
-
-  return `同步完成：新增 ${report.inserted}，更新 ${report.updated}，跳过 ${report.skipped}`;
+  if (report.status === "not_modified") {
+    return "定价已是最新，无变更";
+  }
+  return `定价同步完成：新增 ${report.inserted} · 更新 ${report.updated} · 共 ${report.total} 条`;
 }

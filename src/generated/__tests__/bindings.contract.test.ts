@@ -64,6 +64,7 @@ describe("generated/bindings.ts contract", () => {
     expect(bindingsSource).toContain("cli_proxy_status_all");
     expect(bindingsSource).toContain("cli_proxy_set_enabled");
     expect(bindingsSource).toContain("provider_upsert");
+    expect(bindingsSource).toContain("provider_models_discover");
     expect(bindingsSource).toContain("provider_oauth_fetch_limits");
     expect(bindingsSource).toContain("wsl_detect");
     expect(bindingsSource).toContain("sort_modes_list");

@@ -380,12 +380,7 @@ fn sanitize_model(model: &str) -> Option<String> {
     if model.is_empty() {
         return None;
     }
-    let model = if model.len() > 200 {
-        model[..200].to_string()
-    } else {
-        model.to_string()
-    };
-    Some(model)
+    Some(model.to_string())
 }
 
 fn extract_model_from_query(query: &str) -> Option<String> {
@@ -564,10 +559,11 @@ pub(super) fn ensure_cli_required_headers(cli_key: &str, headers: &mut HeaderMap
 mod tests {
     use super::{
         clear_all_auth_headers, compute_all_providers_unavailable_fingerprint,
-        compute_request_fingerprint, inject_provider_auth, lossy_utf8_preview,
-        normalize_query_for_fingerprint, parse_request_body_limit_mb, redacted_headers_for_debug,
-        DEFAULT_MAX_REQUEST_BODY_MB, FINGERPRINT_DEBUG_COMPONENT_MAX_BYTES,
-        MAX_DEBUG_HEADER_VALUE_PREVIEW_BYTES, MAX_REQUEST_BODY_MB, MIN_REQUEST_BODY_MB,
+        compute_request_fingerprint, infer_requested_model_info, inject_provider_auth,
+        lossy_utf8_preview, normalize_query_for_fingerprint, parse_request_body_limit_mb,
+        redacted_headers_for_debug, RequestedModelLocation, DEFAULT_MAX_REQUEST_BODY_MB,
+        FINGERPRINT_DEBUG_COMPONENT_MAX_BYTES, MAX_DEBUG_HEADER_VALUE_PREVIEW_BYTES,
+        MAX_REQUEST_BODY_MB, MIN_REQUEST_BODY_MB,
     };
     use axum::http::{header, HeaderMap, HeaderValue};
 
@@ -599,6 +595,20 @@ mod tests {
     fn normalize_query_keeps_order_when_duplicate_keys_exist() {
         let normalized = normalize_query_for_fingerprint(Some("a=2&a=1&b=3"));
         assert_eq!(normalized.as_deref(), Some("a=2&a=1&b=3"));
+    }
+
+    #[test]
+    fn requested_model_inference_preserves_long_unicode_model_ids() {
+        let model = format!("model-{}", "模".repeat(201));
+        let body = serde_json::json!({ "model": &model });
+        let body_result = infer_requested_model_info("/v1/messages", None, Some(&body));
+        assert_eq!(body_result.model.as_deref(), Some(model.as_str()));
+        assert_eq!(body_result.location, Some(RequestedModelLocation::BodyJson));
+
+        let path = format!("/v1beta/models/{model}:generateContent");
+        let path_result = infer_requested_model_info(&path, None, None);
+        assert_eq!(path_result.model.as_deref(), Some(model.as_str()));
+        assert_eq!(path_result.location, Some(RequestedModelLocation::Path));
     }
 
     #[test]

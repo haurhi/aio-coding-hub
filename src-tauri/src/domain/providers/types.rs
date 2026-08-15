@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+use super::model_policy::{ProviderModelPolicyStatus, ProviderModelPolicyV1};
+
 pub(super) const DEFAULT_PRIORITY: i64 = 100;
 pub(super) const MAX_MODEL_NAME_LEN: usize = 200;
 pub(super) const MAX_MODEL_MAPPING_ENTRIES: usize = 128;
@@ -10,7 +12,7 @@ pub(crate) const CX2CC_BRIDGE_TYPE: &str = "cx2cc";
 pub(crate) const R2C_BRIDGE_TYPE: &str = "r2c";
 pub(crate) const LEGACY_CC2CX_BRIDGE_TYPE: &str = "cc2cx";
 pub(crate) const CLAUDE_CHAT_COMPLETIONS_BRIDGE_TYPE: &str = "claude_chat_completions";
-pub type ProviderModelMapping = BTreeMap<String, String>;
+pub type LegacyProviderModelMapping = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -87,7 +89,8 @@ pub struct ProviderUpsertParams {
     pub cost_multiplier: f64,
     pub priority: Option<i64>,
     pub claude_models: Option<ClaudeModels>,
-    pub model_mapping: Option<ProviderModelMapping>,
+    pub model_mapping: Option<LegacyProviderModelMapping>,
+    pub model_policy: Option<ProviderModelPolicyV1>,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: Option<DailyResetMode>,
@@ -134,8 +137,10 @@ pub(super) fn normalize_model_slot(raw: Option<String>) -> Option<String> {
     Some(value.to_string())
 }
 
-pub(super) fn normalize_model_mapping(raw: ProviderModelMapping) -> ProviderModelMapping {
-    let mut out = ProviderModelMapping::new();
+pub(super) fn normalize_model_mapping(
+    raw: LegacyProviderModelMapping,
+) -> LegacyProviderModelMapping {
+    let mut out = LegacyProviderModelMapping::new();
     for (source, target) in raw {
         if out.len() >= MAX_MODEL_MAPPING_ENTRIES {
             break;
@@ -151,14 +156,17 @@ pub(super) fn normalize_model_mapping(raw: ProviderModelMapping) -> ProviderMode
     out
 }
 
-pub(super) fn model_mapping_from_json(raw: &str) -> ProviderModelMapping {
-    serde_json::from_str::<ProviderModelMapping>(raw)
+pub(super) fn model_mapping_from_json(raw: &str) -> LegacyProviderModelMapping {
+    serde_json::from_str::<LegacyProviderModelMapping>(raw)
         .ok()
         .map(normalize_model_mapping)
         .unwrap_or_default()
 }
 
-pub(crate) fn map_provider_model(mapping: &ProviderModelMapping, requested_model: &str) -> String {
+pub(crate) fn map_provider_model(
+    mapping: &LegacyProviderModelMapping,
+    requested_model: &str,
+) -> String {
     mapping
         .get(requested_model)
         .cloned()
@@ -270,7 +278,9 @@ pub struct ProviderSummary {
     pub base_urls: Vec<String>,
     pub base_url_mode: ProviderBaseUrlMode,
     pub claude_models: ClaudeModels,
-    pub model_mapping: ProviderModelMapping,
+    pub model_mapping: LegacyProviderModelMapping,
+    pub model_policy: Option<ProviderModelPolicyV1>,
+    pub model_policy_status: ProviderModelPolicyStatus,
     pub enabled: bool,
     pub priority: i64,
     pub cost_multiplier: f64,
@@ -310,7 +320,9 @@ pub(crate) struct ProviderForGateway {
     pub base_url_mode: ProviderBaseUrlMode,
     pub api_key_plaintext: String,
     pub claude_models: ClaudeModels,
-    pub model_mapping: ProviderModelMapping,
+    pub model_mapping: LegacyProviderModelMapping,
+    pub model_policy: Option<ProviderModelPolicyV1>,
+    pub model_policy_status: ProviderModelPolicyStatus,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: DailyResetMode,
@@ -361,7 +373,9 @@ pub(super) struct DecodedProviderRow {
     pub base_urls: Vec<String>,
     pub base_url_mode: ProviderBaseUrlMode,
     pub claude_models: ClaudeModels,
-    pub model_mapping: ProviderModelMapping,
+    pub model_mapping: LegacyProviderModelMapping,
+    pub model_policy: Option<ProviderModelPolicyV1>,
+    pub model_policy_status: ProviderModelPolicyStatus,
     pub limit_5h_usd: Option<f64>,
     pub limit_daily_usd: Option<f64>,
     pub daily_reset_mode: DailyResetMode,

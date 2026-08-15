@@ -1,6 +1,6 @@
 import type {
   ClaudeModels,
-  ProviderModelMapping,
+  LegacyProviderModelMapping,
   ProviderSummary,
 } from "../../services/providers/providers";
 
@@ -13,7 +13,7 @@ export type ProviderEditorInitialValues = {
   base_urls: string[];
   base_url_mode: "order" | "ping";
   claude_models: ClaudeModels;
-  model_mapping: ProviderModelMapping;
+  model_mapping: LegacyProviderModelMapping;
   enabled: boolean;
   cost_multiplier: number;
   limit_5h_usd: number | null;

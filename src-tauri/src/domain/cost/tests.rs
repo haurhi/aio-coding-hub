@@ -80,6 +80,79 @@ fn applies_provider_multiplier() {
 }
 
 #[test]
+fn explicit_zero_prices_are_billable_but_missing_prices_are_not() {
+    let usage = CostUsage {
+        input_tokens: 10,
+        output_tokens: 2,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        calculate_cost_usd_femto(
+            &usage,
+            r#"{"input_cost_per_token":0,"output_cost_per_token":0}"#,
+            1.0,
+            "codex",
+            "glm-free",
+        ),
+        Some(0)
+    );
+    assert_eq!(
+        calculate_cost_usd_femto(&usage, "{}", 1.0, "codex", "missing"),
+        None
+    );
+}
+
+#[test]
+fn custom_context_threshold_selects_whole_request_standard_and_priority_rates() {
+    let price_json = r#"{
+      "context_tier_threshold_tokens": 512000,
+      "input_cost_per_token": 0.000001,
+      "output_cost_per_token": 0.000002,
+      "cache_read_input_token_cost": 0.0000005,
+      "input_cost_per_token_priority": 0.000003,
+      "output_cost_per_token_priority": 0.000004,
+      "cache_read_input_token_cost_priority": 0.0000025,
+      "input_cost_per_token_above_threshold": 0.000005,
+      "output_cost_per_token_above_threshold": 0.000006,
+      "cache_read_input_token_cost_above_threshold": 0.0000045
+    }"#;
+    let below = CostUsage {
+        input_tokens: 500_000,
+        output_tokens: 10,
+        cache_read_input_tokens: 20_000,
+        ..Default::default()
+    };
+    let above = CostUsage {
+        input_tokens: 512_001,
+        output_tokens: 10,
+        cache_read_input_tokens: 12_001,
+        ..Default::default()
+    };
+
+    let calculate = |usage: &CostUsage, priority_service_tier_applied| {
+        calculate_cost_usd_femto_with_options(
+            usage,
+            price_json,
+            1.0,
+            "codex",
+            "MiniMax-M3",
+            &CostCalculationOptions {
+                priority_service_tier_applied,
+            },
+        )
+        .expect("cost")
+    };
+
+    assert_eq!(calculate(&below, false), 490_020_000_000_000);
+    assert_eq!(calculate(&below, true), 1_490_040_000_000_000);
+    assert_eq!(calculate(&above, false), 2_554_064_500_000_000);
+    // Above the threshold the long-context rates win regardless of the
+    // priority tier — no source writes priority-specific above rates.
+    assert_eq!(calculate(&above, true), 2_554_064_500_000_000);
+}
+
+#[test]
 fn calculates_cost_with_basellm_exponent_price_json() {
     let usage = CostUsage {
         input_tokens: 100,

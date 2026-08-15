@@ -257,6 +257,17 @@ export const handlers = [
         input.modelMapping && typeof input.modelMapping === "object"
           ? (input.modelMapping as ProviderSummary["model_mapping"])
           : (existing?.model_mapping ?? {}),
+      model_policy_status:
+        input.modelPolicy && typeof input.modelPolicy === "object"
+          ? "ready"
+          : (existing?.model_policy_status ?? (cliKey === "claude" ? "legacy" : "ready")),
+      model_policy:
+        input.modelPolicy && typeof input.modelPolicy === "object"
+          ? (input.modelPolicy as ProviderSummary["model_policy"])
+          : (existing?.model_policy ??
+            (cliKey === "claude"
+              ? null
+              : { version: 1, mode: "all", modelPatterns: [], mappings: [] })),
       api_key_configured:
         input.authMode === "oauth"
           ? false
@@ -475,14 +486,15 @@ export const handlers = [
   http.post(`${TAURI_ENDPOINT}/app_restart`, () => HttpResponse.json(true)),
 
   // ---- Model Prices ----
-  http.post(`${TAURI_ENDPOINT}/model_prices_list`, () => HttpResponse.json([])),
-  http.post(`${TAURI_ENDPOINT}/model_prices_sync_basellm`, () =>
+  http.post(`${TAURI_ENDPOINT}/model_prices_list_all`, () => HttpResponse.json([])),
+  http.post(`${TAURI_ENDPOINT}/model_prices_sync`, () =>
     HttpResponse.json({
       status: "not_modified",
       inserted: 0,
       updated: 0,
-      skipped: 0,
+      unchanged: 0,
       total: 0,
+      error: null,
     })
   ),
   http.post(`${TAURI_ENDPOINT}/model_price_aliases_get`, () =>

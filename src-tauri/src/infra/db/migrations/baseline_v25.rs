@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS providers (
   supported_models_json TEXT NOT NULL DEFAULT '{}',
   model_mapping_json TEXT NOT NULL DEFAULT '{}',
   claude_models_json TEXT NOT NULL DEFAULT '{}',
+  model_policy_json TEXT NULL DEFAULT '{"version":1,"mode":"all","modelPatterns":[],"mappings":[]}',
   UNIQUE(cli_key, name)
 );
 
@@ -160,6 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_skills_enabled_flags ON skills(enabled_claude, en
 CREATE TABLE IF NOT EXISTS model_prices (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cli_key TEXT NOT NULL,
+  vendor TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL,
   price_json TEXT NOT NULL,
   currency TEXT NOT NULL DEFAULT 'USD',

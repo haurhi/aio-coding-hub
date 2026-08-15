@@ -47,11 +47,17 @@ import {
   computeStatusBadge,
   resolveCacheCreationDisplay,
 } from "./requestLogPresentation";
-import { FastModeBadge, FolderBadge, FreeBadge, SessionReuseBadge } from "./LogBadges";
 import {
-  formatClaudeModelMappingText,
+  FastModeBadge,
+  FolderBadge,
+  FreeBadge,
+  ReasoningEffortBadge,
+  SessionReuseBadge,
+} from "./LogBadges";
+import {
+  formatModelRedirectText,
   hasPriorityServiceTierSpecialSetting,
-  resolveClaudeModelMappingFromSpecialSettings,
+  resolveModelRedirectFromSpecialSettings,
 } from "./requestLogSpecialSettings";
 import { getErrorCodeLabel } from "./requestLogErrorLabels";
 import { Clock, CheckCircle2, XCircle, Server, RefreshCw, ArrowUpRight } from "lucide-react";
@@ -140,9 +146,9 @@ const RequestLogCard = memo(function RequestLogCard({
 
   const providerTitle = providerText;
 
-  const modelText = formatClaudeModelMappingText(
+  const modelText = formatModelRedirectText(
     log.requested_model,
-    resolveClaudeModelMappingFromSpecialSettings(log.special_settings_json, log.final_provider_id)
+    resolveModelRedirectFromSpecialSettings(log.special_settings_json, log.final_provider_id)
   );
 
   const cliLabel = cliShortLabel(log.cli_key);
@@ -244,6 +250,8 @@ const RequestLogCard = memo(function RequestLogCard({
                 <span className="shrink-0">{cliLabel} /</span>
                 <span className={compactTextClass}>{modelText}</span>
               </span>
+
+              <ReasoningEffortBadge value={log.reasoning_effort} />
 
               {isCodexSystemRequest ? (
                 <span className="shrink-0 whitespace-nowrap rounded-md border border-border/60 bg-muted px-2 py-0.5 text-[11px] font-semibold text-foreground">
@@ -360,24 +368,24 @@ const RequestLogCard = memo(function RequestLogCard({
                     {effectiveInputTokens != null ? formatInteger(effectiveInputTokens) : "—"}
                   </span>
                 </div>
-                {cacheWrite ? (
-                  <div
-                    className="col-start-2 row-start-1 flex items-center gap-1 h-4"
-                    title="Cache Write"
-                  >
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/75 select-none shrink-0">
-                      缓存创建
+                {/* Providers like DeepSeek never report cache creation — still
+                    render 0 so the metric grid stays complete and aligned. */}
+                <div
+                  className="col-start-2 row-start-1 flex items-center gap-1 h-4"
+                  title="Cache Write"
+                >
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/75 select-none shrink-0">
+                    缓存创建
+                  </span>
+                  <span className="font-mono tabular-nums text-xs font-semibold text-foreground/90 truncate">
+                    {formatInteger(cacheWrite?.tokens ?? 0)}
+                  </span>
+                  {cacheWrite?.ttl && cacheWrite.tokens > 0 ? (
+                    <span className="text-[10px] font-medium text-muted-foreground/60">
+                      ({cacheWrite.ttl})
                     </span>
-                    <span className="font-mono tabular-nums text-xs font-semibold text-foreground/90 truncate">
-                      {formatInteger(cacheWrite.tokens)}
-                    </span>
-                    {cacheWrite.ttl && cacheWrite.tokens > 0 ? (
-                      <span className="text-[10px] font-medium text-muted-foreground/60">
-                        ({cacheWrite.ttl})
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
                 <div className="col-start-3 row-start-1 flex items-center gap-1 h-4" title="TTFB">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/75 select-none shrink-0">
                     首字

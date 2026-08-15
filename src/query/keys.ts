@@ -308,7 +308,6 @@ const modelPricesAllKey = ["modelPrices"] as const;
 export const modelPricesKeys = {
   all: modelPricesAllKey,
   lists: () => [...modelPricesAllKey, "list"] as const,
-  list: (cliKey: CliKey) => [...modelPricesAllKey, "list", cliKey] as const,
   aliases: () => [...modelPricesAllKey, "aliases"] as const,
 };
 

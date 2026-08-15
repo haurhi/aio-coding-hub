@@ -115,6 +115,20 @@ impl<R: tauri::Runtime> RequestAbortGuard<R> {
     pub(super) fn capture_in_flight_attempt(&mut self, attempt: &FailoverAttempt) {
         self.in_flight_attempt = Some(attempt.clone());
     }
+
+    /// Called once the upstream send resolved: the pre-send "started" snapshot
+    /// carries `upstream_sent: false` / no reasoning effort, which would be
+    /// recorded verbatim if the client aborts mid-stream.
+    pub(super) fn update_in_flight_attempt_send_state(
+        &mut self,
+        reasoning_effort: Option<String>,
+        upstream_sent: bool,
+    ) {
+        if let Some(attempt) = self.in_flight_attempt.as_mut() {
+            attempt.reasoning_effort = reasoning_effort;
+            attempt.upstream_sent = upstream_sent;
+        }
+    }
 }
 
 impl<R: tauri::Runtime> Drop for RequestAbortGuard<R> {
@@ -190,6 +204,10 @@ mod tests {
             circuit_trigger_error_code: None,
             provider_bridged: Some(true),
             timeout_secs: None,
+            reasoning_effort: None,
+            upstream_sent: false,
+            claude_model_mapping: None,
+            model_redirect: None,
         };
 
         let logged_attempts: Vec<FailoverAttempt> = Some(attempt.clone()).iter().cloned().collect();

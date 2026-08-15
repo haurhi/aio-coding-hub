@@ -331,6 +331,14 @@ const ProviderCard = memo(function ProviderCard({
                   {circuitBadge.label}
                 </span>
               ) : null}
+              {provider.model_policy_status === "invalid" ? (
+                <span
+                  className="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[10px] text-rose-700 dark:bg-rose-900/30 dark:text-rose-400"
+                  title="模型策略无效，该供应商不参与路由；请打开编辑器重新配置"
+                >
+                  策略无效
+                </span>
+              ) : null}
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
               {isOAuth ? (

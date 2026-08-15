@@ -13,6 +13,7 @@ import { ApiKeySection } from "./ApiKeySection";
 import { LimitsSection } from "./LimitsSection";
 import { ClaudeModelSection } from "./ClaudeModelSection";
 import { CodexModelMappingSection } from "./CodexModelMappingSection";
+import { ProviderModelPolicySection } from "./ProviderModelPolicySection";
 import { ContributionSlot } from "../../plugins/contributions/ContributionSlot";
 
 type ProviderEditorDialogBaseProps = {
@@ -128,9 +129,21 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
           />
         </FormField>
 
+        <ProviderModelPolicySection
+          cliKey={f.cliKey}
+          status={f.modelPolicyStatus}
+          policy={f.modelPolicy}
+          legacyClaudeModels={f.claudeModels}
+          saving={f.saving}
+          onChange={f.setModelPolicy}
+          modelDiscoveryState={f.modelDiscoveryState}
+          onDiscoverModels={f.discoverModels}
+          hasMultipleBaseUrls={f.baseUrlRows.filter((row) => row.url.trim()).length > 1}
+          showMappings={!(f.cliKey === "claude" && f.authMode === "cx2cc")}
+        />
         <LimitsSection form={f} />
-        <ClaudeModelSection form={f} />
         <CodexModelMappingSection form={f} />
+        {f.cliKey === "claude" && f.authMode === "cx2cc" ? <ClaudeModelSection form={f} /> : null}
 
         <div className="flex items-center justify-between border-t border-border pt-3 dark:border-border">
           <div className="flex items-center gap-2">

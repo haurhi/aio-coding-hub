@@ -1,6 +1,144 @@
 use super::*;
 
 #[test]
+fn migrate_v37_to_v38_adds_model_policy_without_clearing_legacy_fields() {
+    let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        r#"
+CREATE TABLE providers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cli_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  api_key_plaintext TEXT NOT NULL,
+  claude_models_json TEXT NOT NULL DEFAULT '{}',
+  supported_models_json TEXT NOT NULL DEFAULT '{}',
+  model_mapping_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO providers(
+  cli_key, name, base_url, api_key_plaintext, claude_models_json,
+  supported_models_json, model_mapping_json, created_at, updated_at
+) VALUES
+  ('claude', 'legacy', 'https://example.com', 'sk', '{"main_model":"legacy-main"}', '{"legacy":1}', '{"legacy":2}', 1, 1),
+  ('codex', 'default', 'https://example.com', 'sk', '{}', '{"legacy":3}', '{"legacy":4}', 1, 1);
+PRAGMA user_version = 37;
+        "#,
+    )
+    .expect("insert v37 providers");
+
+    v37_to_v38::migrate_v37_to_v38(&mut conn).expect("migrate v37->v38");
+
+    let rows: Vec<(String, Option<String>, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT cli_key, model_policy_json, supported_models_json, model_mapping_json FROM providers ORDER BY id DESC LIMIT 2",
+            )
+            .expect("prepare policy rows");
+        stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("query policy rows")
+        .collect::<Result<_, _>>()
+        .expect("read policy rows")
+    };
+    assert_eq!(rows[0].0, "codex");
+    assert_eq!(
+        rows[0].1.as_deref(),
+        Some(r#"{"version":1,"mode":"all","modelPatterns":[],"mappings":[]}"#)
+    );
+    assert_eq!(rows[0].2, r#"{"legacy":3}"#);
+    assert_eq!(rows[0].3, r#"{"legacy":4}"#);
+    assert_eq!(rows[1].0, "claude");
+    assert!(rows[1].1.is_none());
+    assert_eq!(rows[1].2, r#"{"legacy":1}"#);
+    assert_eq!(rows[1].3, r#"{"legacy":2}"#);
+
+    conn.execute(
+        "INSERT INTO providers(cli_key, name, base_url, api_key_plaintext, created_at, updated_at) VALUES ('gemini', 'new', 'https://example.com', 'sk', 1, 1)",
+        [],
+    )
+    .expect("insert provider using v38 model policy default");
+    let default_policy: Option<String> = conn
+        .query_row(
+            "SELECT model_policy_json FROM providers WHERE name = 'new'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read v38 model policy default");
+    assert_eq!(
+        default_policy.as_deref(),
+        Some(r#"{"version":1,"mode":"all","modelPatterns":[],"mappings":[]}"#)
+    );
+
+    v37_to_v38::migrate_v37_to_v38(&mut conn).expect("migrate v37->v38 twice");
+}
+
+#[test]
+fn migrate_v38_to_v39_adds_and_backfills_model_prices_vendor() {
+    let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        r#"
+CREATE TABLE model_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cli_key TEXT NOT NULL,
+  model TEXT NOT NULL,
+  price_json TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(cli_key, model)
+);
+INSERT INTO model_prices(cli_key, model, price_json, created_at, updated_at) VALUES
+  ('claude', 'claude-opus-4-5', '{}', 1, 1),
+  ('codex', 'gpt-5.4', '{}', 1, 1),
+  ('gemini', 'gemini-3-pro', '{}', 1, 1),
+  ('grok', 'grok-5', '{}', 1, 1);
+PRAGMA user_version = 38;
+        "#,
+    )
+    .expect("insert v38 model_prices");
+
+    v38_to_v39::migrate_v38_to_v39(&mut conn).expect("migrate v38->v39");
+
+    let vendors: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT cli_key, vendor FROM model_prices ORDER BY cli_key")
+            .expect("prepare vendor rows");
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query vendor rows")
+            .collect::<Result<_, _>>()
+            .expect("read vendor rows")
+    };
+    assert_eq!(
+        vendors,
+        vec![
+            ("claude".to_string(), "anthropic".to_string()),
+            ("codex".to_string(), "openai".to_string()),
+            ("gemini".to_string(), "google".to_string()),
+            ("grok".to_string(), "xai".to_string()),
+        ]
+    );
+
+    // Re-running must not fail or clobber a vendor written by a newer sync.
+    conn.execute(
+        "UPDATE model_prices SET vendor = 'deepseek' WHERE cli_key = 'claude'",
+        [],
+    )
+    .expect("simulate synced vendor");
+    v38_to_v39::migrate_v38_to_v39(&mut conn).expect("migrate v38->v39 twice");
+    let vendor: String = conn
+        .query_row(
+            "SELECT vendor FROM model_prices WHERE cli_key = 'claude'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read vendor after rerun");
+    assert_eq!(vendor, "deepseek");
+}
+
+#[test]
 fn migrate_v32_to_v33_backfills_pool_and_default_route_orders() {
     let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.execute_batch(

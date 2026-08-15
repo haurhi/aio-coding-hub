@@ -20,7 +20,7 @@ pub use types::{
 mod costing;
 use costing::{has_any_cost_usage, is_success_status, usage_for_cost};
 
-mod semantics;
+pub(crate) mod semantics;
 
 mod queries;
 use queries::{final_provider_from_attempts, parse_attempts, validate_cli_key};
@@ -312,6 +312,15 @@ pub(crate) fn effective_cost_basis(
     if let Some((cli_key, model)) = parse_cx2cc_cost_basis(special_settings_json, final_provider_id)
     {
         return Some(EffectiveCostBasis { cli_key, model });
+    }
+
+    if let Some(model) =
+        semantics::resolve_model_redirect_target(special_settings_json, final_provider_id)
+    {
+        return Some(EffectiveCostBasis {
+            cli_key: cli_key.to_string(),
+            model,
+        });
     }
 
     let model = requested_model
@@ -609,8 +618,13 @@ fn insert_batch_once(
                 .map_err(|e| {
                     DbWriteError::from_rusqlite("failed to prepare cost_multiplier query", e)
                 })?;
+        // Prices are stored once per model (keyed by the vendor's natural CLI); prefer an exact
+        // cli_key match (manual overrides) and fall back to any CLI's row for the same model.
+        // ponytail: full scan of a few-hundred-row table; add idx(model) if it ever shows up.
         let mut stmt_price_json = tx
-            .prepare_cached("SELECT price_json FROM model_prices WHERE cli_key = ?1 AND model = ?2")
+            .prepare_cached(
+                "SELECT price_json FROM model_prices WHERE model = ?2 ORDER BY (cli_key = ?1) DESC LIMIT 1",
+            )
             .map_err(|e| DbWriteError::from_rusqlite("failed to prepare model_price query", e))?;
 
         let mut stmt = tx
@@ -930,10 +944,11 @@ GROUP BY cli_key, session_id
 #[cfg(test)]
 mod tests {
     use super::{
-        insert_batch_once, parse_cx2cc_cost_basis, purge_expired, reconcile_unresolved_pending,
-        touch_activity, try_acquire_write_through_permit, writer_loop, InsertBatchCache,
-        RequestLogInsert, RequestLogReconcileReason, COST_MULTIPLIER_CACHE_MAX_ENTRIES,
-        EFFECTIVE_COST_MULTIPLIER_SQL, MODEL_PRICE_CACHE_MAX_ENTRIES, WRITE_BATCH_MAX,
+        effective_cost_basis, insert_batch_once, parse_cx2cc_cost_basis, purge_expired,
+        reconcile_unresolved_pending, touch_activity, try_acquire_write_through_permit,
+        writer_loop, InsertBatchCache, RequestLogInsert, RequestLogReconcileReason,
+        COST_MULTIPLIER_CACHE_MAX_ENTRIES, EFFECTIVE_COST_MULTIPLIER_SQL,
+        MODEL_PRICE_CACHE_MAX_ENTRIES, WRITE_BATCH_MAX,
     };
     use rusqlite::{params, Connection};
     use std::sync::Arc;
@@ -1546,6 +1561,37 @@ WHERE trace_id = ?1
     }
 
     #[test]
+    fn effective_cost_basis_uses_redirect_from_final_provider_only() {
+        let settings = serde_json::json!([
+            {
+                "type": "model_redirect",
+                "providerId": 7,
+                "targetModel": "failed-provider-model"
+            },
+            {
+                "type": "model_redirect",
+                "providerId": 8,
+                "targetModel": "deepseek-v4-flash"
+            }
+        ])
+        .to_string();
+
+        for cli_key in ["claude", "codex", "gemini", "grok"] {
+            let matched =
+                effective_cost_basis(cli_key, Some("gpt-5.6-luna"), Some(&settings), Some(8))
+                    .expect("matched cost basis");
+            assert_eq!(matched.cli_key, cli_key);
+            assert_eq!(matched.model, "deepseek-v4-flash");
+
+            let unmatched =
+                effective_cost_basis(cli_key, Some("gpt-5.6-luna"), Some(&settings), Some(9))
+                    .expect("requested model fallback");
+            assert_eq!(unmatched.cli_key, cli_key);
+            assert_eq!(unmatched.model, "gpt-5.6-luna");
+        }
+    }
+
+    #[test]
     fn cx2cc_cost_basis_uses_codex_cache_creation_buckets_when_persisting_cost() {
         let (app, db, _dir) = init_test_db();
         let app_handle = app.handle().clone();
@@ -1672,6 +1718,47 @@ VALUES ('claude', 'claude-client-model', '{"input_cost_per_token":0.001}', 1, 1)
             read_cost("trace-cx2cc-failover-plain-claude-cost"),
             100_000_000_000_000,
             "a failed CX2CC attempt must not price the final plain Claude response"
+        );
+    }
+
+    #[test]
+    fn model_price_lookup_falls_back_across_cli_keys() {
+        let (app, db, _dir) = init_test_db();
+        let app_handle = app.handle().clone();
+        let conn = db.open_connection().expect("open connection");
+        conn.execute(
+            r#"
+INSERT INTO model_prices (cli_key, model, price_json, created_at, updated_at)
+VALUES ('claude', 'kimi-k3', '{"input_cost_per_token":0.001}', 1, 1)
+"#,
+            [],
+        )
+        .expect("insert third-party model price");
+        drop(conn);
+
+        let items = vec![RequestLogInsert {
+            cli_key: "codex".to_string(),
+            requested_model: Some("kimi-k3".to_string()),
+            input_tokens: Some(100),
+            total_tokens: Some(100),
+            ..request_log_insert("trace-cross-cli-price-fallback")
+        }];
+
+        insert_batch_once(&app_handle, &db, &items, &mut InsertBatchCache::default())
+            .expect("insert request log");
+
+        let conn = db.open_connection().expect("open connection");
+        let cost: Option<i64> = conn
+            .query_row(
+                "SELECT cost_usd_femto FROM request_logs WHERE trace_id = 'trace-cross-cli-price-fallback'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read request cost");
+        assert_eq!(
+            cost,
+            Some(100_000_000_000_000),
+            "price stored under another cli_key must still price the request"
         );
     }
 

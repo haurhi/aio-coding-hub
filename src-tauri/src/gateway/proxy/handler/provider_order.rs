@@ -81,6 +81,8 @@ mod tests {
             api_key_plaintext: String::new(),
             claude_models: providers::ClaudeModels::default(),
             model_mapping: Default::default(),
+            model_policy: Some(providers::ProviderModelPolicyV1::all()),
+            model_policy_status: providers::ProviderModelPolicyStatus::Ready,
             limit_5h_usd: None,
             limit_daily_usd: None,
             daily_reset_mode: providers::DailyResetMode::Fixed,

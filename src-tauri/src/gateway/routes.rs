@@ -364,6 +364,17 @@ mod tests {
         tokio::sync::oneshot::Receiver<String>,
         tokio::task::JoinHandle<()>,
     ) {
+        spawn_capturing_status_json_upstream("200 OK", body).await
+    }
+
+    async fn spawn_capturing_status_json_upstream(
+        status: &'static str,
+        body: &'static str,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind capturing json upstream stub");
@@ -378,7 +389,7 @@ mod tests {
                     .unwrap_or_default();
                 let _ = tx.send(captured_body);
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                     body.len(),
                     body
                 );
@@ -641,6 +652,47 @@ mod tests {
         (format!("http://{addr}"), call_count, task)
     }
 
+    async fn spawn_rectifier_retry_upstream(
+        error_body: &'static str,
+        success_body: &'static str,
+    ) -> (
+        String,
+        tokio::sync::mpsc::Receiver<CapturedRawRequest>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind rectifier retry upstream stub");
+        let addr = listener
+            .local_addr()
+            .expect("rectifier retry upstream addr");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(async move {
+            for index in 0..2 {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let request =
+                    split_raw_http_request(read_complete_http_request_bytes(&mut socket).await);
+                let _ = tx.send(request).await;
+                let (status_line, body) = if index == 0 {
+                    ("400 Bad Request", error_body)
+                } else {
+                    ("200 OK", success_body)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), rx, task)
+    }
+
     fn gzip_bytes(input: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(input).expect("gzip write");
@@ -787,6 +839,36 @@ mod tests {
         (format!("http://{addr}"), task)
     }
 
+    async fn spawn_capturing_sse_upstream(
+        body: &'static str,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<CapturedRawRequest>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind capturing sse upstream stub");
+        let addr = listener.local_addr().expect("capturing sse upstream addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let request =
+                    split_raw_http_request(read_complete_http_request_bytes(&mut socket).await);
+                let _ = tx.send(request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{addr}"), rx, task)
+    }
+
     async fn spawn_stalling_sse_upstream(
         first_chunk: &'static str,
     ) -> (String, tokio::task::JoinHandle<()>) {
@@ -855,6 +937,17 @@ mod tests {
         base_url: String,
         priority: i64,
     ) -> i64 {
+        insert_provider_with_priority_and_policy(db, cli_key, name, base_url, priority, None)
+    }
+
+    fn insert_provider_with_priority_and_policy(
+        db: &db::Db,
+        cli_key: &str,
+        name: &str,
+        base_url: String,
+        priority: i64,
+        model_policy: Option<providers::ProviderModelPolicyV1>,
+    ) -> i64 {
         let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
@@ -870,6 +963,7 @@ mod tests {
                 priority: Some(priority),
                 claude_models: None,
                 model_mapping: None,
+                model_policy,
                 limit_5h_usd: None,
                 limit_daily_usd: None,
                 daily_reset_mode: None,
@@ -889,6 +983,29 @@ mod tests {
         .id;
         append_default_route_provider(db, cli_key, provider_id);
         provider_id
+    }
+
+    fn selected_model_policy(
+        source: &str,
+        target: Option<&str>,
+    ) -> providers::ProviderModelPolicyV1 {
+        providers::ProviderModelPolicyV1 {
+            version: 1,
+            mode: providers::ProviderModelMode::Selected,
+            model_patterns: target
+                .is_none()
+                .then(|| source.to_string())
+                .into_iter()
+                .collect(),
+            mappings: target
+                .map(|target| {
+                    vec![providers::ProviderModelMapping {
+                        source: source.to_string(),
+                        target: target.to_string(),
+                    }]
+                })
+                .unwrap_or_default(),
+        }
     }
 
     fn append_default_route_provider(db: &db::Db, cli_key: &str, provider_id: i64) {
@@ -936,6 +1053,7 @@ mod tests {
                 priority: Some(priority),
                 claude_models: None,
                 model_mapping: None,
+                model_policy: None,
                 limit_5h_usd: None,
                 limit_daily_usd: None,
                 daily_reset_mode: None,
@@ -973,6 +1091,7 @@ mod tests {
                 priority: Some(priority),
                 claude_models: None,
                 model_mapping: None,
+                model_policy: None,
                 limit_5h_usd: None,
                 limit_daily_usd: None,
                 daily_reset_mode: None,
@@ -995,6 +1114,15 @@ mod tests {
     }
 
     fn insert_cx2cc_bridge_provider(db: &db::Db, source_provider_id: i64, priority: i64) -> i64 {
+        insert_cx2cc_bridge_provider_with_policy(db, source_provider_id, priority, None)
+    }
+
+    fn insert_cx2cc_bridge_provider_with_policy(
+        db: &db::Db,
+        source_provider_id: i64,
+        priority: i64,
+        model_policy: Option<providers::ProviderModelPolicyV1>,
+    ) -> i64 {
         let provider_id = providers::upsert(
             db,
             providers::ProviderUpsertParams {
@@ -1010,6 +1138,7 @@ mod tests {
                 priority: Some(priority),
                 claude_models: None,
                 model_mapping: None,
+                model_policy,
                 limit_5h_usd: None,
                 limit_daily_usd: None,
                 daily_reset_mode: None,
@@ -1098,6 +1227,14 @@ mod tests {
         response: Value,
         log: request_logs::RequestLogInsert,
         provider_id: i64,
+    }
+
+    struct GrokSseRouteObservation {
+        captured: CapturedRawRequest,
+        body: String,
+        log: request_logs::RequestLogInsert,
+        provider_id: i64,
+        session: Arc<session_manager::SessionManager>,
     }
 
     async fn run_grok_json_route(
@@ -1288,7 +1425,7 @@ mod tests {
         route_path: &'static str,
         request_body: &'static str,
         response_body: &'static str,
-    ) -> (String, request_logs::RequestLogInsert, i64) {
+    ) -> GrokSseRouteObservation {
         let _env_lock = crate::test_support::test_env_lock();
         let home = tempfile::tempdir().expect("home dir");
         let _env = isolate_app_env(home.path());
@@ -1303,11 +1440,23 @@ mod tests {
         let db_dir = tempfile::tempdir().expect("db dir");
         let db = db::init_for_tests(&db_dir.path().join("gateway-route-grok-sse.sqlite"))
             .expect("init test db");
-        let (upstream_base_url, upstream_task) = spawn_sse_upstream(response_body).await;
+        let (upstream_base_url, captured_rx, upstream_task) =
+            spawn_capturing_sse_upstream(response_body).await;
         let provider_id =
             insert_provider_with_priority(&db, "grok", "Grok SSE Stub", upstream_base_url, 0);
         let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(8);
-        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let session = Arc::new(session_manager::SessionManager::new());
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            Arc::new(circuit_breaker::CircuitBreaker::new(
+                circuit_breaker::CircuitBreakerConfig::default(),
+                HashMap::new(),
+                None,
+            )),
+            Arc::clone(&session),
+        ));
         let request = Request::builder()
             .method(Method::POST)
             .uri(route_path)
@@ -1330,9 +1479,16 @@ mod tests {
                 .to_vec(),
         )
         .expect("UTF-8 SSE body");
+        let captured = captured_rx.await.expect("captured upstream request");
         let log = recv_terminal_request_log(&mut log_rx).await;
         upstream_task.abort();
-        (body, log, provider_id)
+        GrokSseRouteObservation {
+            captured,
+            body,
+            log,
+            provider_id,
+            session,
+        }
     }
 
     fn assert_single_success_attempt(log: &request_logs::RequestLogInsert, provider_id: i64) {
@@ -1350,10 +1506,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn mock_runtime_router_grok_responses_json_is_transparent_and_logged() {
+    async fn mock_runtime_router_grok_responses_json_normalizes_input_and_logs_usage() {
         let request_body =
             r#"{"model":"grok-json-responses","input":"hello","store":false,"stream":false}"#;
-        let response_body = r#"{"id":"resp-grok-json","object":"response","model":"grok-json-responses","output":[],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}"#;
+        let response_body = r#"{"id":"resp-grok-json","object":"response","model":"grok-json-responses","output":[{"type":"message","content":[{"type":"output_text","text":null,"annotations":null,"logprobs":null}],"summary":null,"arguments":{"query":"hello"}}],"tools":null,"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}"#;
         let observation = run_grok_json_route(
             "/grok/v1/responses?source=grok-test",
             request_body,
@@ -1381,12 +1537,38 @@ mod tests {
             .has_header_line("x-grok-req-id: grok-request-route"));
         assert_eq!(
             serde_json::from_slice::<Value>(&observation.captured.body).expect("request JSON"),
-            serde_json::from_str::<Value>(request_body).expect("expected request JSON")
+            serde_json::json!({
+                "model":"grok-json-responses",
+                "input":[{
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"hello"}]
+                }],
+                "store":false,
+                "stream":false
+            })
         );
         assert_eq!(
             observation.response.get("id").and_then(Value::as_str),
             Some("resp-grok-json")
         );
+        assert_eq!(observation.response["output"][0]["content"][0]["text"], "");
+        assert_eq!(
+            observation.response["output"][0]["content"][0]["annotations"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            observation.response["output"][0]["content"][0]["logprobs"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            observation.response["output"][0]["summary"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            observation.response["output"][0]["arguments"],
+            r#"{"query":"hello"}"#
+        );
+        assert_eq!(observation.response["tools"], serde_json::json!([]));
         assert_eq!(observation.log.cli_key, "grok");
         assert_eq!(observation.log.path, "/v1/responses");
         assert_eq!(observation.log.query.as_deref(), Some("source=grok-test"));
@@ -1402,6 +1584,19 @@ mod tests {
         assert_eq!(observation.log.input_tokens, Some(11));
         assert_eq!(observation.log.output_tokens, Some(7));
         assert_eq!(observation.log.total_tokens, Some(18));
+        let settings: Value = serde_json::from_str(
+            observation
+                .log
+                .special_settings_json
+                .as_deref()
+                .expect("special settings"),
+        )
+        .expect("special settings JSON");
+        assert!(settings
+            .as_array()
+            .is_some_and(|settings| settings.iter().any(|setting| {
+                setting.get("type").and_then(Value::as_str) == Some("response_output_normalizer")
+            })));
         assert_single_success_attempt(&observation.log, observation.provider_id);
     }
 
@@ -1433,28 +1628,90 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn mock_runtime_router_grok_responses_sse_is_transparent_and_logged() {
+    async fn mock_runtime_router_grok_responses_sse_normalizes_input_and_logs_usage() {
         let sse_body = concat!(
             "event: response.created\n",
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-grok-sse\",\"status\":\"in_progress\",\"model\":\"grok-sse-responses\",\"usage\":{\"input_tokens\":9,\"output_tokens\":0,\"total_tokens\":9}}}\n\n",
             "event: response.completed\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-grok-sse\",\"status\":\"completed\",\"model\":\"grok-sse-responses\",\"output\":[],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n"
         );
-        let (body, log, provider_id) = run_grok_sse_route(
+        let observation = run_grok_sse_route(
             "/grok/v1/responses",
             r#"{"model":"grok-sse-responses","input":"hello","stream":true,"store":false}"#,
             sse_body,
         )
         .await;
 
-        assert!(body.contains("event: response.completed"));
-        assert_eq!(log.cli_key, "grok");
-        assert_eq!(log.path, "/v1/responses");
-        assert_eq!(log.session_id.as_deref(), Some("grok-session-stream"));
-        assert_eq!(log.input_tokens, Some(9));
-        assert_eq!(log.output_tokens, Some(4));
-        assert_eq!(log.total_tokens, Some(13));
-        assert_single_success_attempt(&log, provider_id);
+        assert!(observation.body.contains("event: response.completed"));
+        assert_eq!(observation.log.cli_key, "grok");
+        assert_eq!(observation.log.path, "/v1/responses");
+        assert_eq!(
+            observation.log.session_id.as_deref(),
+            Some("grok-session-stream")
+        );
+        assert_eq!(observation.log.input_tokens, Some(9));
+        assert_eq!(observation.log.output_tokens, Some(4));
+        assert_eq!(observation.log.total_tokens, Some(13));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&observation.captured.body).expect("request JSON"),
+            serde_json::json!({
+                "model":"grok-sse-responses",
+                "input":[{
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"hello"}]
+                }],
+                "stream":true,
+                "store":false
+            })
+        );
+        assert_single_success_attempt(&observation.log, observation.provider_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mock_runtime_router_grok_response_failed_is_terminal_without_session_binding() {
+        let sse_body = concat!(
+            "event: response.failed\n",
+            "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-grok-failed\",\"object\":\"response\",\"status\":\"failed\",\"error\":{\"message\":\"upstream failed\"}}}\n\n"
+        );
+        let observation = run_grok_sse_route(
+            "/grok/v1/responses",
+            r#"{"model":"grok-failed-responses","input":"hello","stream":true}"#,
+            sse_body,
+        )
+        .await;
+
+        assert_eq!(
+            observation.log.status,
+            Some(i64::from(StatusCode::BAD_GATEWAY.as_u16()))
+        );
+        assert_eq!(
+            observation.log.error_code.as_deref(),
+            Some(crate::gateway::proxy::GatewayErrorCode::Fake200.as_str())
+        );
+        assert_eq!(
+            observation.session.get_bound_provider(
+                "grok",
+                "grok-session-stream",
+                crate::gateway::util::now_unix_seconds() as i64,
+            ),
+            None
+        );
+
+        let settings: Value = serde_json::from_str(
+            observation
+                .log
+                .special_settings_json
+                .as_deref()
+                .expect("special settings"),
+        )
+        .expect("special settings JSON");
+        assert!(settings
+            .as_array()
+            .is_some_and(|settings| settings.iter().any(|setting| {
+                setting.get("type").and_then(Value::as_str) == Some("fake_200_detection")
+                    && setting.get("reason_code").and_then(Value::as_str)
+                        == Some("fake_200_openai_response_failed")
+            })));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1463,21 +1720,39 @@ mod tests {
             "data: {\"id\":\"chatcmpl-grok-sse\",\"object\":\"chat.completion.chunk\",\"model\":\"grok-sse-chat\",\"choices\":[],\"usage\":{\"prompt_tokens\":6,\"completion_tokens\":2,\"total_tokens\":8}}\n\n",
             "data: [DONE]\n\n"
         );
-        let (body, log, provider_id) = run_grok_sse_route(
+        let observation = run_grok_sse_route(
             "/grok/v1/chat/completions",
             r#"{"model":"grok-sse-chat","messages":[{"role":"user","content":"hello"}],"stream":true}"#,
             sse_body,
         )
         .await;
 
-        assert!(body.contains("data: [DONE]"));
-        assert_eq!(log.cli_key, "grok");
-        assert_eq!(log.path, "/v1/chat/completions");
-        assert_eq!(log.session_id.as_deref(), Some("grok-session-stream"));
-        assert_eq!(log.input_tokens, Some(6));
-        assert_eq!(log.output_tokens, Some(2));
-        assert_eq!(log.total_tokens, Some(8));
-        assert_single_success_attempt(&log, provider_id);
+        assert!(observation.body.contains("data: [DONE]"));
+        assert_eq!(observation.log.cli_key, "grok");
+        assert_eq!(observation.log.path, "/v1/chat/completions");
+        assert_eq!(
+            observation.log.session_id.as_deref(),
+            Some("grok-session-stream")
+        );
+        assert_eq!(observation.log.input_tokens, Some(6));
+        assert_eq!(observation.log.output_tokens, Some(2));
+        assert_eq!(observation.log.total_tokens, Some(8));
+        let captured: Value =
+            serde_json::from_slice(&observation.captured.body).expect("request JSON");
+        assert_eq!(captured["stream_options"]["include_usage"], true);
+        let settings: Value = serde_json::from_str(
+            observation
+                .log
+                .special_settings_json
+                .as_deref()
+                .expect("special settings"),
+        )
+        .expect("special settings JSON");
+        assert!(settings.as_array().is_some_and(|settings| settings
+            .iter()
+            .any(|setting| setting.get("type").and_then(Value::as_str)
+                == Some("grok_chat_stream_usage"))));
+        assert_single_success_attempt(&observation.log, observation.provider_id);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3631,6 +3906,393 @@ module.exports.activate = function activate(api) {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn provider_model_routing_failover_recomputes_redirect_from_original_model() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 2;
+        app_settings.provider_cooldown_seconds = 0;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("provider-model-routing-failover.sqlite"))
+            .expect("init test db");
+        let first_error = r#"{"error":{"message":"temporary upstream failure"}}"#;
+        let success_body = r#"{"id":"stub-ok","object":"chat.completion","choices":[]}"#;
+        let (first_base_url, first_capture_rx, first_task) =
+            spawn_capturing_status_json_upstream("500 Internal Server Error", first_error).await;
+        let (second_base_url, second_capture_rx, second_task) =
+            spawn_capturing_json_upstream(success_body).await;
+        let first_provider_id = insert_provider_with_priority_and_policy(
+            &db,
+            "codex",
+            "Redirect A",
+            first_base_url,
+            0,
+            Some(selected_model_policy("gpt-original", Some("model-a"))),
+        );
+        let second_provider_id = insert_provider_with_priority_and_policy(
+            &db,
+            "codex",
+            "Redirect B",
+            second_base_url,
+            1,
+            Some(selected_model_policy("gpt-original", Some("model-b"))),
+        );
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"gpt-original","messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let first_body: Value = serde_json::from_str(
+            &first_capture_rx
+                .await
+                .expect("first upstream request capture"),
+        )
+        .expect("first upstream body");
+        let second_body: Value = serde_json::from_str(
+            &second_capture_rx
+                .await
+                .expect("second upstream request capture"),
+        )
+        .expect("second upstream body");
+        assert_eq!(
+            first_body.get("model").and_then(Value::as_str),
+            Some("model-a")
+        );
+        assert_eq!(
+            second_body.get("model").and_then(Value::as_str),
+            Some("model-b")
+        );
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("model redirect settings"),
+        )
+        .expect("special settings json");
+        let redirects: Vec<&Value> = special_settings
+            .as_array()
+            .expect("special settings array")
+            .iter()
+            .filter(|setting| setting.get("type").and_then(Value::as_str) == Some("model_redirect"))
+            .collect();
+        assert_eq!(redirects.len(), 2);
+        for (redirect, provider_id, target) in [
+            (redirects[0], first_provider_id, "model-a"),
+            (redirects[1], second_provider_id, "model-b"),
+        ] {
+            assert_eq!(
+                redirect.get("providerId").and_then(Value::as_i64),
+                Some(provider_id)
+            );
+            assert_eq!(
+                redirect.get("sourceModel").and_then(Value::as_str),
+                Some("gpt-original")
+            );
+            assert_eq!(
+                redirect.get("targetModel").and_then(Value::as_str),
+                Some(target)
+            );
+        }
+
+        first_task.abort();
+        second_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_model_routing_rejects_forced_ineligible_provider() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+        crate::cli_proxy::set_enabled(&app_handle, "codex", true, "http://127.0.0.1:37123")
+            .expect("enable codex cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("provider-model-routing-forced.sqlite"))
+            .expect("init test db");
+        let provider_id = insert_provider_with_priority_and_policy(
+            &db,
+            "codex",
+            "Forced Ineligible",
+            "http://127.0.0.1:9".to_string(),
+            0,
+            Some(selected_model_policy("gpt-other", None)),
+        );
+        let (log_tx, _log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/codex/_aio/provider/{provider_id}/v1/chat/completions"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"gpt-original","messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let payload: Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(
+            payload.get("error_code").and_then(Value::as_str),
+            Some(
+                crate::gateway::proxy::GatewayErrorCode::ForcedProviderNotEligibleForModel.as_str()
+            )
+        );
+    }
+
+    // Legacy claude_models mappings surface as a unified model_redirect (stage
+    // "legacy") on the recorded attempts, alongside the persisted
+    // claude_model_mapping special setting.
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_claude_mapping_records_model_redirect_on_attempts() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.provider_cooldown_seconds = 0;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("legacy-mapping-redirect.sqlite"))
+            .expect("init test db");
+        let success_body = r#"{
+            "id":"msg_legacy",
+            "type":"message",
+            "role":"assistant",
+            "model":"legacy-target",
+            "content":[{"type":"text","text":"ok"}],
+            "usage":{"input_tokens":1,"output_tokens":1}
+        }"#;
+        let (upstream_base_url, capture_rx, upstream_task) =
+            spawn_capturing_json_upstream(success_body).await;
+        let provider_id = providers::upsert(
+            &db,
+            providers::ProviderUpsertParams {
+                provider_id: None,
+                cli_key: "claude".to_string(),
+                name: "Legacy Mapping Provider".to_string(),
+                base_urls: vec![upstream_base_url],
+                base_url_mode: providers::ProviderBaseUrlMode::Order,
+                auth_mode: None,
+                api_key: Some("sk-test".to_string()),
+                enabled: true,
+                cost_multiplier: 1.0,
+                priority: Some(0),
+                claude_models: Some(providers::ClaudeModels {
+                    sonnet_model: Some("legacy-target".to_string()),
+                    ..Default::default()
+                }),
+                model_mapping: None,
+                model_policy: None,
+                limit_5h_usd: None,
+                limit_daily_usd: None,
+                daily_reset_mode: None,
+                daily_reset_time: None,
+                limit_weekly_usd: None,
+                limit_monthly_usd: None,
+                limit_total_usd: None,
+                tags: None,
+                note: None,
+                source_provider_id: None,
+                bridge_type: None,
+                stream_idle_timeout_seconds: None,
+                extension_values: None,
+            },
+        )
+        .expect("insert legacy provider")
+        .id;
+        append_default_route_provider(&db, "claude", provider_id);
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/claude/_aio/provider/{provider_id}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-3-5-sonnet","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let upstream_body: Value =
+            serde_json::from_str(&capture_rx.await.expect("upstream request capture"))
+                .expect("upstream body");
+        assert_eq!(
+            upstream_body.get("model").and_then(Value::as_str),
+            Some("legacy-target")
+        );
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        let redirect = attempts
+            .as_array()
+            .expect("attempt array")
+            .iter()
+            .find_map(|attempt| attempt.get("model_redirect"))
+            .expect("legacy attempt carries model_redirect");
+        assert_eq!(
+            redirect.get("stage").and_then(Value::as_str),
+            Some("legacy")
+        );
+        assert_eq!(
+            redirect.get("sourceModel").and_then(Value::as_str),
+            Some("claude-3-5-sonnet")
+        );
+        assert_eq!(
+            redirect.get("targetModel").and_then(Value::as_str),
+            Some("legacy-target")
+        );
+
+        // The persisted special setting keeps the legacy claude_model_mapping shape.
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings"),
+        )
+        .expect("special settings json");
+        assert!(special_settings
+            .as_array()
+            .expect("special settings array")
+            .iter()
+            .any(|setting| setting.get("type").and_then(Value::as_str)
+                == Some("claude_model_mapping")));
+
+        upstream_task.abort();
+    }
+
+    // cx2cc bridges map models through claude_models only; a ready model policy on the
+    // bridge must not overwrite the bridge-translated model (single mapping mechanism).
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_model_routing_cx2cc_bridge_uses_claude_models_not_policy() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.provider_cooldown_seconds = 0;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("provider-model-routing-cx2cc.sqlite"))
+            .expect("init test db");
+        let success_body = r#"{
+            "id":"resp_bridge",
+            "model":"bridge-target",
+            "status":"completed",
+            "output":[{
+                "type":"message",
+                "role":"assistant",
+                "content":[{"type":"output_text","text":"ok"}]
+            }],
+            "usage":{"input_tokens":1,"output_tokens":1}
+        }"#;
+        let (upstream_base_url, capture_rx, upstream_task) =
+            spawn_capturing_json_upstream(success_body).await;
+        let source_provider_id = insert_provider_with_priority_and_policy(
+            &db,
+            "codex",
+            "CX2CC Source",
+            upstream_base_url,
+            0,
+            Some(selected_model_policy(
+                "bridge-target",
+                Some("source-target"),
+            )),
+        );
+        let bridge_provider_id = insert_cx2cc_bridge_provider_with_policy(
+            &db,
+            source_provider_id,
+            0,
+            Some(selected_model_policy(
+                "claude-3-5-sonnet",
+                Some("bridge-target"),
+            )),
+        );
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/claude/_aio/provider/{bridge_provider_id}/v1/messages"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-3-5-sonnet","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let upstream_body: Value =
+            serde_json::from_str(&capture_rx.await.expect("upstream request capture"))
+                .expect("upstream body");
+        // claude_models bridge translation wins; the policy mapping (claude-3-5-sonnet
+        // -> bridge-target) must not overwrite it.
+        assert_eq!(
+            upstream_body.get("model").and_then(Value::as_str),
+            Some("gpt-5.4")
+        );
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let redirects: Vec<Value> = log
+            .special_settings_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .and_then(|settings| settings.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|setting| setting.get("type").and_then(Value::as_str) == Some("model_redirect"))
+            .collect();
+        assert!(
+            redirects.is_empty(),
+            "policy mapping must not run on cx2cc bridges: {redirects:?}"
+        );
+        let _ = bridge_provider_id;
+
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn mock_runtime_router_fails_over_from_timeout_to_second_provider_success() {
         let _env_lock = crate::test_support::test_env_lock();
         let home = tempfile::tempdir().expect("home dir");
@@ -3738,6 +4400,509 @@ module.exports.activate = function activate(api) {
 
         timeout_task.abort();
         success_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn claude_final_outbound_request_preserves_cch_client_identity_signals() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "claude", true, "http://127.0.0.1:37123")
+            .expect("enable claude cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-claude-client-fingerprint.sqlite"),
+        )
+        .expect("init test db");
+        let response_body = r#"{"id":"msg_ok","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let (upstream_base_url, captured_rx, upstream_task) =
+            spawn_capturing_raw_upstream(response_body).await;
+        let provider_id = insert_provider_with_priority(
+            &db,
+            "claude",
+            "Claude Identity Stub",
+            upstream_base_url,
+            0,
+        );
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state(app_handle, db, log_tx));
+        let session_id = "claude-route-session";
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/claude/_aio/provider/{provider_id}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::USER_AGENT, "claude-cli/2.1.168 (external, cli)")
+            .header("x-app", "cli")
+            .header("anthropic-beta", "oauth-2025-04-20")
+            .header("x-session-id", session_id)
+            .header("x-api-key", "client-placeholder")
+            .body(Body::from(
+                r#"{"model":"claude-test","max_tokens":128,"metadata":{},"messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = tokio::time::timeout(Duration::from_secs(2), captured_rx)
+            .await
+            .expect("captured upstream request")
+            .expect("captured raw request");
+
+        assert!(captured.head.starts_with("POST /v1/messages HTTP/1.1"));
+        assert!(captured.has_header_line("user-agent: claude-cli/2.1.168 (external, cli)"));
+        assert!(captured.has_header_line("x-app: cli"));
+        assert!(captured.has_header_line("anthropic-beta: oauth-2025-04-20"));
+        assert!(captured.has_header_line("x-api-key: sk-test"));
+        assert!(!captured.text().contains("client-placeholder"));
+
+        let body: Value = serde_json::from_slice(&captured.body).expect("upstream request JSON");
+        let user_id = body
+            .pointer("/metadata/user_id")
+            .and_then(Value::as_str)
+            .expect("string metadata.user_id");
+        let metadata: Value = serde_json::from_str(user_id).expect("CCH metadata JSON string");
+        assert_eq!(
+            metadata.get("session_id").and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            metadata.get("account_uuid").and_then(Value::as_str),
+            Some("")
+        );
+        assert!(metadata
+            .get("device_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        assert_eq!(log.status, Some(200));
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn claude_client_restriction_503_switches_provider_without_health_damage() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 5;
+        app_settings.failover_max_providers_to_try = 2;
+        app_settings.circuit_breaker_failure_threshold = 1;
+        app_settings.provider_cooldown_seconds = 60;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "claude", true, "http://127.0.0.1:37123")
+            .expect("enable claude cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-claude-client-restriction.sqlite"),
+        )
+        .expect("init test db");
+        let restriction_body = r#"{"error":{"message":"No available accounts: this group only allows Claude Code clients","type":"api_error"},"type":"error"}"#;
+        let success_body = r#"{"id":"msg_ok","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let (restricted_url, restricted_calls, restricted_task) =
+            spawn_counting_status_upstream(StatusCode::SERVICE_UNAVAILABLE, restriction_body).await;
+        let (success_url, success_calls, success_task) =
+            spawn_counting_status_upstream(StatusCode::OK, success_body).await;
+        let restricted_provider_id = insert_provider_with_priority(
+            &db,
+            "claude",
+            "Restricted Claude Stub",
+            restricted_url,
+            0,
+        );
+        let success_provider_id =
+            insert_provider_with_priority(&db, "claude", "Claude Success Stub", success_url, 1);
+
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit.clone(),
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/claude/v1/messages")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::USER_AGENT, "claude-cli/2.1.168 (external, cli)")
+            .header("x-app", "cli")
+            .header("anthropic-beta", "oauth-2025-04-20")
+            .body(Body::from(
+                r#"{"model":"claude-test","max_tokens":128,"metadata":{"user_id":"session_test"},"messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        let attempts = attempts.as_array().expect("attempt array");
+
+        assert_eq!(
+            restricted_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(success_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0].get("provider_id").and_then(Value::as_i64),
+            Some(restricted_provider_id)
+        );
+        assert_eq!(
+            attempts[0].get("error_code").and_then(Value::as_str),
+            Some(crate::gateway::proxy::GatewayErrorCode::Upstream5xx.as_str())
+        );
+        assert_eq!(
+            attempts[0].get("decision").and_then(Value::as_str),
+            Some("switch")
+        );
+        assert_eq!(
+            attempts[0].get("reason_code").and_then(Value::as_str),
+            Some("claude_code_client_restriction")
+        );
+        assert_eq!(
+            attempts[1].get("provider_id").and_then(Value::as_i64),
+            Some(success_provider_id)
+        );
+
+        let snapshot = circuit.snapshot(
+            restricted_provider_id,
+            crate::gateway::util::now_unix_seconds() as i64,
+        );
+        assert_eq!(snapshot.state, circuit_breaker::CircuitState::Closed);
+        assert_eq!(snapshot.failure_count, 0);
+        assert_eq!(snapshot.cooldown_until, None);
+
+        restricted_task.abort();
+        success_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn generic_claude_503_keeps_same_provider_retry_and_circuit_behavior() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.failover_max_attempts_per_provider = 3;
+        app_settings.failover_max_providers_to_try = 2;
+        app_settings.circuit_breaker_failure_threshold = 3;
+        app_settings.provider_cooldown_seconds = 60;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+        crate::cli_proxy::set_enabled(&app_handle, "claude", true, "http://127.0.0.1:37123")
+            .expect("enable claude cli proxy");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-generic-claude-503.sqlite"),
+        )
+        .expect("init test db");
+        let generic_error = r#"{"error":{"message":"temporary upstream outage","type":"api_error"},"type":"error"}"#;
+        let success_body = r#"{"id":"msg_ok","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let (failed_url, failed_calls, failed_task) =
+            spawn_counting_status_upstream(StatusCode::SERVICE_UNAVAILABLE, generic_error).await;
+        let (success_url, success_calls, success_task) =
+            spawn_counting_status_upstream(StatusCode::OK, success_body).await;
+        let failed_provider_id =
+            insert_provider_with_priority(&db, "claude", "Generic 503 Stub", failed_url, 0);
+        insert_provider_with_priority(&db, "claude", "Claude Success Stub", success_url, 1);
+
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 3,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit.clone(),
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/claude/v1/messages")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        let attempts = attempts.as_array().expect("attempt array");
+
+        assert_eq!(failed_calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(success_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(attempts.len(), 4);
+        assert!(attempts[..3].iter().all(|attempt| {
+            attempt.get("provider_id").and_then(Value::as_i64) == Some(failed_provider_id)
+                && attempt.get("reason_code").and_then(Value::as_str)
+                    != Some("claude_code_client_restriction")
+        }));
+
+        let snapshot = circuit.snapshot(
+            failed_provider_id,
+            crate::gateway::util::now_unix_seconds() as i64,
+        );
+        assert_eq!(snapshot.state, circuit_breaker::CircuitState::Open);
+        assert_eq!(snapshot.failure_count, 3);
+        assert!(snapshot.cooldown_until.is_some());
+
+        failed_task.abort();
+        success_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn thinking_effort_rectifier_gets_one_retry_at_configured_limit_one() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.enable_thinking_effort_conflict_rectifier = true;
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 1;
+        app_settings.provider_cooldown_seconds = 60;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(&db_dir.path().join("gateway-route-thinking-effort.sqlite"))
+            .expect("init test db");
+        let error_body = r#"{"type":"error","error":{"message":"Invalid request: thinking cannot be disabled when reasoning_effort is set"}}"#;
+        let success_body = r#"{"id":"msg_ok","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let (upstream_url, mut captured_rx, upstream_task) =
+            spawn_rectifier_retry_upstream(error_body, success_body).await;
+        let provider_id =
+            insert_provider_with_priority(&db, "claude", "Thinking Effort Stub", upstream_url, 0);
+
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit.clone(),
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/claude/_aio/provider/{provider_id}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"model":"claude-test","max_tokens":128,"thinking":{"type":"disabled"},"output_config":{"effort":"max","verbosity":"high"},"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let first = captured_rx.recv().await.expect("first request");
+        let second = captured_rx.recv().await.expect("second request");
+        let first_body: Value = serde_json::from_slice(&first.body).expect("first body");
+        let second_body: Value = serde_json::from_slice(&second.body).expect("second body");
+        assert_eq!(first_body["output_config"]["effort"], "max");
+        assert_eq!(first_body["reasoning_effort"], "high");
+        assert_eq!(second_body["thinking"]["type"], "disabled");
+        assert_eq!(second_body["output_config"]["verbosity"], "high");
+        assert!(second_body["output_config"].get("effort").is_none());
+        assert!(second_body.get("reasoning_effort").is_none());
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        let attempts = attempts.as_array().expect("attempt array");
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0]["decision"], "retry");
+        assert_eq!(attempts[1]["outcome"], "success");
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings json"),
+        )
+        .expect("special settings parse");
+        let rectifier = special_settings
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(Value::as_str)
+                        == Some("thinking_effort_conflict_rectifier")
+                })
+            })
+            .expect("effort rectifier audit");
+        assert_eq!(
+            rectifier.get("grantedRetrySlot").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            rectifier
+                .get("removedOutputConfigEffort")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let snapshot = circuit.snapshot(provider_id, 0);
+        assert_eq!(snapshot.failure_count, 0);
+        assert_eq!(snapshot.cooldown_until, None);
+        upstream_task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gemini_function_id_rectifier_gets_one_retry_at_configured_limit_one() {
+        let _env_lock = crate::test_support::test_env_lock();
+        let home = tempfile::tempdir().expect("home dir");
+        let _env = isolate_app_env(home.path());
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+
+        let mut app_settings = settings::AppSettings::default();
+        app_settings.enable_gemini_function_id_rectifier = true;
+        app_settings.failover_max_attempts_per_provider = 1;
+        app_settings.failover_max_providers_to_try = 1;
+        app_settings.circuit_breaker_failure_threshold = 1;
+        app_settings.provider_cooldown_seconds = 60;
+        settings::write(&app_handle, &app_settings).expect("write settings");
+
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let db = db::init_for_tests(
+            &db_dir
+                .path()
+                .join("gateway-route-gemini-function-id.sqlite"),
+        )
+        .expect("init test db");
+        let error_body = r#"{"error":{"message":"Invalid JSON payload received. Unknown name \"id\" at 'contents[0].parts[0].functionCall': Cannot find field."}}"#;
+        let success_body = r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"#;
+        let (upstream_url, mut captured_rx, upstream_task) =
+            spawn_rectifier_retry_upstream(error_body, success_body).await;
+        let provider_id = insert_provider_with_priority(
+            &db,
+            "gemini",
+            "Gemini Function ID Stub",
+            upstream_url,
+            0,
+        );
+
+        let circuit = Arc::new(circuit_breaker::CircuitBreaker::new(
+            circuit_breaker::CircuitBreakerConfig {
+                failure_threshold: 1,
+                ..circuit_breaker::CircuitBreakerConfig::default()
+            },
+            HashMap::new(),
+            None,
+        ));
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(4);
+        let router = build_router(gateway_state_with_parts(
+            app_handle,
+            db,
+            log_tx,
+            circuit.clone(),
+            Arc::new(session_manager::SessionManager::new()),
+        ));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/gemini/_aio/provider/{provider_id}/v1beta/models/gemini-test:generateContent"
+            ))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"contents":[{"role":"user","parts":[{"functionCall":{"id":"call-1","name":"search","args":{"q":"x"}},"thoughtSignature":"sig"}]}]}"#,
+            ))
+            .expect("request");
+
+        let response = router.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let first = captured_rx.recv().await.expect("first request");
+        let second = captured_rx.recv().await.expect("second request");
+        let first_body: Value = serde_json::from_slice(&first.body).expect("first body");
+        let second_body: Value = serde_json::from_slice(&second.body).expect("second body");
+        assert_eq!(
+            first_body["contents"][0]["parts"][0]["functionCall"]["id"],
+            "call-1"
+        );
+        assert!(second_body["contents"][0]["parts"][0]["functionCall"]
+            .get("id")
+            .is_none());
+        assert_eq!(
+            second_body["contents"][0]["parts"][0]["thoughtSignature"],
+            "sig"
+        );
+
+        let log = recv_terminal_request_log(&mut log_rx).await;
+        let attempts: Value = serde_json::from_str(&log.attempts_json).expect("attempts json");
+        assert_eq!(attempts.as_array().map(Vec::len), Some(2));
+        let special_settings: Value = serde_json::from_str(
+            log.special_settings_json
+                .as_deref()
+                .expect("special settings json"),
+        )
+        .expect("special settings parse");
+        let rectifier = special_settings
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("gemini_function_id_rectifier")
+                })
+            })
+            .expect("gemini rectifier audit");
+        assert_eq!(
+            rectifier.get("grantedRetrySlot").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            rectifier
+                .get("strippedFunctionCallIds")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let snapshot = circuit.snapshot(provider_id, 0);
+        assert_eq!(snapshot.failure_count, 0);
+        assert_eq!(snapshot.cooldown_until, None);
+        upstream_task.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]

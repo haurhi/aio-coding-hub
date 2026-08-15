@@ -57,8 +57,12 @@ pub(crate) struct SettingsUpdate {
     pub upstream_stream_idle_timeout_seconds: Option<u32>,
     pub upstream_request_timeout_non_streaming_seconds: Option<u32>,
     pub intercept_anthropic_warmup_requests: Option<bool>,
+    pub enable_thinking_effort_conflict_rectifier: Option<bool>,
     pub enable_thinking_signature_rectifier: Option<bool>,
     pub enable_thinking_budget_rectifier: Option<bool>,
+    pub enable_gemini_function_id_rectifier: Option<bool>,
+    pub enable_response_input_rectifier: Option<bool>,
+    pub codex_priority_billing_source: Option<settings::CodexPriorityBillingSource>,
     pub enable_billing_header_rectifier: Option<bool>,
     pub enable_claude_metadata_user_id_injection: Option<bool>,
     pub enable_cache_anomaly_monitor: Option<bool>,
@@ -166,8 +170,12 @@ pub(crate) struct SettingsView {
     pub enable_circuit_breaker_notice: bool,
     pub verbose_provider_error: bool,
     pub intercept_anthropic_warmup_requests: bool,
+    pub enable_thinking_effort_conflict_rectifier: bool,
     pub enable_thinking_signature_rectifier: bool,
     pub enable_thinking_budget_rectifier: bool,
+    pub enable_gemini_function_id_rectifier: bool,
+    pub enable_response_input_rectifier: bool,
+    pub codex_priority_billing_source: settings::CodexPriorityBillingSource,
     pub enable_billing_header_rectifier: bool,
     pub enable_codex_session_id_completion: bool,
     pub enable_claude_metadata_user_id_injection: bool,
@@ -217,8 +225,12 @@ pub(crate) struct SettingsMutationResult {
 pub(crate) struct GatewayRectifierSettingsUpdate {
     pub verbose_provider_error: bool,
     pub intercept_anthropic_warmup_requests: bool,
+    pub enable_thinking_effort_conflict_rectifier: bool,
     pub enable_thinking_signature_rectifier: bool,
     pub enable_thinking_budget_rectifier: bool,
+    pub enable_gemini_function_id_rectifier: bool,
+    pub enable_response_input_rectifier: bool,
+    pub codex_priority_billing_source: settings::CodexPriorityBillingSource,
     pub enable_billing_header_rectifier: bool,
     pub enable_claude_metadata_user_id_injection: bool,
     pub enable_response_fixer: bool,
@@ -288,8 +300,13 @@ impl From<&settings::AppSettings> for SettingsView {
             enable_circuit_breaker_notice: value.enable_circuit_breaker_notice,
             verbose_provider_error: value.verbose_provider_error,
             intercept_anthropic_warmup_requests: value.intercept_anthropic_warmup_requests,
+            enable_thinking_effort_conflict_rectifier: value
+                .enable_thinking_effort_conflict_rectifier,
             enable_thinking_signature_rectifier: value.enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier: value.enable_thinking_budget_rectifier,
+            enable_gemini_function_id_rectifier: value.enable_gemini_function_id_rectifier,
+            enable_response_input_rectifier: value.enable_response_input_rectifier,
+            codex_priority_billing_source: value.codex_priority_billing_source,
             enable_billing_header_rectifier: value.enable_billing_header_rectifier,
             enable_codex_session_id_completion: value.enable_codex_session_id_completion,
             enable_claude_metadata_user_id_injection: value
@@ -556,8 +573,12 @@ pub(crate) async fn settings_set_impl(
         upstream_stream_idle_timeout_seconds,
         upstream_request_timeout_non_streaming_seconds,
         intercept_anthropic_warmup_requests,
+        enable_thinking_effort_conflict_rectifier,
         enable_thinking_signature_rectifier,
         enable_thinking_budget_rectifier,
+        enable_gemini_function_id_rectifier,
+        enable_response_input_rectifier,
+        codex_priority_billing_source,
         enable_billing_header_rectifier,
         enable_claude_metadata_user_id_injection,
         enable_cache_anomaly_monitor,
@@ -713,10 +734,19 @@ pub(crate) async fn settings_set_impl(
                     .unwrap_or(previous.upstream_request_timeout_non_streaming_seconds);
             let intercept_anthropic_warmup_requests = intercept_anthropic_warmup_requests
                 .unwrap_or(previous.intercept_anthropic_warmup_requests);
+            let enable_thinking_effort_conflict_rectifier =
+                enable_thinking_effort_conflict_rectifier
+                    .unwrap_or(previous.enable_thinking_effort_conflict_rectifier);
             let enable_thinking_signature_rectifier = enable_thinking_signature_rectifier
                 .unwrap_or(previous.enable_thinking_signature_rectifier);
             let enable_thinking_budget_rectifier = enable_thinking_budget_rectifier
                 .unwrap_or(previous.enable_thinking_budget_rectifier);
+            let enable_gemini_function_id_rectifier = enable_gemini_function_id_rectifier
+                .unwrap_or(previous.enable_gemini_function_id_rectifier);
+            let enable_response_input_rectifier = enable_response_input_rectifier
+                .unwrap_or(previous.enable_response_input_rectifier);
+            let codex_priority_billing_source = codex_priority_billing_source
+                .unwrap_or(previous.codex_priority_billing_source);
             let enable_billing_header_rectifier =
                 enable_billing_header_rectifier.unwrap_or(previous.enable_billing_header_rectifier);
             let enable_claude_metadata_user_id_injection = enable_claude_metadata_user_id_injection
@@ -787,8 +817,12 @@ pub(crate) async fn settings_set_impl(
                 enable_circuit_breaker_notice: previous.enable_circuit_breaker_notice,
                 verbose_provider_error,
                 intercept_anthropic_warmup_requests,
+                enable_thinking_effort_conflict_rectifier,
                 enable_thinking_signature_rectifier,
                 enable_thinking_budget_rectifier,
+                enable_gemini_function_id_rectifier,
+                enable_response_input_rectifier,
+                codex_priority_billing_source,
                 enable_billing_header_rectifier,
                 enable_codex_session_id_completion: previous.enable_codex_session_id_completion,
                 enable_claude_metadata_user_id_injection,
@@ -965,9 +999,15 @@ pub(crate) async fn settings_gateway_rectifier_set(
             settings.verbose_provider_error = update.verbose_provider_error;
             settings.intercept_anthropic_warmup_requests =
                 update.intercept_anthropic_warmup_requests;
+            settings.enable_thinking_effort_conflict_rectifier =
+                update.enable_thinking_effort_conflict_rectifier;
             settings.enable_thinking_signature_rectifier =
                 update.enable_thinking_signature_rectifier;
             settings.enable_thinking_budget_rectifier = update.enable_thinking_budget_rectifier;
+            settings.enable_gemini_function_id_rectifier =
+                update.enable_gemini_function_id_rectifier;
+            settings.enable_response_input_rectifier = update.enable_response_input_rectifier;
+            settings.codex_priority_billing_source = update.codex_priority_billing_source;
             settings.enable_billing_header_rectifier = update.enable_billing_header_rectifier;
             settings.enable_claude_metadata_user_id_injection =
                 update.enable_claude_metadata_user_id_injection;
@@ -987,8 +1027,13 @@ pub(crate) async fn settings_gateway_rectifier_set(
         tracing::info!(
             verbose_provider_error = settings.verbose_provider_error,
             intercept_anthropic_warmup_requests = settings.intercept_anthropic_warmup_requests,
+            enable_thinking_effort_conflict_rectifier =
+                settings.enable_thinking_effort_conflict_rectifier,
             enable_thinking_signature_rectifier = settings.enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier = settings.enable_thinking_budget_rectifier,
+            enable_gemini_function_id_rectifier = settings.enable_gemini_function_id_rectifier,
+            enable_response_input_rectifier = settings.enable_response_input_rectifier,
+            codex_priority_billing_source = ?settings.codex_priority_billing_source,
             enable_billing_header_rectifier = settings.enable_billing_header_rectifier,
             enable_claude_metadata_user_id_injection =
                 settings.enable_claude_metadata_user_id_injection,

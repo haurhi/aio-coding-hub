@@ -68,8 +68,11 @@ LIMIT ?2
             )
             .map_err(|e| db_err!("failed to prepare backfill candidates query: {e}"))?;
 
+        // Same fallback as request_logs: exact cli_key match first, then any CLI's row.
         let mut stmt_price = tx
-            .prepare_cached("SELECT price_json FROM model_prices WHERE cli_key = ?1 AND model = ?2")
+            .prepare_cached(
+                "SELECT price_json FROM model_prices WHERE model = ?2 ORDER BY (cli_key = ?1) DESC LIMIT 1",
+            )
             .map_err(|e| db_err!("failed to prepare model_prices query: {e}"))?;
 
         let mut stmt_update = tx
@@ -505,6 +508,86 @@ INSERT INTO request_logs (
             read_cost("backfill-cx2cc-mismatch"),
             Some(100_000_000_000_000),
             "a failed bridge marker must not override the final Claude provider"
+        );
+    }
+
+    #[test]
+    fn backfill_prices_normal_redirect_from_final_provider_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = db::init_for_tests(&dir.path().join("cost-backfill-model-redirect.db"))
+            .expect("init db");
+        for (model, price) in [
+            ("gpt-5.6-luna", "0.001"),
+            ("failed-provider-model", "0.009"),
+            ("deepseek-v4-flash", "0.002"),
+        ] {
+            crate::model_prices::upsert(
+                &db,
+                "codex",
+                model,
+                &format!(r#"{{"input_cost_per_token":{price}}}"#),
+            )
+            .expect("insert model price");
+        }
+
+        let settings = serde_json::json!([
+            {
+                "type": "model_redirect",
+                "providerId": 7,
+                "targetModel": "failed-provider-model"
+            },
+            {
+                "type": "model_redirect",
+                "providerId": 8,
+                "targetModel": "deepseek-v4-flash"
+            }
+        ])
+        .to_string();
+        let conn = db.open_connection().expect("open db");
+        for (trace_id, final_provider_id) in [
+            ("backfill-redirect-match", 8_i64),
+            ("backfill-redirect-fallback", 9_i64),
+        ] {
+            conn.execute(
+                r#"
+INSERT INTO request_logs (
+  trace_id, cli_key, method, path, status, error_code, duration_ms,
+  attempts_json, created_at, created_at_ms, cost_usd_femto,
+  excluded_from_stats, final_provider_id, requested_model, input_tokens,
+  special_settings_json
+) VALUES (?1, 'codex', 'POST', '/v1/responses', 200, NULL, 10, '[]', 1000,
+  1000000, NULL, 0, ?2, 'gpt-5.6-luna', 100, ?3)
+"#,
+                params![trace_id, final_provider_id, settings],
+            )
+            .expect("insert redirected backfill candidate");
+        }
+        drop(conn);
+
+        backfill_missing_for_cli_with_aliases(
+            &db,
+            "codex",
+            5000,
+            &model_price_aliases::ModelPriceAliasesV1::default(),
+        )
+        .expect("backfill redirected cost");
+
+        let conn = db.open_connection().expect("reopen db");
+        let read_cost = |trace_id: &str| {
+            conn.query_row(
+                "SELECT cost_usd_femto FROM request_logs WHERE trace_id = ?1",
+                [trace_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .expect("read redirected cost")
+        };
+        assert_eq!(
+            read_cost("backfill-redirect-match"),
+            Some(200_000_000_000_000)
+        );
+        assert_eq!(
+            read_cost("backfill-redirect-fallback"),
+            Some(100_000_000_000_000)
         );
     }
 

@@ -237,6 +237,7 @@ mod tests {
                 priority: Some(100),
                 claude_models: None,
                 model_mapping: None,
+                model_policy: None,
                 limit_5h_usd: None,
                 limit_daily_usd: None,
                 daily_reset_mode: Some(providers::DailyResetMode::Fixed),

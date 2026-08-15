@@ -17,6 +17,7 @@ import {
   providerOAuthStartDeviceFlow,
   providerOAuthStartFlow,
   providerOAuthStatus,
+  providerModelsDiscover,
   providerSetEnabled,
   providerTestAvailability,
   providersList,
@@ -55,6 +56,7 @@ vi.mock("../../../generated/bindings", async () => {
       providerOauthFetchLimits: vi.fn(),
       providerOauthResetCodexQuota: vi.fn(),
       providerTestAvailability: vi.fn(),
+      providerModelsDiscover: vi.fn(),
     },
   };
 });
@@ -96,6 +98,8 @@ function createProviderSummary(overrides: Partial<ProviderSummary> = {}): Provid
     oauth_last_error: null,
     source_provider_id: null,
     bridge_type: null,
+    model_policy_status: "ready",
+    model_policy: { version: 1, mode: "all", modelPatterns: [], mappings: [] },
     stream_idle_timeout_seconds: null,
     extension_values: [],
     api_key_configured: false,
@@ -110,6 +114,93 @@ describe("services/providers/providers", () => {
 
     expect(info.isR2c).toBe(true);
     expect(info.effectiveAuthMode).toBe("r2c");
+  });
+
+  it("passes discovery input and returns the upstream catalog", async () => {
+    vi.mocked(commands.providerModelsDiscover).mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        status: "ready",
+        models: ["gpt-5.4"],
+        origin: "https://example.com",
+        base_url_index: 1,
+      },
+    });
+
+    const input = {
+      providerId: 12,
+      cliKey: "codex" as const,
+      authMode: "api_key" as const,
+      baseUrls: ["https://example.com/v1"],
+      baseUrlMode: "ping" as const,
+      apiKey: "sk-secret",
+      sourceProviderId: null,
+      bridgeType: null,
+    };
+
+    await expect(providerModelsDiscover(input)).resolves.toEqual({
+      status: "ready",
+      models: ["gpt-5.4"],
+      origin: "https://example.com",
+      base_url_index: 1,
+    });
+    expect(commands.providerModelsDiscover).toHaveBeenCalledWith(input);
+  });
+
+  it("preserves discovery HTTP status details", async () => {
+    vi.mocked(commands.providerModelsDiscover).mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        status: "error",
+        code: "invalid_response",
+        http_status: 429,
+      },
+    });
+
+    await expect(
+      providerModelsDiscover({
+        providerId: null,
+        cliKey: "codex",
+        authMode: "api_key",
+        baseUrls: ["https://example.com/v1"],
+        baseUrlMode: "order",
+        apiKey: "sk-secret",
+        sourceProviderId: null,
+        bridgeType: null,
+      })
+    ).resolves.toEqual({
+      status: "error",
+      code: "invalid_response",
+      http_status: 429,
+    });
+  });
+
+  it("redacts discovery API keys when the command fails", async () => {
+    vi.mocked(commands.providerModelsDiscover).mockRejectedValueOnce(new Error("discover failed"));
+
+    await expect(
+      providerModelsDiscover({
+        providerId: null,
+        cliKey: "claude",
+        authMode: "api_key",
+        baseUrls: ["https://example.com"],
+        baseUrlMode: "order",
+        apiKey: "sk-secret",
+        sourceProviderId: null,
+        bridgeType: null,
+      })
+    ).rejects.toThrow("discover failed");
+
+    expect(logToConsole).toHaveBeenCalledWith(
+      "error",
+      "获取上游模型失败",
+      expect.objectContaining({
+        cmd: "provider_models_discover",
+        args: expect.objectContaining({
+          input: expect.objectContaining({ apiKey: "[REDACTED]" }),
+        }),
+      })
+    );
   });
 
   it("rethrows and logs when invoke fails", async () => {
@@ -167,6 +258,7 @@ describe("services/providers/providers", () => {
         baseUrlMode: "order",
         limit5hUsd: null,
         dailyResetMode: "fixed",
+        modelPolicy: null,
         extensionValues: null,
       })
     );

@@ -350,8 +350,10 @@ describe("components/home/HomeRequestLogsPanel", () => {
         })
       )
     );
+    // Providers like DeepSeek never report cache creation: the metric still
+    // renders as 0 (without TTL) so the grid stays complete.
     expect(
-      within(screen.getByRole("button", { name: /gpt-5\.6-sol/ })).queryByText("缓存创建")
+      within(expectMetric("缓存创建", "0")).queryByText(/\(5m\)|\(1h\)/)
     ).not.toBeInTheDocument();
     const outputMetric = expectMetric("输出", "—");
     expect(outputMetric).toHaveClass("col-start-1", "row-start-2");
@@ -1163,6 +1165,7 @@ describe("components/home/HomeRequestLogsPanel", () => {
             circuit_failure_count: null,
             circuit_failure_threshold: null,
             claude_model_mapping: null,
+            model_redirect: null,
           },
         ],
       },
@@ -1809,5 +1812,28 @@ describe("components/home/HomeRequestLogsPanel", () => {
     expect(screen.getAllByText("全部不可用").length).toBeGreaterThan(0);
     expect(screen.getByText(/网关未继续向已熔断或冷却中的供应商发起上游请求/)).toBeInTheDocument();
     expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
+  });
+
+  it("shows the final reasoning effort only when the persisted log has one", () => {
+    render(
+      <MemoryRouter>
+        <HomeRequestLogsPanel
+          traces={[]}
+          requestLogs={makeRequestLogs([
+            { id: 1, trace_id: "with-effort", reasoning_effort: "high" },
+            { id: 2, trace_id: "without-effort", reasoning_effort: null },
+          ])}
+          requestLogsLoading={false}
+          requestLogsRefreshing={false}
+          requestLogsAvailable={true}
+          onRefreshRequestLogs={vi.fn()}
+          selectedLogId={null}
+          onSelectLogId={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTitle("思考等级：high")).toHaveTextContent("思考high");
+    expect(screen.getAllByText("思考")).toHaveLength(1);
   });
 });

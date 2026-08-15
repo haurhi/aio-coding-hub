@@ -371,6 +371,117 @@ fn parse_response_error_type_marks_terminal_error_seen() {
 }
 
 #[test]
+fn openai_conversation_tracker_detects_response_failed_event() {
+    let sse = b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_1\",\"status\":\"failed\",\"error\":{\"message\":\"upstream failed\"}}}\n\n";
+    let mut tracker = SseUsageTracker::new_for_request("codex", "/v1/responses");
+
+    tracker.ingest_chunk(&sse[..31]);
+    tracker.ingest_chunk(&sse[31..]);
+    tracker.finalize();
+
+    assert!(tracker.terminal_error_seen());
+    assert!(tracker.fake_200_detected());
+    assert_eq!(
+        tracker.fake_200_reason(),
+        Some(SseFake200Reason::OpenAiResponseFailed)
+    );
+}
+
+#[test]
+fn openai_conversation_tracker_detects_response_failed_event_without_data() {
+    let mut tracker = SseUsageTracker::new_for_request("codex", "/v1/responses");
+
+    tracker.ingest_chunk(b"event: response.failed\n\n");
+    tracker.finalize();
+
+    assert!(tracker.terminal_error_seen());
+    assert_eq!(
+        tracker.fake_200_reason(),
+        Some(SseFake200Reason::OpenAiResponseFailed)
+    );
+}
+
+#[test]
+fn openai_conversation_tracker_detects_nested_failed_status_without_event_name() {
+    let sse = b"data: {\"response\":{\"object\":\"response\",\"status\":\"failed\"}}\n\n";
+    let mut tracker = SseUsageTracker::new_for_request("grok", "/v1/responses");
+
+    tracker.ingest_chunk(sse);
+    tracker.finalize();
+
+    assert!(tracker.terminal_error_seen());
+    assert!(tracker.fake_200_detected());
+    assert_eq!(
+        tracker.fake_200_reason(),
+        Some(SseFake200Reason::OpenAiResponseFailed)
+    );
+}
+
+#[test]
+fn openai_conversation_tracker_detects_empty_and_html_streams() {
+    let mut empty = SseUsageTracker::new_for_request("codex", "/v1/responses");
+    empty.ingest_chunk(b" \r\n\t");
+    empty.finalize();
+    assert_eq!(empty.fake_200_reason(), Some(SseFake200Reason::EmptyBody));
+
+    let mut html = SseUsageTracker::new_for_request("grok", "/v1/chat/completions");
+    html.ingest_chunk(b"\xef\xbb\xbf  <!DOCTYPE html><title>bad gateway</title>");
+    html.finalize();
+    assert_eq!(html.fake_200_reason(), Some(SseFake200Reason::HtmlBody));
+
+    let mut bom_only = SseUsageTracker::new_for_request("codex", "/v1/responses");
+    bom_only.ingest_chunk(b" \xef");
+    bom_only.ingest_chunk(b"\xbb");
+    bom_only.ingest_chunk(b"\xbf \r\n\t");
+    bom_only.finalize();
+    assert_eq!(
+        bom_only.fake_200_reason(),
+        Some(SseFake200Reason::EmptyBody)
+    );
+
+    let mut long_prefix = SseUsageTracker::new_for_request("codex", "/v1/responses");
+    long_prefix.ingest_chunk(&vec![b' '; MAX_SSE_RAW_PREFIX_BYTES + 1]);
+    long_prefix.ingest_chunk(b"\xef\xbb\xbf \n");
+    long_prefix.finalize();
+    assert_eq!(
+        long_prefix.fake_200_reason(),
+        Some(SseFake200Reason::EmptyBody)
+    );
+
+    let mut partial_bom = SseUsageTracker::new_for_request("codex", "/v1/responses");
+    partial_bom.ingest_chunk(b"\xef\xbb");
+    partial_bom.finalize();
+    assert_eq!(partial_bom.fake_200_reason(), None);
+}
+
+#[test]
+fn openai_conversation_tracker_keeps_completed_stream_successful() {
+    let sse = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n";
+    let mut tracker = SseUsageTracker::new_for_request("codex", "/v1/responses");
+
+    tracker.ingest_chunk(sse);
+    let usage = tracker.finalize().expect("completed response usage");
+
+    assert!(tracker.completion_seen());
+    assert!(!tracker.terminal_error_seen());
+    assert!(!tracker.fake_200_detected());
+    assert_eq!(usage.metrics.total_tokens, Some(3));
+}
+
+#[test]
+fn generic_tracker_does_not_enable_empty_or_html_detection() {
+    for body in [
+        b"".as_slice(),
+        b"<!doctype html><title>error</title>".as_slice(),
+    ] {
+        let mut tracker = SseUsageTracker::new("claude");
+        tracker.ingest_chunk(body);
+        tracker.finalize();
+        assert!(!tracker.fake_200_detected());
+    }
+}
+
+#[test]
 fn sse_usage_tracker_drops_oversized_pending_line() {
     let mut tracker = SseUsageTracker::new("codex");
     let oversized = vec![b'a'; MAX_SSE_USAGE_TRACKER_PENDING_BYTES + 1];

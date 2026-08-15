@@ -446,6 +446,7 @@ describe("home/RequestLogDetailDialog", () => {
               circuit_failure_count: null,
               circuit_failure_threshold: null,
               claude_model_mapping: null,
+              model_redirect: null,
             },
           ],
         },

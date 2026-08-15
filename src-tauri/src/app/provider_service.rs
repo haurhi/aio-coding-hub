@@ -2,6 +2,107 @@ use crate::app_state::{ensure_db_ready, DbInitState};
 use crate::gateway_control::app_gateway_clear_cli_route_runtime_state;
 use crate::{blocking, providers};
 
+pub(crate) const PROVIDER_CODEX_CATALOG_EVENT_NAME: &str = "providers:codex_catalog";
+
+#[derive(Clone, Copy, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CodexCatalogEventStatus {
+    Updated,
+    Failed,
+}
+
+#[derive(Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexCatalogEventPayload {
+    pub(crate) status: CodexCatalogEventStatus,
+}
+
+/// Serializes catalog refresh tasks: each task reads the DB only after acquiring
+/// the lock, so the last one to run always writes the freshest catalog and a slow
+/// older task cannot overwrite a newer one.
+static CODEX_CATALOG_REFRESH_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+/// Fire-and-forget: the refresh spawns `codex debug models --bundled` (up to 20s), so commands
+/// must not wait on it. Success/failure feedback reaches the UI via the codex_catalog event.
+pub(crate) fn refresh_codex_catalog_after_routing_change(
+    app: &tauri::AppHandle,
+    db: crate::db::Db,
+    mapping_sources_changed: bool,
+) {
+    if !mapping_sources_changed {
+        return;
+    }
+    spawn_codex_catalog_refresh(app, db);
+}
+
+/// Fire-and-forget catalog refresh; also used after gateway start so a DB that
+/// changed while the gateway was off still reaches the Codex catalog without
+/// blocking startup.
+pub(crate) fn spawn_codex_catalog_refresh<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    db: crate::db::Db,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _guard = CODEX_CATALOG_REFRESH_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let refresh_app = app.clone();
+        let result = blocking::run("refresh_codex_model_catalog", move || {
+            crate::cli_proxy::refresh_codex_model_catalog_if_enabled(&refresh_app, &db)
+        })
+        .await;
+
+        let status = match result {
+            Ok(crate::cli_proxy::CodexCatalogRefreshResult::Updated) => {
+                tracing::info!("Codex model capability catalog refreshed after routing change");
+                Some(CodexCatalogEventStatus::Updated)
+            }
+            Ok(crate::cli_proxy::CodexCatalogRefreshResult::NotActive)
+            | Ok(crate::cli_proxy::CodexCatalogRefreshResult::Unchanged) => None,
+            Err(error) => {
+                tracing::warn!(
+                    error_code = "CLI_PROXY_CODEX_CATALOG_FAILED",
+                    error = %error,
+                    "failed to refresh Codex model capability catalog after routing change"
+                );
+                Some(CodexCatalogEventStatus::Failed)
+            }
+        };
+
+        if let Some(status) = status {
+            crate::app::heartbeat_watchdog::gated_emit(
+                &app,
+                PROVIDER_CODEX_CATALOG_EVENT_NAME,
+                CodexCatalogEventPayload { status },
+            );
+        }
+    });
+}
+
+/// Runs `mutation`, comparing the codex routable mapping signature before/after when
+/// `tracks_codex_mappings` is set. Returns the mutation result plus whether the mapping
+/// sources changed (i.e. the codex catalog needs a refresh).
+pub(crate) fn with_codex_mapping_tracking<T>(
+    db: &crate::db::Db,
+    tracks_codex_mappings: bool,
+    mutation: impl FnOnce() -> crate::shared::error::AppResult<T>,
+) -> crate::shared::error::AppResult<(T, bool)> {
+    let before = tracks_codex_mappings
+        .then(|| crate::infra::codex_model_catalog::projection::routable_mapping_signature(db))
+        .transpose()?;
+    let value = mutation()?;
+    let changed = match before {
+        Some(before) => {
+            before != crate::infra::codex_model_catalog::projection::routable_mapping_signature(db)?
+        }
+        None => false,
+    };
+    Ok((value, changed))
+}
+
 #[derive(serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderUpsertInput {
@@ -16,7 +117,8 @@ pub(crate) struct ProviderUpsertInput {
     pub cost_multiplier: f64,
     pub priority: Option<i64>,
     pub claude_models: Option<providers::ClaudeModels>,
-    pub model_mapping: Option<providers::ProviderModelMapping>,
+    pub model_mapping: Option<providers::LegacyProviderModelMapping>,
+    pub model_policy: Option<providers::ProviderModelPolicyV1>,
     #[serde(rename = "limit5hUsd", alias = "limit5HUsd")]
     #[specta(rename = "limit5hUsd")]
     pub limit_5h_usd: Option<f64>,
@@ -103,7 +205,9 @@ fn provider_runtime_reset_decision(
         || previous.model_mapping != next.model_mapping
         || submitted_api_key_changed(previous_api_key, submitted_api_key)
         || previous.source_provider_id != next.source_provider_id
-        || previous.bridge_type != next.bridge_type;
+        || previous.bridge_type != next.bridge_type
+        || previous.model_policy != next.model_policy
+        || previous.model_policy_status != next.model_policy_status;
 
     ProviderRuntimeResetDecision {
         clear_route_runtime_state: sensitive_config_changed,
@@ -141,6 +245,7 @@ pub(crate) async fn provider_upsert(
         priority,
         claude_models,
         model_mapping,
+        model_policy,
         limit_5h_usd,
         limit_daily_usd,
         daily_reset_mode,
@@ -161,6 +266,7 @@ pub(crate) async fn provider_upsert(
     let cli_key_for_log = cli_key.clone();
     let submitted_api_key = api_key.clone();
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let refresh_db = db.clone();
     let result = blocking::run("provider_upsert", move || {
         let previous = match provider_id {
             Some(id) => {
@@ -169,41 +275,47 @@ pub(crate) async fn provider_upsert(
             }
             None => None,
         };
+        // Updates reject cli_key changes, so `previous.cli_key` never differs here.
+        let tracks_codex_mappings = cli_key == "codex";
         let previous_api_key = match provider_id {
             Some(id) => Some(providers::get_api_key_plaintext(&db, id)?),
             None => None,
         };
 
-        let saved = providers::upsert(
-            &db,
-            providers::ProviderUpsertParams {
-                provider_id,
-                cli_key,
-                name,
-                base_urls,
-                base_url_mode,
-                auth_mode,
-                api_key,
-                enabled,
-                cost_multiplier,
-                priority,
-                claude_models,
-                model_mapping,
-                limit_5h_usd,
-                limit_daily_usd,
-                daily_reset_mode,
-                daily_reset_time,
-                limit_weekly_usd,
-                limit_monthly_usd,
-                limit_total_usd,
-                tags,
-                note,
-                source_provider_id,
-                bridge_type,
-                stream_idle_timeout_seconds,
-                extension_values,
-            },
-        )?;
+        let (saved, mapping_sources_changed) =
+            with_codex_mapping_tracking(&db, tracks_codex_mappings, || {
+                providers::upsert(
+                    &db,
+                    providers::ProviderUpsertParams {
+                        provider_id,
+                        cli_key,
+                        name,
+                        base_urls,
+                        base_url_mode,
+                        auth_mode,
+                        api_key,
+                        enabled,
+                        cost_multiplier,
+                        priority,
+                        claude_models,
+                        model_mapping,
+                        model_policy,
+                        limit_5h_usd,
+                        limit_daily_usd,
+                        daily_reset_mode,
+                        daily_reset_time,
+                        limit_weekly_usd,
+                        limit_monthly_usd,
+                        limit_total_usd,
+                        tags,
+                        note,
+                        source_provider_id,
+                        bridge_type,
+                        stream_idle_timeout_seconds,
+                        extension_values,
+                    },
+                )
+            })?;
 
         let decision = provider_runtime_reset_decision(
             previous.as_ref(),
@@ -212,12 +324,12 @@ pub(crate) async fn provider_upsert(
             submitted_api_key.as_deref(),
         );
 
-        Ok::<_, crate::shared::error::AppError>((saved, decision))
+        Ok::<_, crate::shared::error::AppError>((saved, decision, mapping_sources_changed))
     })
     .await
-    .map_err(Into::into);
+    .map_err(String::from);
 
-    if let Ok((ref provider, decision)) = result {
+    if let Ok((ref provider, decision, _)) = result {
         if is_create {
             tracing::info!(
                 provider_id = provider.id,
@@ -246,7 +358,9 @@ pub(crate) async fn provider_upsert(
         }
     }
 
-    result.map(|(provider, _)| provider)
+    let (provider, _, mapping_sources_changed) = result?;
+    refresh_codex_catalog_after_routing_change(&app, refresh_db, mapping_sources_changed);
+    Ok(provider)
 }
 
 pub(crate) async fn provider_duplicate(
@@ -255,57 +369,69 @@ pub(crate) async fn provider_duplicate(
     provider_id: i64,
 ) -> Result<providers::ProviderSummary, String> {
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let refresh_db = db.clone();
     let result = blocking::run("provider_duplicate", move || {
         let source = {
             let conn = db.open_connection()?;
             providers::get_by_id(&conn, provider_id)?
         };
         let siblings = providers::list_by_cli(&db, &source.cli_key)?;
+        if source.model_policy_status == providers::ProviderModelPolicyStatus::Invalid {
+            return Err(crate::shared::error::AppError::from(
+                "SEC_INVALID_INPUT: reset the invalid provider model policy before duplicating",
+            ));
+        }
         let api_key = if source.auth_mode == "api_key" && source.source_provider_id.is_none() {
             Some(providers::get_api_key_plaintext(&db, provider_id)?)
         } else {
             None
         };
 
-        providers::duplicate(
-            &db,
-            source.id,
-            providers::ProviderUpsertParams {
-                provider_id: None,
-                cli_key: source.cli_key.clone(),
-                name: build_duplicated_provider_name(&source.name, &siblings),
-                base_urls: source.base_urls.clone(),
-                base_url_mode: source.base_url_mode,
-                auth_mode: match source.auth_mode.as_str() {
-                    "oauth" => Some(providers::ProviderAuthMode::Oauth),
-                    _ => Some(providers::ProviderAuthMode::ApiKey),
+        // Duplicates never join a route, so they cannot change the routable
+        // mapping signature — skip the two full policy scans.
+        let (provider, mapping_sources_changed) = with_codex_mapping_tracking(&db, false, || {
+            providers::duplicate(
+                &db,
+                source.id,
+                providers::ProviderUpsertParams {
+                    provider_id: None,
+                    cli_key: source.cli_key.clone(),
+                    name: build_duplicated_provider_name(&source.name, &siblings),
+                    base_urls: source.base_urls.clone(),
+                    base_url_mode: source.base_url_mode,
+                    auth_mode: match source.auth_mode.as_str() {
+                        "oauth" => Some(providers::ProviderAuthMode::Oauth),
+                        _ => Some(providers::ProviderAuthMode::ApiKey),
+                    },
+                    api_key,
+                    enabled: source.enabled,
+                    cost_multiplier: source.cost_multiplier,
+                    priority: None,
+                    claude_models: Some(source.claude_models.clone()),
+                    model_mapping: Some(source.model_mapping.clone()),
+                    model_policy: source.model_policy.clone(),
+                    limit_5h_usd: source.limit_5h_usd,
+                    limit_daily_usd: source.limit_daily_usd,
+                    daily_reset_mode: Some(source.daily_reset_mode),
+                    daily_reset_time: Some(source.daily_reset_time.clone()),
+                    limit_weekly_usd: source.limit_weekly_usd,
+                    limit_monthly_usd: source.limit_monthly_usd,
+                    limit_total_usd: source.limit_total_usd,
+                    tags: Some(source.tags.clone()),
+                    note: Some(source.note.clone()),
+                    source_provider_id: source.source_provider_id,
+                    bridge_type: source.bridge_type.clone(),
+                    stream_idle_timeout_seconds: source.stream_idle_timeout_seconds,
+                    extension_values: None,
                 },
-                api_key,
-                enabled: source.enabled,
-                cost_multiplier: source.cost_multiplier,
-                priority: None,
-                claude_models: Some(source.claude_models.clone()),
-                model_mapping: Some(source.model_mapping.clone()),
-                limit_5h_usd: source.limit_5h_usd,
-                limit_daily_usd: source.limit_daily_usd,
-                daily_reset_mode: Some(source.daily_reset_mode),
-                daily_reset_time: Some(source.daily_reset_time.clone()),
-                limit_weekly_usd: source.limit_weekly_usd,
-                limit_monthly_usd: source.limit_monthly_usd,
-                limit_total_usd: source.limit_total_usd,
-                tags: Some(source.tags.clone()),
-                note: Some(source.note.clone()),
-                source_provider_id: source.source_provider_id,
-                bridge_type: source.bridge_type.clone(),
-                stream_idle_timeout_seconds: source.stream_idle_timeout_seconds,
-                extension_values: None,
-            },
-        )
+            )
+        })?;
+        Ok::<_, crate::shared::error::AppError>((provider, mapping_sources_changed))
     })
     .await
-    .map_err(Into::into);
+    .map_err(String::from);
 
-    if let Ok(ref provider) = result {
+    if let Ok((ref provider, _)) = result {
         if provider.enabled {
             let cleared = app_gateway_clear_cli_route_runtime_state(&app, &provider.cli_key);
             tracing::info!(
@@ -325,7 +451,9 @@ pub(crate) async fn provider_duplicate(
         );
     }
 
-    result
+    let (provider, mapping_sources_changed) = result?;
+    refresh_codex_catalog_after_routing_change(&app, refresh_db, mapping_sources_changed);
+    Ok(provider)
 }
 
 pub(crate) async fn provider_set_enabled(
@@ -335,13 +463,20 @@ pub(crate) async fn provider_set_enabled(
     enabled: bool,
 ) -> Result<providers::ProviderSummary, String> {
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let refresh_db = db.clone();
     let result = blocking::run("provider_set_enabled", move || {
-        providers::set_enabled(&db, provider_id, enabled)
+        let tracks_codex_mappings =
+            providers::cli_key_by_id(&db, provider_id)?.ok_or_else(|| {
+                crate::shared::error::AppError::from("DB_NOT_FOUND: provider not found")
+            })? == "codex";
+        with_codex_mapping_tracking(&db, tracks_codex_mappings, || {
+            providers::set_enabled(&db, provider_id, enabled)
+        })
     })
     .await
-    .map_err(Into::into);
+    .map_err(String::from);
 
-    if let Ok(ref provider) = result {
+    if let Ok((ref provider, _)) = result {
         let cleared = app_gateway_clear_cli_route_runtime_state(&app, &provider.cli_key);
         tracing::info!(
             provider_id = provider.id,
@@ -352,7 +487,9 @@ pub(crate) async fn provider_set_enabled(
         );
     }
 
-    result
+    let (provider, mapping_sources_changed) = result?;
+    refresh_codex_catalog_after_routing_change(&app, refresh_db, mapping_sources_changed);
+    Ok(provider)
 }
 
 pub(crate) async fn provider_delete(
@@ -362,20 +499,24 @@ pub(crate) async fn provider_delete(
     clear_usage_stats: bool,
 ) -> Result<bool, String> {
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let refresh_db = db.clone();
     let result = blocking::run(
         "provider_delete",
-        move || -> crate::shared::error::AppResult<(bool, String)> {
+        move || -> crate::shared::error::AppResult<(bool, String, bool)> {
             let cli_key = providers::cli_key_by_id(&db, provider_id)?.ok_or_else(|| {
                 crate::shared::error::AppError::from("DB_NOT_FOUND: provider not found")
             })?;
-            providers::delete(&db, provider_id, clear_usage_stats)?;
-            Ok((true, cli_key))
+            let (_, mapping_sources_changed) =
+                with_codex_mapping_tracking(&db, cli_key == "codex", || {
+                    providers::delete(&db, provider_id, clear_usage_stats)
+                })?;
+            Ok((true, cli_key, mapping_sources_changed))
         },
     )
     .await
-    .map_err(Into::into);
+    .map_err(String::from);
 
-    if let Ok((true, ref cli_key)) = result {
+    if let Ok((true, ref cli_key, _)) = result {
         let cleared = app_gateway_clear_cli_route_runtime_state(&app, cli_key);
         tracing::info!(
             provider_id = provider_id,
@@ -387,7 +528,9 @@ pub(crate) async fn provider_delete(
         );
     }
 
-    result.map(|(deleted, _)| deleted)
+    let (deleted, _, mapping_sources_changed) = result?;
+    refresh_codex_catalog_after_routing_change(&app, refresh_db, mapping_sources_changed);
+    Ok(deleted)
 }
 
 pub(crate) async fn providers_reorder(
@@ -436,13 +579,16 @@ pub(crate) async fn default_route_providers_set_order(
 ) -> Result<Vec<providers::ProviderRouteRow>, String> {
     let cli_key_for_log = cli_key.clone();
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let refresh_db = db.clone();
     let result = blocking::run("default_route_providers_set_order", move || {
-        providers::default_route_set_order(&db, &cli_key, ordered_provider_ids)
+        with_codex_mapping_tracking(&db, cli_key == "codex", || {
+            providers::default_route_set_order(&db, &cli_key, ordered_provider_ids)
+        })
     })
     .await
-    .map_err(Into::into);
+    .map_err(String::from);
 
-    if let Ok(ref rows) = result {
+    if let Ok((ref rows, _)) = result {
         let cleared = app_gateway_clear_cli_route_runtime_state(&app, &cli_key_for_log);
         tracing::info!(
             cli_key = %cli_key_for_log,
@@ -453,7 +599,9 @@ pub(crate) async fn default_route_providers_set_order(
         );
     }
 
-    result
+    let (rows, mapping_sources_changed) = result?;
+    refresh_codex_catalog_after_routing_change(&app, refresh_db, mapping_sources_changed);
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -535,6 +683,8 @@ mod tests {
             base_url_mode: providers::ProviderBaseUrlMode::Order,
             claude_models: Default::default(),
             model_mapping: Default::default(),
+            model_policy: Some(providers::ProviderModelPolicyV1::all()),
+            model_policy_status: providers::ProviderModelPolicyStatus::Ready,
             enabled: true,
             priority: 1,
             cost_multiplier: 1.0,
@@ -621,6 +771,8 @@ mod tests {
             base_url_mode: providers::ProviderBaseUrlMode::Order,
             claude_models: Default::default(),
             model_mapping: Default::default(),
+            model_policy: Some(providers::ProviderModelPolicyV1::all()),
+            model_policy_status: providers::ProviderModelPolicyStatus::Ready,
             enabled: true,
             priority: 1,
             cost_multiplier: 1.0,
@@ -652,6 +804,30 @@ mod tests {
 
         assert_eq!(
             provider_runtime_reset_decision(Some(&previous), Some("sk-old"), &next, None),
+            ProviderRuntimeResetDecision {
+                clear_route_runtime_state: true,
+            }
+        );
+
+        let mut policy_changed = previous.clone();
+        policy_changed.model_policy = Some(providers::ProviderModelPolicyV1 {
+            version: 1,
+            mode: providers::ProviderModelMode::Selected,
+            model_patterns: vec!["claude-sonnet-*".to_string()],
+            mappings: vec![],
+        });
+        assert_eq!(
+            provider_runtime_reset_decision(Some(&previous), Some("sk-old"), &policy_changed, None,),
+            ProviderRuntimeResetDecision {
+                clear_route_runtime_state: true,
+            }
+        );
+
+        let mut legacy = previous.clone();
+        legacy.model_policy = None;
+        legacy.model_policy_status = providers::ProviderModelPolicyStatus::Legacy;
+        assert_eq!(
+            provider_runtime_reset_decision(Some(&legacy), Some("sk-old"), &previous, None),
             ProviderRuntimeResetDecision {
                 clear_route_runtime_state: true,
             }

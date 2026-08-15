@@ -44,19 +44,32 @@ describe("pages/settings/settingsSidebarModel", () => {
         status: "not_modified",
         inserted: 0,
         updated: 0,
-        skipped: 0,
+        unchanged: 0,
         total: 0,
+        error: null,
       })
-    ).toBe("模型定价已是最新（无变更）");
+    ).toBe("定价已是最新，无变更");
 
     expect(
       buildModelPricesSyncMessage({
         status: "updated",
         inserted: 1,
         updated: 2,
-        skipped: 3,
+        unchanged: 3,
         total: 6,
+        error: null,
       })
-    ).toBe("同步完成：新增 1，更新 2，跳过 3");
+    ).toBe("定价同步完成：新增 1 · 更新 2 · 共 6 条");
+
+    expect(
+      buildModelPricesSyncMessage({
+        status: "failed",
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        total: 0,
+        error: "BaseLLM returned HTTP 500",
+      })
+    ).toBe("定价同步失败：BaseLLM returned HTTP 500");
   });
 });

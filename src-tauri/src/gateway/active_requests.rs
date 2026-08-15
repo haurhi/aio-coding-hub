@@ -200,6 +200,7 @@ mod tests {
             circuit_failure_count: Some(0),
             circuit_failure_threshold: Some(3),
             claude_model_mapping: None,
+            model_redirect: None,
         }
     }
 

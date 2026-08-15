@@ -66,6 +66,43 @@ pub(crate) fn resolve_cx2cc_cost_basis(
     }
 }
 
+/// The reasoning effort that actually answered: the last success attempt's value,
+/// else the last attempt whose request reached the upstream. Shared by the gateway
+/// request event and the persisted-log queries so the two never drift.
+pub(crate) fn final_reasoning_effort<'a, I>(attempts: I) -> Option<String>
+where
+    I: DoubleEndedIterator<Item = (&'a str, bool, Option<&'a str>)> + Clone,
+{
+    attempts
+        .clone()
+        .rev()
+        .find(|(outcome, _, _)| *outcome == "success")
+        .or_else(|| attempts.rev().find(|(_, upstream_sent, _)| *upstream_sent))
+        .and_then(|(_, _, effort)| effort.map(str::to_string))
+}
+
+pub(crate) fn resolve_model_redirect_target(
+    special_settings_json: Option<&str>,
+    final_provider_id: Option<i64>,
+) -> Option<String> {
+    let final_provider_id = final_provider_id.filter(|provider_id| *provider_id > 0)?;
+    let raw = special_settings_json.map(trim_json_whitespace)?;
+    let settings = serde_json::from_str::<Vec<Value>>(raw).ok()?;
+    settings.iter().rev().find_map(|setting| {
+        let object = setting.as_object()?;
+        if object.get("type").and_then(Value::as_str) != Some("model_redirect")
+            || object.get("providerId").and_then(Value::as_i64) != Some(final_provider_id)
+        {
+            return None;
+        }
+        object
+            .get("targetModel")
+            .and_then(Value::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
 fn parse_cost_basis(setting: &Value) -> Option<Cx2ccCostBasis> {
     let obj = setting.as_object()?;
     if obj.get("type").and_then(Value::as_str) != Some("cx2cc_cost_basis") {
@@ -202,5 +239,28 @@ mod tests {
                 "raw={raw:?}"
             );
         }
+    }
+
+    #[test]
+    fn model_redirect_is_scoped_to_final_provider_and_keeps_full_identity() {
+        let long_model = format!("mapped-{}", "模型".repeat(120));
+        let json = serde_json::json!([
+            {
+                "type": "model_redirect",
+                "providerId": 7,
+                "targetModel": "failed-model"
+            },
+            {
+                "type": "model_redirect",
+                "providerId": 8,
+                "targetModel": long_model
+            }
+        ])
+        .to_string();
+        assert_eq!(
+            resolve_model_redirect_target(Some(&json), Some(8)).as_deref(),
+            Some(long_model.as_str())
+        );
+        assert_eq!(resolve_model_redirect_target(Some(&json), Some(9)), None);
     }
 }

@@ -232,7 +232,7 @@ export async function handleOAuthLogin(ctx: OAuthActionContext) {
       });
       if (!ctx.editingProviderId) {
         ctx.onSaved(ctx.cliKey);
-        ctx.onOpenChange(false);
+        ctx.onOpenChange(false, { bypassDirty: true });
       }
     } else {
       await rollbackAutoSavedProvider();
@@ -395,7 +395,7 @@ export async function handleOAuthDeviceLogin(ctx: OAuthActionContext) {
         toast("设备码登录成功");
         if (!ctx.editingProviderId) {
           ctx.onSaved(ctx.cliKey);
-          ctx.onOpenChange(false);
+          ctx.onOpenChange(false, { bypassDirty: true });
         }
         return true;
       }

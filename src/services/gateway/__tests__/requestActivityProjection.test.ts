@@ -50,6 +50,7 @@ function attempt(traceId: string, attemptIndex: number, providerName: string): G
     circuit_failure_count: 0,
     circuit_failure_threshold: 3,
     claude_model_mapping: null,
+    model_redirect: null,
   };
 }
 
@@ -119,6 +120,8 @@ function summaryOf(traceId: string): TraceSummary {
     cache_creation_1h_input_tokens: null,
     effective_input_tokens: null,
     claude_model_mapping: null,
+    model_redirect: null,
+    reasoning_effort: null,
   };
 }
 

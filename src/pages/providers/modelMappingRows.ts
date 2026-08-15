@@ -1,4 +1,4 @@
-import type { ProviderModelMapping } from "../../services/providers/providers";
+import type { LegacyProviderModelMapping } from "../../services/providers/providers";
 
 export type ModelMappingRow = {
   id: string;
@@ -7,15 +7,15 @@ export type ModelMappingRow = {
 };
 
 export function modelMappingRowsFromRecord(
-  mapping: ProviderModelMapping | null | undefined,
+  mapping: LegacyProviderModelMapping | null | undefined,
   newRow: (source?: string, target?: string) => ModelMappingRow
 ) {
   const rows = Object.entries(mapping ?? {}).map(([source, target]) => newRow(source, target));
   return rows.length > 0 ? rows : [newRow()];
 }
 
-export function normalizeModelMappingRows(rows: ModelMappingRow[]): ProviderModelMapping {
-  const out: ProviderModelMapping = {};
+export function normalizeModelMappingRows(rows: ModelMappingRow[]): LegacyProviderModelMapping {
+  const out: LegacyProviderModelMapping = {};
   for (const row of rows) {
     const source = row.source.trim();
     const target = row.target.trim();

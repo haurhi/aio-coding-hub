@@ -7,8 +7,8 @@ use crate::gateway::proxy::handler::early_error::{
     respond_provider_selection_failed_with_spawn, EarlyErrorKind,
 };
 use crate::gateway::proxy::handler::provider_selection::{
-    resolve_session_bound_provider_id, resolve_session_routing_decision,
-    select_providers_with_session_binding, SessionBoundResult,
+    filter_providers_by_model_policy, resolve_session_bound_provider_id,
+    resolve_session_routing_decision, select_providers_with_session_binding, SessionBoundResult,
 };
 use crate::gateway::response_fixer;
 
@@ -77,9 +77,29 @@ impl ProviderResolutionMiddleware {
             }
         };
 
-        let initial_provider_ids = provider_ids(&selection.providers);
         ctx.effective_sort_mode_id = selection.effective_sort_mode_id;
         ctx.providers = selection.providers;
+
+        let model_policy_filter = filter_providers_by_model_policy(
+            &mut ctx.providers,
+            ctx.requested_model.as_deref(),
+            ctx.forced_provider_id,
+        );
+        let initial_provider_ids = model_policy_filter.original_provider_ids.clone();
+        let provider_ids_after_policy = provider_ids(&ctx.providers);
+        let no_eligible_after_policy = ctx.requested_model.is_some()
+            && !initial_provider_ids.is_empty()
+            && provider_ids_after_policy.is_empty();
+        let all_policies_invalid = no_eligible_after_policy
+            && model_policy_filter.invalid_provider_ids.len() == initial_provider_ids.len();
+        let forced_provider_model_ineligible = ctx.forced_provider_id.is_some_and(|provider_id| {
+            model_policy_filter
+                .ineligible_provider_ids
+                .contains(&provider_id)
+                || model_policy_filter
+                    .invalid_provider_ids
+                    .contains(&provider_id)
+        });
 
         // --- forced provider ---
         let forced_provider_missing = force_provider_if_requested(
@@ -111,6 +131,22 @@ impl ProviderResolutionMiddleware {
         // --- no enabled provider guard ---
         if ctx.providers.is_empty() {
             let final_provider_ids = provider_ids(&ctx.providers);
+
+            if forced_provider_model_ineligible || no_eligible_after_policy {
+                push_special_setting(
+                    &ctx.special_settings,
+                    serde_json::json!({
+                        "type": "provider_model_policy_filter",
+                        "scope": "request",
+                        "hit": true,
+                        "requestedModel": ctx.requested_model.as_deref(),
+                        "candidateProviderIds": &initial_provider_ids,
+                        "eligibleProviderIds": &provider_ids_after_policy,
+                        "ineligibleProviderIds": &model_policy_filter.ineligible_provider_ids,
+                        "invalidProviderIds": &model_policy_filter.invalid_provider_ids,
+                    }),
+                );
+            }
 
             // Use the explicit outcome from resolve_session_bound_provider_id.
             // This is now the single source of truth for "why the bound provider was not used".
@@ -163,6 +199,7 @@ impl ProviderResolutionMiddleware {
                     initial_provider_ids: &initial_provider_ids,
                     final_provider_ids: &final_provider_ids,
                     forced_provider_missing,
+                    forced_provider_model_ineligible,
                     session_bound_circuit_denied,
                     denied_bound_provider_id: denied_circuit_info
                         .as_ref()
@@ -170,15 +207,47 @@ impl ProviderResolutionMiddleware {
                     denied_circuit_snapshot: denied_circuit_info,
                 }),
             );
-            let contract = early_error_contract(EarlyErrorKind::NoEnabledProvider);
-            let message = if session_bound_circuit_denied {
-                format!(
-                    "no enabled provider for cli_key={} (session-bound provider circuit open)",
-                    &ctx.cli_key
+            let (kind, message) = if forced_provider_model_ineligible {
+                (
+                    EarlyErrorKind::ForcedProviderNotEligibleForModel,
+                    format!(
+                        "forced provider {} is not eligible for requested model {}",
+                        ctx.forced_provider_id.unwrap_or_default(),
+                        ctx.requested_model.as_deref().unwrap_or("-")
+                    ),
+                )
+            } else if all_policies_invalid {
+                (
+                    EarlyErrorKind::ModelPolicyInvalid,
+                    format!(
+                        "all candidate providers have invalid model policies for cli_key={}",
+                        &ctx.cli_key
+                    ),
+                )
+            } else if no_eligible_after_policy {
+                (
+                    EarlyErrorKind::NoEligibleProviderForModel,
+                    format!(
+                        "no eligible provider for model={} cli_key={}",
+                        ctx.requested_model.as_deref().unwrap_or("-"),
+                        &ctx.cli_key
+                    ),
+                )
+            } else if session_bound_circuit_denied {
+                (
+                    EarlyErrorKind::NoEnabledProvider,
+                    format!(
+                        "no enabled provider for cli_key={} (session-bound provider circuit open)",
+                        &ctx.cli_key
+                    ),
                 )
             } else {
-                no_enabled_provider_message(&ctx.cli_key)
+                (
+                    EarlyErrorKind::NoEnabledProvider,
+                    no_enabled_provider_message(&ctx.cli_key),
+                )
             };
+            let contract = early_error_contract(kind);
             let session_id = ctx.session_id.take();
             let requested_model = ctx.requested_model.take();
             let special_settings_json =
@@ -216,6 +285,7 @@ struct NoEnabledProviderDiagnosticArgs<'a> {
     initial_provider_ids: &'a [i64],
     final_provider_ids: &'a [i64],
     forced_provider_missing: bool,
+    forced_provider_model_ineligible: bool,
     // When the (last) session-bound provider was removed because its circuit was open/cooldown.
     // This is the main observability signal for "single provider + session reuse + sudden 503 无供应商".
     session_bound_circuit_denied: bool,
@@ -228,7 +298,9 @@ fn no_enabled_provider_diagnostic(args: &NoEnabledProviderDiagnosticArgs<'_>) ->
         Some(id) => serde_json::json!({"kind": "custom", "modeId": id}),
         None => serde_json::json!({"kind": "default", "modeId": serde_json::Value::Null}),
     };
-    let cleared_reason = if args.forced_provider_missing {
+    let cleared_reason = if args.forced_provider_model_ineligible {
+        "forced_provider_not_eligible_for_model"
+    } else if args.forced_provider_missing {
         "forced_provider_not_in_candidates"
     } else if args.session_bound_circuit_denied {
         "session_bound_provider_circuit_open"
@@ -259,6 +331,7 @@ fn no_enabled_provider_diagnostic(args: &NoEnabledProviderDiagnosticArgs<'_>) ->
         "sessionBoundProviderId": args.session_bound_provider_id,
         "forcedProviderId": args.forced_provider_id,
         "forcedProviderMissing": args.forced_provider_missing,
+        "forcedProviderModelIneligible": args.forced_provider_model_ineligible,
         "candidateProviderIdsBeforeForce": args.initial_provider_ids,
         "candidateProviderCountBeforeForce": args.initial_provider_ids.len(),
         "candidateProviderIdsAfterForce": args.final_provider_ids,
@@ -314,6 +387,7 @@ mod tests {
             initial_provider_ids: &[],
             final_provider_ids: &[],
             forced_provider_missing: false,
+            forced_provider_model_ineligible: false,
             session_bound_circuit_denied: false,
             denied_bound_provider_id: None,
             denied_circuit_snapshot: None,
@@ -373,6 +447,7 @@ mod tests {
             initial_provider_ids: &[11, 22],
             final_provider_ids: &[],
             forced_provider_missing: true,
+            forced_provider_model_ineligible: false,
             session_bound_circuit_denied: false,
             denied_bound_provider_id: None,
             denied_circuit_snapshot: None,
@@ -434,6 +509,7 @@ mod tests {
             initial_provider_ids: &[42],
             final_provider_ids: &[],
             forced_provider_missing: false,
+            forced_provider_model_ineligible: false,
             session_bound_circuit_denied: true,
             denied_bound_provider_id: Some(42),
             denied_circuit_snapshot: Some(snap.clone()),

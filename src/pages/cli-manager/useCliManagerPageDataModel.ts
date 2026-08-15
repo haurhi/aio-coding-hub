@@ -53,10 +53,14 @@ export const CLI_MANAGER_TABS: Array<{ key: CliManagerTabKey; label: string }> =
 ];
 
 const DEFAULT_RECTIFIER: GatewayRectifierSettingsPatch = {
-  verbose_provider_error: true,
-  intercept_anthropic_warmup_requests: true,
+  verbose_provider_error: false,
+  intercept_anthropic_warmup_requests: false,
+  enable_thinking_effort_conflict_rectifier: true,
   enable_thinking_signature_rectifier: true,
   enable_thinking_budget_rectifier: true,
+  enable_gemini_function_id_rectifier: true,
+  enable_response_input_rectifier: true,
+  codex_priority_billing_source: "requested",
   enable_billing_header_rectifier: true,
   enable_claude_metadata_user_id_injection: true,
   enable_response_fixer: true,
@@ -98,8 +102,13 @@ function appSettingsToGeneralSettingsDraft(appSettings: AppSettings): GeneralSet
     rectifier: {
       verbose_provider_error: appSettings.verbose_provider_error,
       intercept_anthropic_warmup_requests: appSettings.intercept_anthropic_warmup_requests,
+      enable_thinking_effort_conflict_rectifier:
+        appSettings.enable_thinking_effort_conflict_rectifier,
       enable_thinking_signature_rectifier: appSettings.enable_thinking_signature_rectifier,
       enable_thinking_budget_rectifier: appSettings.enable_thinking_budget_rectifier,
+      enable_gemini_function_id_rectifier: appSettings.enable_gemini_function_id_rectifier,
+      enable_response_input_rectifier: appSettings.enable_response_input_rectifier,
+      codex_priority_billing_source: appSettings.codex_priority_billing_source,
       enable_billing_header_rectifier: appSettings.enable_billing_header_rectifier,
       enable_claude_metadata_user_id_injection:
         appSettings.enable_claude_metadata_user_id_injection,
@@ -307,8 +316,13 @@ export function useCliManagerPageDataModel() {
       updateRectifierDraft({
         verbose_provider_error: updated.verbose_provider_error,
         intercept_anthropic_warmup_requests: updated.intercept_anthropic_warmup_requests,
+        enable_thinking_effort_conflict_rectifier:
+          updated.enable_thinking_effort_conflict_rectifier,
         enable_thinking_signature_rectifier: updated.enable_thinking_signature_rectifier,
         enable_thinking_budget_rectifier: updated.enable_thinking_budget_rectifier,
+        enable_gemini_function_id_rectifier: updated.enable_gemini_function_id_rectifier,
+        enable_response_input_rectifier: updated.enable_response_input_rectifier,
+        codex_priority_billing_source: updated.codex_priority_billing_source,
         enable_billing_header_rectifier: updated.enable_billing_header_rectifier,
         enable_claude_metadata_user_id_injection: updated.enable_claude_metadata_user_id_injection,
         enable_response_fixer: updated.enable_response_fixer,

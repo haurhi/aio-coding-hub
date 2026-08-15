@@ -38,8 +38,8 @@ use middleware::{
     CodexRequestClassifierMiddleware, CodexSessionCompletionMiddleware,
     Cx2ccCountTokensInterceptorMiddleware, MiddlewareAction, ModelInferenceMiddleware,
     ProbeInterceptorMiddleware, ProviderResolutionMiddleware, ProxyContext,
-    RecursionGuardMiddleware, RequestFingerprintMiddleware, RuntimeSettingsMiddleware,
-    WarmupInterceptorMiddleware,
+    RecursionGuardMiddleware, RequestFingerprintMiddleware, ResponseInputRectifierMiddleware,
+    RuntimeSettingsMiddleware, WarmupInterceptorMiddleware,
 };
 
 type SpecialSettings = Arc<Mutex<Vec<serde_json::Value>>>;
@@ -247,37 +247,43 @@ where
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 8. Warmup interceptor (requires runtime_settings).
+    // 8. Responses input normalization (requires runtime_settings).
+    let ctx = match ResponseInputRectifierMiddleware::run(ctx) {
+        MiddlewareAction::Continue(ctx) => *ctx,
+        MiddlewareAction::ShortCircuit(resp) => return resp,
+    };
+
+    // 9. Warmup interceptor (requires runtime_settings).
     let ctx = match WarmupInterceptorMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 9. Codex session ID completion.
+    // 10. Codex session ID completion.
     let ctx = match CodexSessionCompletionMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 10. Billing header rectifier.
+    // 11. Billing header rectifier.
     let ctx = match BillingHeaderRectifierMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 11. Provider resolution (session routing + provider selection).
+    // 12. Provider resolution (session routing + provider selection).
     let ctx = match ProviderResolutionMiddleware::run(ctx).await {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 12. CX2CC count_tokens compatibility.
+    // 13. CX2CC count_tokens compatibility.
     let ctx = match Cx2ccCountTokensInterceptorMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
     };
 
-    // 13. Request fingerprinting + recent error cache gate.
+    // 14. Request fingerprinting + recent error cache gate.
     let ctx = match RequestFingerprintMiddleware::run(ctx) {
         MiddlewareAction::Continue(ctx) => *ctx,
         MiddlewareAction::ShortCircuit(resp) => return resp,
@@ -383,6 +389,8 @@ mod tests {
             api_key_plaintext: String::new(),
             claude_models: crate::providers::ClaudeModels::default(),
             model_mapping: Default::default(),
+            model_policy: Some(crate::providers::ProviderModelPolicyV1::all()),
+            model_policy_status: crate::providers::ProviderModelPolicyStatus::Ready,
             limit_5h_usd: None,
             limit_daily_usd: None,
             daily_reset_mode: crate::providers::DailyResetMode::Fixed,
@@ -899,9 +907,17 @@ mod tests {
     fn handler_runtime_settings_defaults_match_expected() {
         let runtime = handler_runtime_settings(None, false, false);
 
-        assert!(runtime.verbose_provider_error);
+        assert!(!runtime.verbose_provider_error);
         assert!(!runtime.intercept_warmup);
+        assert!(runtime.enable_thinking_effort_conflict_rectifier);
         assert!(runtime.enable_thinking_signature_rectifier);
+        assert!(runtime.enable_thinking_budget_rectifier);
+        assert!(runtime.enable_gemini_function_id_rectifier);
+        assert!(runtime.enable_response_input_rectifier);
+        assert_eq!(
+            runtime.codex_priority_billing_source,
+            settings::CodexPriorityBillingSource::Requested
+        );
         assert_eq!(runtime.cx2cc_settings.fallback_model_main, "gpt-5.4");
         assert!(runtime.cx2cc_settings.disable_response_storage);
         assert!(runtime.enable_response_fixer);

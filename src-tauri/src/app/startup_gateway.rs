@@ -46,12 +46,14 @@ pub(crate) async fn start(
 
 pub(crate) async fn sync_cli_proxy_after_autostart(
     app_handle: &tauri::AppHandle,
+    db: crate::db::Db,
     _status: &crate::gateway::GatewayStatus,
 ) {
     let _gateway_lifecycle = crate::app::gateway_lifecycle_lock::lock().await;
     let status = crate::app::gateway_runtime_access::app_gateway_status(app_handle);
     gateway_service::sync_cli_proxy_to_gateway(
         app_handle,
+        db,
         &status,
         "cli_proxy_sync_enabled_after_autostart",
     )

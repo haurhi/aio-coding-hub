@@ -68,6 +68,8 @@ where
         cx2cc_active: prepared.cx2cc_active,
         protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
+        reasoning_effort: timing.reasoning_effort.as_deref(),
+        upstream_sent: timing.upstream_sent,
     };
     let provider_ctx = ProviderCtx {
         provider_id: prepared.provider_id,
@@ -79,6 +81,7 @@ where
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),
+        model_redirect: prepared.model_redirect.as_ref(),
     };
 
     emit_gateway_debug_log_lazy(&ctx.state.app, || {
@@ -170,6 +173,8 @@ where
         cx2cc_active: prepared.cx2cc_active,
         protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
+        reasoning_effort: timing.reasoning_effort.as_deref(),
+        upstream_sent: timing.upstream_sent,
     };
     let provider_ctx = ProviderCtx {
         provider_id: prepared.provider_id,
@@ -181,6 +186,7 @@ where
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),
+        model_redirect: prepared.model_redirect.as_ref(),
     };
 
     // --- Non-success upstream error handling ---
@@ -194,6 +200,9 @@ where
             loop_state: loop_state.reborrow(),
             enable_thinking_signature_rectifier: input.enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier: input.enable_thinking_budget_rectifier,
+            enable_thinking_effort_conflict_rectifier: input
+                .enable_thinking_effort_conflict_rectifier,
+            enable_gemini_function_id_rectifier: input.enable_gemini_function_id_rectifier,
             resp,
             upstream: upstream_error::UpstreamRequestState {
                 upstream_body_bytes: &mut prepared.upstream_body_bytes,
@@ -212,10 +221,15 @@ where
                     .codex_agent_message_rectifier_retried,
                 codex_agent_message_retry_pending: &mut retry_state
                     .codex_agent_message_retry_pending,
+                thinking_effort_conflict_rectifier_retried: &mut retry_state
+                    .thinking_effort_conflict_rectifier_retried,
                 thinking_signature_rectifier_retried: &mut retry_state
                     .thinking_signature_rectifier_retried,
                 thinking_budget_rectifier_retried: &mut retry_state
                     .thinking_budget_rectifier_retried,
+                gemini_function_id_rectifier_retried: &mut retry_state
+                    .gemini_function_id_rectifier_retried,
+                additional_repair_retry_slots: &mut retry_state.additional_repair_retry_slots,
             },
         },
     )

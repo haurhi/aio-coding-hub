@@ -396,9 +396,14 @@ fn merge_metrics(base: &UsageMetrics, patch: &UsageMetrics) -> UsageMetrics {
 #[derive(Debug)]
 pub struct SseUsageTracker {
     semantics: UsageSemantics,
+    detect_openai_conversation_errors: bool,
     buffer: Vec<u8>,
     current_event: Vec<u8>,
     current_data: Vec<u8>,
+    raw_prefix: Vec<u8>,
+    meaningful_bytes_seen: bool,
+    leading_bom_match_len: u8,
+    leading_bom_allowed: bool,
 
     claude_message_start: Option<UsageMetrics>,
     claude_message_delta: Option<UsageMetrics>,
@@ -407,9 +412,35 @@ pub struct SseUsageTracker {
     completion_seen: bool,
     terminal_error_seen: bool,
     fake_200_detected: bool,
+    fake_200_reason: Option<SseFake200Reason>,
 }
 
 const MAX_SSE_USAGE_TRACKER_PENDING_BYTES: usize = 1024 * 1024;
+const MAX_SSE_RAW_PREFIX_BYTES: usize = 1024;
+const MAX_SSE_MESSAGE_CHECK_BYTES: usize = 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SseFake200Reason {
+    EmptyBody,
+    HtmlBody,
+    JsonErrorNonEmpty,
+    JsonTypeError,
+    JsonMessageKeywordMatch,
+    OpenAiResponseFailed,
+}
+
+impl SseFake200Reason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyBody => "fake_200_empty_body",
+            Self::HtmlBody => "fake_200_html_body",
+            Self::JsonErrorNonEmpty => "fake_200_json_error_non_empty",
+            Self::JsonTypeError => "fake_200_json_type_error",
+            Self::JsonMessageKeywordMatch => "fake_200_json_message_keyword_match",
+            Self::OpenAiResponseFailed => "fake_200_openai_response_failed",
+        }
+    }
+}
 
 fn trim_ascii(bytes: &[u8]) -> &[u8] {
     let mut start = 0;
@@ -423,6 +454,100 @@ fn trim_ascii(bytes: &[u8]) -> &[u8] {
     }
 
     &bytes[start..end]
+}
+
+fn trim_ascii_start_and_bom(mut bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    bytes = &bytes[start..];
+    if let Some(without_bom) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        let start = without_bom
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(without_bom.len());
+        bytes = &without_bom[start..];
+    }
+    bytes
+}
+
+fn starts_with_ascii_case_insensitive(bytes: &[u8], prefix: &[u8]) -> bool {
+    bytes
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+}
+
+fn is_likely_html_document(bytes: &[u8]) -> bool {
+    let bytes = trim_ascii_start_and_bom(bytes);
+    for prefix in [b"<!doctype html".as_slice(), b"<html".as_slice()] {
+        if starts_with_ascii_case_insensitive(bytes, prefix)
+            && bytes
+                .get(prefix.len())
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'>')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn non_empty_error_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+        Value::Bool(value) => *value,
+        Value::Number(_) => true,
+    }
+}
+
+fn contains_ascii_case_insensitive(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn openai_response_failed(event: &[u8], data: &Value) -> bool {
+    let event = trim_ascii(event);
+    let event_failed = event.eq_ignore_ascii_case(b"response.failed");
+    let event_type = data
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let response = data
+        .get("response")
+        .and_then(Value::as_object)
+        .or_else(|| data.as_object());
+    let Some(response) = response else {
+        return event_failed;
+    };
+    let status = response
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let object = response
+        .get("object")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let id = response
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let response_shaped = event.strip_prefix(b"response.").is_some()
+        || event_type.starts_with("response.")
+        || object == "response"
+        || id.starts_with("resp_");
+
+    response_shaped
+        && (event_failed
+            || event_type.eq_ignore_ascii_case("response.failed")
+            || status.eq_ignore_ascii_case("failed"))
 }
 
 fn eq_ignore_ascii_case_bytes(left: &[u8], right: &[u8]) -> bool {
@@ -497,11 +622,29 @@ fn is_non_empty_marker_value(value: &Value) -> bool {
 
 impl SseUsageTracker {
     pub fn new(cli_key: &str) -> Self {
+        Self::new_with_profile(cli_key, false)
+    }
+
+    pub fn new_for_request(cli_key: &str, path: &str) -> Self {
+        let path = path.trim_end_matches('/');
+        let detect_openai_conversation_errors = matches!(cli_key, "codex" | "grok")
+            && (matches!(path, "/v1/responses" | "/responses")
+                || (cli_key == "grok"
+                    && matches!(path, "/v1/chat/completions" | "/chat/completions")));
+        Self::new_with_profile(cli_key, detect_openai_conversation_errors)
+    }
+
+    fn new_with_profile(cli_key: &str, detect_openai_conversation_errors: bool) -> Self {
         Self {
             semantics: UsageSemantics::from_cli_key(cli_key),
+            detect_openai_conversation_errors,
             buffer: Vec::new(),
             current_event: Vec::new(),
             current_data: Vec::new(),
+            raw_prefix: Vec::new(),
+            meaningful_bytes_seen: false,
+            leading_bom_match_len: 0,
+            leading_bom_allowed: true,
             claude_message_start: None,
             claude_message_delta: None,
             last_generic: None,
@@ -509,6 +652,7 @@ impl SseUsageTracker {
             completion_seen: false,
             terminal_error_seen: false,
             fake_200_detected: false,
+            fake_200_reason: None,
         }
     }
 
@@ -524,7 +668,19 @@ impl SseUsageTracker {
         self.fake_200_detected
     }
 
+    pub fn fake_200_reason(&self) -> Option<SseFake200Reason> {
+        self.fake_200_reason
+    }
+
     pub fn ingest_chunk(&mut self, chunk: &[u8]) {
+        self.observe_meaningful_bytes(chunk);
+        let remaining = MAX_SSE_RAW_PREFIX_BYTES.saturating_sub(self.raw_prefix.len());
+        self.raw_prefix
+            .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if self.detect_openai_conversation_errors && is_likely_html_document(&self.raw_prefix) {
+            self.mark_fake_200(SseFake200Reason::HtmlBody);
+        }
+
         let mut start = 0usize;
 
         for (idx, b) in chunk.iter().enumerate() {
@@ -541,10 +697,65 @@ impl SseUsageTracker {
         }
     }
 
+    fn observe_meaningful_bytes(&mut self, chunk: &[u8]) {
+        const UTF8_BOM: [u8; 3] = [0xef, 0xbb, 0xbf];
+
+        for byte in chunk {
+            if self.meaningful_bytes_seen {
+                return;
+            }
+
+            if self.leading_bom_match_len > 0 {
+                let expected = UTF8_BOM[self.leading_bom_match_len as usize];
+                if *byte != expected {
+                    self.meaningful_bytes_seen = true;
+                    return;
+                }
+                self.leading_bom_match_len += 1;
+                if self.leading_bom_match_len == UTF8_BOM.len() as u8 {
+                    self.leading_bom_match_len = 0;
+                    self.leading_bom_allowed = false;
+                }
+                continue;
+            }
+
+            if byte.is_ascii_whitespace() {
+                continue;
+            }
+            if self.leading_bom_allowed && *byte == UTF8_BOM[0] {
+                self.leading_bom_match_len = 1;
+                continue;
+            }
+
+            self.meaningful_bytes_seen = true;
+            return;
+        }
+    }
+
     fn clear_pending_event(&mut self) {
         self.buffer.clear();
         self.current_event.clear();
         self.current_data.clear();
+    }
+
+    fn mark_fake_200(&mut self, reason: SseFake200Reason) {
+        self.terminal_error_seen = true;
+        self.fake_200_detected = true;
+        self.fake_200_reason.get_or_insert(reason);
+    }
+
+    fn detect_standalone_json_error(&mut self, bytes: &[u8]) {
+        if !self.detect_openai_conversation_errors {
+            return;
+        }
+        let trimmed = trim_ascii(bytes);
+        if !trimmed.starts_with(b"{") {
+            return;
+        }
+        let Ok(data) = serde_json::from_slice::<Value>(trimmed) else {
+            return;
+        };
+        self.detect_openai_event_error(b"message", &data, trimmed.len());
     }
 
     fn append_pending_line_fragment(&mut self, fragment: &[u8]) -> bool {
@@ -572,6 +783,7 @@ impl SseUsageTracker {
             if line.last() == Some(&b'\r') {
                 line = &line[..line.len().saturating_sub(1)];
             }
+            self.detect_standalone_json_error(line);
             self.ingest_line(line);
             return;
         }
@@ -584,6 +796,7 @@ impl SseUsageTracker {
         if line.last() == Some(&b'\r') {
             line.pop();
         }
+        self.detect_standalone_json_error(&line);
         self.ingest_line(&line);
     }
 
@@ -639,6 +852,11 @@ impl SseUsageTracker {
 
     fn flush_event(&mut self) {
         if self.current_data.is_empty() {
+            if self.detect_openai_conversation_errors
+                && openai_response_failed(&self.current_event, &Value::Null)
+            {
+                self.mark_fake_200(SseFake200Reason::OpenAiResponseFailed);
+            }
             self.current_event.clear();
             return;
         }
@@ -658,12 +876,43 @@ impl SseUsageTracker {
             }
         };
 
-        self.ingest_event(&event_name, &data_json);
+        self.ingest_event(&event_name, &data_json, self.current_data.len());
         self.current_event.clear();
         self.current_data.clear();
     }
 
-    fn ingest_event(&mut self, event: &[u8], data: &Value) {
+    fn detect_openai_event_error(&mut self, event: &[u8], data: &Value, raw_data_len: usize) {
+        if !self.detect_openai_conversation_errors {
+            return;
+        }
+        if openai_response_failed(event, data) {
+            self.mark_fake_200(SseFake200Reason::OpenAiResponseFailed);
+            return;
+        }
+        if data.get("error").is_some_and(non_empty_error_value) {
+            self.mark_fake_200(SseFake200Reason::JsonErrorNonEmpty);
+            return;
+        }
+        if data.get("type").and_then(Value::as_str) == Some("error")
+            && (data.get("error").is_some() || data.get("message").is_some())
+        {
+            self.mark_fake_200(SseFake200Reason::JsonTypeError);
+            return;
+        }
+        if raw_data_len < MAX_SSE_MESSAGE_CHECK_BYTES
+            && data
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| {
+                    contains_ascii_case_insensitive(message.as_bytes(), b"error")
+                })
+        {
+            self.mark_fake_200(SseFake200Reason::JsonMessageKeywordMatch);
+        }
+    }
+
+    fn ingest_event(&mut self, event: &[u8], data: &Value, raw_data_len: usize) {
+        self.detect_openai_event_error(event, data, raw_data_len);
         if is_completion_event_name(event) {
             self.completion_seen = true;
         }
@@ -675,7 +924,7 @@ impl SseUsageTracker {
             if data.get("error").is_some()
                 || data.get("type").and_then(|v| v.as_str()) == Some("error")
             {
-                self.fake_200_detected = true;
+                self.mark_fake_200(SseFake200Reason::JsonTypeError);
             }
         }
 
@@ -687,7 +936,7 @@ impl SseUsageTracker {
                 self.terminal_error_seen = true;
                 // Also detect fake 200 from data.type == "error" with an error object
                 if data.get("error").is_some() {
-                    self.fake_200_detected = true;
+                    self.mark_fake_200(SseFake200Reason::JsonTypeError);
                 }
             }
         }
@@ -821,12 +1070,19 @@ impl SseUsageTracker {
     }
 
     pub fn finalize(&mut self) -> Option<UsageExtract> {
+        if self.detect_openai_conversation_errors
+            && !self.meaningful_bytes_seen
+            && self.leading_bom_match_len == 0
+        {
+            self.mark_fake_200(SseFake200Reason::EmptyBody);
+        }
         // Best-effort: handle a trailing line without '\n'.
         if !self.buffer.is_empty() {
             let mut tail = std::mem::take(&mut self.buffer);
             if tail.last() == Some(&b'\r') {
                 tail.pop();
             }
+            self.detect_standalone_json_error(&tail);
             self.ingest_line(&tail);
         }
 

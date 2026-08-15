@@ -1476,6 +1476,38 @@ fn status_all_reports_drift_against_current_gateway_origin() {
 }
 
 #[test]
+fn sync_enabled_upgrades_codex_manifest_missing_catalog_target() {
+    let app = CliProxyTestApp::new();
+    let handle = app.handle();
+    let base_origin = "http://127.0.0.1:37123";
+
+    let enabled = set_enabled(&handle, "codex", true, base_origin).expect("enable codex");
+    assert!(enabled.ok, "{enabled:?}");
+    let mut legacy_manifest = read_manifest(&handle, "codex")
+        .expect("read manifest")
+        .expect("manifest exists");
+    legacy_manifest
+        .files
+        .retain(|entry| entry.kind != "codex_model_catalog_json");
+    write_manifest(&handle, "codex", &legacy_manifest).expect("write legacy manifest");
+
+    let rows = sync_enabled(&handle, base_origin, true).expect("sync enabled");
+    let codex = rows
+        .into_iter()
+        .find(|row| row.cli_key == "codex")
+        .expect("codex row");
+    assert!(codex.ok, "{codex:?}");
+
+    let upgraded = read_manifest(&handle, "codex")
+        .expect("read upgraded manifest")
+        .expect("manifest exists");
+    assert!(upgraded
+        .files
+        .iter()
+        .any(|entry| entry.kind == "codex_model_catalog_json"));
+}
+
+#[test]
 fn enabling_codex_oauth_compatible_proxy_writes_config_only_and_does_not_create_auth() {
     let app = CliProxyTestApp::new();
     let handle = app.handle();
@@ -1509,6 +1541,10 @@ fn enabling_codex_oauth_compatible_proxy_writes_config_only_and_does_not_create_
         .files
         .iter()
         .any(|entry| entry.kind == "codex_config_toml"));
+    assert!(manifest
+        .files
+        .iter()
+        .any(|entry| entry.kind == "codex_model_catalog_json"));
     assert!(
         !manifest
             .files
@@ -1634,6 +1670,78 @@ foo = "bar"
         "{config_after}"
     );
     assert_eq!(auth_after, user_changed_auth);
+}
+
+#[test]
+fn disabling_codex_proxy_restores_preexisting_aio_catalog_and_pointer() {
+    let app = CliProxyTestApp::new();
+    let handle = app.handle();
+    let base_origin = "http://127.0.0.1:37123";
+    let original_config = r#"model_catalog_json = "aio-codex-model-catalog.json"
+
+[existing]
+foo = "bar"
+"#;
+    write_codex_direct_files(&handle, original_config, "{}\n");
+    let catalog_path = codex::codex_model_catalog_path(&handle).expect("catalog path");
+    let original_catalog = b"{\"models\":[{\"slug\":\"user-model\"}]}\n";
+    std::fs::write(&catalog_path, original_catalog).expect("write original catalog");
+
+    let enabled = set_enabled(&handle, "codex", true, base_origin).expect("enable codex");
+    assert!(enabled.ok, "{enabled:?}");
+    let manifest = read_manifest(&handle, "codex")
+        .expect("read manifest")
+        .expect("manifest exists");
+    let catalog_entry = manifest_entry(&manifest, "codex_model_catalog_json");
+    assert!(catalog_entry.existed);
+
+    std::fs::write(
+        &catalog_path,
+        b"{\"models\":[{\"slug\":\"managed-model\"}]}\n",
+    )
+    .expect("write managed catalog");
+
+    let disabled = set_enabled(&handle, "codex", false, base_origin).expect("disable codex");
+    assert!(disabled.ok, "{disabled:?}");
+    assert_eq!(
+        std::fs::read(&catalog_path).expect("read restored catalog"),
+        original_catalog
+    );
+    let restored_config = std::fs::read_to_string(codex_config_path(&handle).expect("config path"))
+        .expect("read restored config");
+    assert!(restored_config.contains("model_catalog_json = \"aio-codex-model-catalog.json\""));
+}
+
+#[test]
+fn disabling_codex_proxy_removes_aio_catalog_created_while_enabled() {
+    let app = CliProxyTestApp::new();
+    let handle = app.handle();
+    let base_origin = "http://127.0.0.1:37123";
+    write_codex_direct_files(&handle, "[existing]\nfoo = \"bar\"\n", "{}\n");
+
+    let enabled = set_enabled(&handle, "codex", true, base_origin).expect("enable codex");
+    assert!(enabled.ok, "{enabled:?}");
+    let catalog_path = codex::codex_model_catalog_path(&handle).expect("catalog path");
+    std::fs::write(
+        &catalog_path,
+        b"{\"models\":[{\"slug\":\"managed-model\"}]}\n",
+    )
+    .expect("write managed catalog");
+
+    let config_path = codex_config_path(&handle).expect("config path");
+    let current_config = std::fs::read_to_string(&config_path).expect("read proxy config");
+    std::fs::write(
+        &config_path,
+        format!("model_catalog_json = \"aio-codex-model-catalog.json\"\n{current_config}"),
+    )
+    .expect("write managed pointer");
+
+    let disabled = set_enabled(&handle, "codex", false, base_origin).expect("disable codex");
+    assert!(disabled.ok, "{disabled:?}");
+    assert!(!catalog_path.exists());
+    let restored_config = std::fs::read_to_string(config_path).expect("read restored config");
+    assert!(!restored_config.contains("model_catalog_json"));
+    assert!(restored_config.contains("[existing]"));
 }
 
 #[test]
@@ -2344,14 +2452,14 @@ fn merge_restore_codex_config_preserves_user_changes() {
     let backup = write_temp(
         tmp.path(),
         "backup.toml",
-        b"[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\n",
+        b"model_catalog_json = \"user-models.json\"\n\n[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\n",
     );
 
     // Current: proxy added its config, user added a new section
     let target = write_temp(
         tmp.path(),
         "config.toml",
-        b"model_provider = \"aio\"\npreferred_auth_method = \"apikey\"\n\n[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\n\n[model_providers.aio]\nname = \"aio\"\nbase_url = \"http://127.0.0.1:37123/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[user_section]\nfoo = \"bar\"\n\n[windows]\nsandbox = \"elevated\"\n",
+        b"model_provider = \"aio\"\npreferred_auth_method = \"apikey\"\nmodel_catalog_json = \"aio-codex-model-catalog.json\"\n\n[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\n\n[model_providers.aio]\nname = \"aio\"\nbase_url = \"http://127.0.0.1:37123/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[user_section]\nfoo = \"bar\"\n\n[windows]\nsandbox = \"elevated\"\n",
     );
 
     merge_restore_codex_config_toml(&target, &backup).unwrap();
@@ -2365,6 +2473,10 @@ fn merge_restore_codex_config_preserves_user_changes() {
     assert!(
         !result.contains("preferred_auth_method"),
         "preferred_auth_method should be removed: {result}"
+    );
+    assert!(
+        result.contains("model_catalog_json = \"user-models.json\""),
+        "user catalog pointer should be restored: {result}"
     );
     // Proxy provider section removed
     assert!(!result.contains("[model_providers.aio]"));

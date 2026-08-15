@@ -15,6 +15,7 @@ pub(super) mod probe_interceptor;
 pub(super) mod provider_resolution;
 pub(super) mod recursion_guard;
 pub(super) mod request_fingerprint;
+pub(super) mod response_input_rectifier;
 pub(super) mod runtime_settings_reader;
 pub(super) mod warmup_interceptor;
 
@@ -29,6 +30,7 @@ pub(super) use probe_interceptor::ProbeInterceptorMiddleware;
 pub(super) use provider_resolution::ProviderResolutionMiddleware;
 pub(super) use recursion_guard::RecursionGuardMiddleware;
 pub(super) use request_fingerprint::RequestFingerprintMiddleware;
+pub(super) use response_input_rectifier::ResponseInputRectifierMiddleware;
 pub(super) use runtime_settings_reader::RuntimeSettingsMiddleware;
 pub(super) use warmup_interceptor::WarmupInterceptorMiddleware;
 
@@ -167,8 +169,11 @@ impl<R: tauri::Runtime> ProxyContext<R> {
             fingerprint_debug: self.fingerprint_debug,
             unavailable_fingerprint_key: self.unavailable_fingerprint_key,
             unavailable_fingerprint_debug: self.unavailable_fingerprint_debug,
+            enable_thinking_effort_conflict_rectifier: rs.enable_thinking_effort_conflict_rectifier,
             enable_thinking_signature_rectifier: rs.enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier: rs.enable_thinking_budget_rectifier,
+            enable_gemini_function_id_rectifier: rs.enable_gemini_function_id_rectifier,
+            codex_priority_billing_source: rs.codex_priority_billing_source,
             enable_claude_metadata_user_id_injection: rs.enable_claude_metadata_user_id_injection,
             cx2cc_settings: rs.cx2cc_settings,
             enable_response_fixer: rs.enable_response_fixer,

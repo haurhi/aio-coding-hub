@@ -113,10 +113,19 @@ impl OAuthProvider for ClaudeOAuthProvider {
                 .unwrap_or_else(|_| HeaderValue::from_static("oauth-2025-04-20")),
         );
 
-        // Mimic Claude Code CLI User-Agent and stainless headers.
+        // Preserve the client fingerprint when forwarding Claude requests. OAuth only needs a
+        // canonical fallback for callers that omitted a usable user agent.
+        let inbound_user_agent = headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| HeaderValue::from_str(value).ok());
         headers.insert(
             "user-agent",
-            HeaderValue::from_static(upstream_identity::CLAUDE_CODE_USER_AGENT),
+            inbound_user_agent.unwrap_or_else(|| {
+                HeaderValue::from_static(upstream_identity::CLAUDE_CODE_USER_AGENT)
+            }),
         );
 
         headers.insert(
@@ -248,6 +257,45 @@ mod tests {
                 .get("x-stainless-package-version")
                 .and_then(|v| v.to_str().ok()),
             Some(upstream_identity::CLAUDE_STAINLESS_PACKAGE_VERSION)
+        );
+    }
+
+    #[test]
+    fn inject_upstream_headers_preserves_non_blank_inbound_user_agent() {
+        let provider = ClaudeOAuthProvider::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("claude-cli/2.1.99 (external, cli)"),
+        );
+
+        provider
+            .inject_upstream_headers(&mut headers, "access-token")
+            .expect("inject headers");
+
+        assert_eq!(
+            headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some("claude-cli/2.1.99 (external, cli)")
+        );
+    }
+
+    #[test]
+    fn inject_upstream_headers_uses_fallback_for_blank_user_agent() {
+        let provider = ClaudeOAuthProvider::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::USER_AGENT, HeaderValue::from_static("   "));
+
+        provider
+            .inject_upstream_headers(&mut headers, "access-token")
+            .expect("inject headers");
+
+        assert_eq!(
+            headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some(upstream_identity::CLAUDE_CODE_USER_AGENT)
         );
     }
 }

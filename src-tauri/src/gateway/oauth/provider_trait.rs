@@ -56,6 +56,14 @@ pub(crate) trait OAuthProvider: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
+    fn inject_model_discovery_headers(
+        &self,
+        headers: &mut HeaderMap,
+        access_token: &str,
+        _id_token: Option<&str>,
+    ) -> Result<(), String> {
+        self.inject_upstream_headers(headers, access_token)
+    }
     fn fetch_limits(
         &self,
         _client: &reqwest::Client,

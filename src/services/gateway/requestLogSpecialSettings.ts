@@ -1,4 +1,9 @@
 import { normalizeClaudeModelMapping, type ClaudeModelMapping } from "./claudeModelMapping";
+import {
+  modelRedirectFromClaudeModelMapping,
+  normalizeModelRedirect,
+  type ModelRedirect,
+} from "./modelRedirect";
 
 export type ParsedRequestLogSpecialSetting = {
   type?: string;
@@ -46,7 +51,16 @@ export function resolveClaudeModelMappingFromSpecialSettings(
   specialSettingsJson: string | null | undefined,
   finalProviderId?: number | null
 ): ClaudeModelMapping | null {
-  const settings = parseRequestLogSpecialSettings(specialSettingsJson);
+  return resolveClaudeModelMappingFromParsedSettings(
+    parseRequestLogSpecialSettings(specialSettingsJson),
+    finalProviderId
+  );
+}
+
+function resolveClaudeModelMappingFromParsedSettings(
+  settings: ParsedRequestLogSpecialSetting[],
+  finalProviderId?: number | null
+): ClaudeModelMapping | null {
   const mappings = settings
     .map((setting) => {
       if (setting.type !== "claude_model_mapping") return null;
@@ -74,15 +88,32 @@ export function resolveClaudeModelMappingFromSpecialSettings(
   return mappings[mappings.length - 1] ?? null;
 }
 
-export function hasClaudeModelMappingSpecialSetting(
-  specialSettingsJson: string | null | undefined
-): boolean {
+export function resolveModelRedirectFromSpecialSettings(
+  specialSettingsJson: string | null | undefined,
+  finalProviderId?: number | null
+): ModelRedirect | null {
   const settings = parseRequestLogSpecialSettings(specialSettingsJson);
-  for (const setting of settings) {
-    if (setting.type !== "claude_model_mapping") continue;
-    return true;
+  const redirects = settings
+    .filter((setting) => setting.type === "model_redirect")
+    .map(normalizeModelRedirect)
+    .filter((redirect): redirect is ModelRedirect => redirect !== null);
+
+  if (redirects.length > 0) {
+    if (finalProviderId != null) {
+      const finalProviderRedirect = redirects
+        .slice()
+        .reverse()
+        .find((redirect) => redirect.providerId === finalProviderId);
+      if (finalProviderRedirect) return finalProviderRedirect;
+    }
+    return redirects[redirects.length - 1] ?? null;
   }
-  return false;
+
+  // Reuse the already-parsed settings; re-parsing the JSON here would double
+  // the work on every request-log card render.
+  return modelRedirectFromClaudeModelMapping(
+    resolveClaudeModelMappingFromParsedSettings(settings, finalProviderId)
+  );
 }
 
 export function hasCodexSystemRequestSpecialSetting(

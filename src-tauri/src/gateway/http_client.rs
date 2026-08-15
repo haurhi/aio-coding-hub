@@ -17,6 +17,7 @@ use std::time::Duration;
 
 /// Global HTTP client instance.
 static GLOBAL_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
+static GLOBAL_NO_REDIRECT_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 
 /// Current proxy URL (for logging and status queries).
 static CURRENT_PROXY_URL: OnceLock<RwLock<Option<String>>> = OnceLock::new();
@@ -73,6 +74,7 @@ fn sort_socket_addrs_ipv4_first(addrs: &mut [SocketAddr]) {
 pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let client = build_client(effective_url)?;
+    let no_redirect_client = build_no_redirect_client(effective_url)?;
 
     if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
         tracing::warn!(
@@ -83,6 +85,8 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
         );
         return apply_proxy(proxy_url);
     }
+
+    let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(no_redirect_client));
 
     let _ = CURRENT_PROXY_URL.set(RwLock::new(effective_url.map(mask_url)));
 
@@ -563,6 +567,7 @@ fn validate_proxy_url(url: &str) -> Result<(), String> {
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
+    let new_no_redirect_client = build_no_redirect_client(effective_url)?;
 
     if let Some(lock) = GLOBAL_CLIENT.get() {
         let mut client = lock.write().unwrap_or_else(|poisoned| {
@@ -572,6 +577,16 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
         *client = new_client;
     } else {
         return init(proxy_url);
+    }
+
+    if let Some(lock) = GLOBAL_NO_REDIRECT_CLIENT.get() {
+        let mut client = lock.write().unwrap_or_else(|poisoned| {
+            tracing::warn!("[HttpClient] Recovered poisoned no-redirect client lock");
+            poisoned.into_inner()
+        });
+        *client = new_no_redirect_client;
+    } else {
+        let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(new_no_redirect_client));
     }
 
     if let Some(lock) = CURRENT_PROXY_URL.get() {
@@ -604,6 +619,17 @@ pub fn get() -> Client {
             tracing::warn!("[HttpClient] Client not initialized, using fallback");
             build_client(None).unwrap_or_default()
         })
+}
+
+/// Get the shared client with automatic redirects disabled for credentialed control-plane calls.
+pub fn get_no_redirect() -> Result<Client, String> {
+    match GLOBAL_NO_REDIRECT_CLIENT.get() {
+        Some(lock) => lock
+            .read()
+            .map(|client| client.clone())
+            .map_err(|_| "No-redirect HTTP client lock is poisoned".to_string()),
+        None => build_no_redirect_client(None),
+    }
 }
 
 /// Get the current proxy URL.
@@ -785,6 +811,17 @@ fn normalize_host_token(host: &str) -> Option<String> {
 
 /// Build HTTP client with optional proxy.
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirect(proxy_url, true)
+}
+
+fn build_no_redirect_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirect(proxy_url, false)
+}
+
+fn build_client_with_redirect(
+    proxy_url: Option<&str>,
+    follow_redirects: bool,
+) -> Result<Client, String> {
     let mut builder = Client::builder()
         .user_agent(format!(
             "aio-coding-hub-gateway/{}",
@@ -793,6 +830,10 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
         .pool_max_idle_per_host(10)
         .tcp_keepalive(Duration::from_secs(60));
+
+    if !follow_redirects {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
 
     if let Some(url) = proxy_url {
         validate_proxy_url(url)?;

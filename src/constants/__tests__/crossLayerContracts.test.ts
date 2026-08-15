@@ -14,6 +14,7 @@ import { getSettingsState, resetMswState } from "../../test/msw/state";
 import bindingsSource from "../../generated/bindings.ts?raw";
 import heartbeatSource from "../../../src-tauri/src/app/heartbeat_watchdog.rs?raw";
 import noticeSource from "../../../src-tauri/src/app/notice.rs?raw";
+import providerServiceSource from "../../../src-tauri/src/app/provider_service.rs?raw";
 import settingsServiceSource from "../../../src-tauri/src/app/settings_service.rs?raw";
 import startupStateSource from "../../../src-tauri/src/app/startup_state.rs?raw";
 import promptsSource from "../../../src-tauri/src/domain/prompts.rs?raw";
@@ -72,6 +73,9 @@ describe("cross-layer contracts", () => {
       appEventNames.heartbeat
     );
     expect(extractRustStringConst(noticeSource, "NOTICE_EVENT_NAME")).toBe(appEventNames.notice);
+    expect(extractRustStringConst(providerServiceSource, "PROVIDER_CODEX_CATALOG_EVENT_NAME")).toBe(
+      appEventNames.providerCodexCatalog
+    );
     expect(extractRustStringConst(startupStateSource, "APP_STARTUP_STATUS_EVENT_NAME")).toBe(
       appEventNames.startupStatus
     );
@@ -147,7 +151,15 @@ describe("cross-layer contracts", () => {
     // space-constraint design (attempts_json must gain zero bytes on success
     // paths); both sides pin the omission with dedicated tests (Rust key-set
     // assertions in failover_loop/tests.rs, absence handling in attemptsJson).
-    const exemptFields = ["circuit_recover_at_unix", "circuit_trigger_error_code"];
+    // claude_model_mapping / model_redirect on FailoverAttempt follow the same
+    // space-constraint design: most attempts carry no mapping, and the frontend
+    // reads the request-event level fields instead of per-attempt entries.
+    const exemptFields = [
+      "circuit_recover_at_unix",
+      "circuit_trigger_error_code",
+      "claude_model_mapping",
+      "model_redirect",
+    ];
     const skippedFields = Array.from(
       gatewayEventsSource.matchAll(
         /#\[serde\(skip_serializing_if[^\]]*\)\]\s*(?:pub(?:\([^)]*\))?\s+)?(\w+):/g

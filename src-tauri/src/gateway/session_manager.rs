@@ -140,12 +140,10 @@ impl SessionManager {
                 }
 
                 if let Some(user_id) = meta.get("user_id").and_then(|v| v.as_str()) {
-                    let marker = "_session_";
-                    if let Some(idx) = user_id.find(marker) {
-                        let extracted = &user_id[idx + marker.len()..];
-                        if let Some(id) = sanitize_session_id(extracted) {
-                            return Some(id);
-                        }
+                    let parsed = crate::gateway::claude_metadata_user_id_injection::
+                        parse_claude_metadata_user_id(user_id);
+                    if let Some(id) = parsed.session_id.and_then(|id| sanitize_session_id(&id)) {
+                        return Some(id);
                     }
                 }
             }

@@ -32,7 +32,8 @@ where
 {
     let mut retry_state = RetryLoopState::new();
 
-    for retry_index in 1..=prepared.provider_max_attempts {
+    let mut retry_index = 1u32;
+    while retry_index <= retry_state.effective_attempt_limit(prepared.provider_max_attempts) {
         let attempt_index = loop_state.attempts.len().saturating_add(1) as u32;
 
         let send_outcome = attempt_executor::execute_attempt(
@@ -62,20 +63,11 @@ where
 
         match ctrl {
             LoopControl::ContinueRetry => {
-                let reasoning_context_retry_pending =
-                    std::mem::take(&mut retry_state.codex_reasoning_context_retry_pending);
-                let additional_tools_retry_pending =
-                    std::mem::take(&mut retry_state.codex_additional_tools_retry_pending);
-                let agent_message_retry_pending =
-                    std::mem::take(&mut retry_state.codex_agent_message_retry_pending);
-                if retry_index < prepared.provider_regular_max_attempts
-                    || reasoning_context_retry_pending
-                    || additional_tools_retry_pending
-                    || agent_message_retry_pending
-                {
-                    continue;
-                }
-                break;
+                let Some(next_retry_index) = retry_index.checked_add(1) else {
+                    break;
+                };
+                retry_index = next_retry_index;
+                continue;
             }
             LoopControl::BreakRetry => break,
             LoopControl::Return(resp) => return Some(resp),
@@ -158,7 +150,7 @@ where
 fn build_error_contexts<'a, R: tauri::Runtime>(
     _input: &RequestContext<R>,
     prepared: &'a PreparedProvider,
-    timing: &AttemptTiming,
+    timing: &'a AttemptTiming,
     attempt_index: u32,
     retry_index: u32,
 ) -> (AttemptCtx<'a>, ProviderCtx<'a>) {
@@ -173,6 +165,8 @@ fn build_error_contexts<'a, R: tauri::Runtime>(
         cx2cc_active: prepared.cx2cc_active,
         protocol_bridge_type: prepared.protocol_bridge_type.as_deref(),
         anthropic_stream_requested: prepared.anthropic_stream_requested,
+        reasoning_effort: timing.reasoning_effort.as_deref(),
+        upstream_sent: timing.upstream_sent,
     };
     let provider_ctx = ProviderCtx {
         provider_id: prepared.provider_id,
@@ -184,6 +178,57 @@ fn build_error_contexts<'a, R: tauri::Runtime>(
         session_reuse: prepared.session_reuse,
         stream_idle_timeout_seconds: prepared.stream_idle_timeout_seconds,
         claude_model_mapping: prepared.claude_model_mapping.as_ref(),
+        model_redirect: prepared.model_redirect.as_ref(),
     };
     (attempt_ctx, provider_ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::attempt_executor::grant_repair_retry_slot_if_needed;
+    use super::RetryLoopState;
+
+    #[test]
+    fn repair_retry_slot_extends_only_at_the_current_boundary() {
+        let mut slots = 0;
+
+        assert!(!grant_repair_retry_slot_if_needed(&mut slots, 1, 2));
+        let state = RetryLoopState {
+            additional_repair_retry_slots: slots,
+            ..RetryLoopState::new()
+        };
+        assert_eq!(state.effective_attempt_limit(2), 2);
+
+        assert!(grant_repair_retry_slot_if_needed(&mut slots, 2, 2));
+        let state = RetryLoopState {
+            additional_repair_retry_slots: slots,
+            ..RetryLoopState::new()
+        };
+        assert_eq!(state.effective_attempt_limit(2), 3);
+    }
+
+    #[test]
+    fn later_repair_can_extend_the_new_boundary_once_more() {
+        let mut slots = 0;
+
+        assert!(grant_repair_retry_slot_if_needed(&mut slots, 1, 1));
+        let state = RetryLoopState {
+            additional_repair_retry_slots: slots,
+            ..RetryLoopState::new()
+        };
+        assert_eq!(state.effective_attempt_limit(1), 2);
+        assert!(grant_repair_retry_slot_if_needed(&mut slots, 2, 1));
+        let state = RetryLoopState {
+            additional_repair_retry_slots: slots,
+            ..RetryLoopState::new()
+        };
+        assert_eq!(state.effective_attempt_limit(1), 3);
+    }
+
+    #[test]
+    fn ordinary_attempt_limit_is_unchanged_without_a_repair() {
+        let state = RetryLoopState::new();
+        assert_eq!(state.effective_attempt_limit(1), 1);
+        assert_eq!(state.effective_attempt_limit(5), 5);
+    }
 }

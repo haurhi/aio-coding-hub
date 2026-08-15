@@ -15,6 +15,7 @@ fn emit_gateway_status<R: tauri::Runtime>(
 
 pub(crate) async fn sync_cli_proxy_to_gateway<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
+    db: db::Db,
     status: &gateway::GatewayStatus,
     task_label: &'static str,
 ) {
@@ -28,6 +29,11 @@ pub(crate) async fn sync_cli_proxy_to_gateway<R: tauri::Runtime>(
         cli_proxy::sync_enabled(&app_for_sync, &base_origin, true)
     })
     .await;
+
+    // The sync short-circuits when the codex config is already applied; refresh the
+    // capability catalog asynchronously so DB changes made while the gateway was
+    // off still land without blocking startup on the 20s CLI export.
+    crate::app::provider_service::spawn_codex_catalog_refresh(app, db);
 }
 
 pub(crate) async fn start_and_sync(
@@ -44,7 +50,13 @@ pub(crate) async fn start_and_sync(
     .await?;
 
     emit_gateway_status(&app, &status);
-    sync_cli_proxy_to_gateway(&app, &status, "cli_proxy_sync_enabled_after_gateway_start").await;
+    sync_cli_proxy_to_gateway(
+        &app,
+        db,
+        &status,
+        "cli_proxy_sync_enabled_after_gateway_start",
+    )
+    .await;
 
     Ok(status)
 }

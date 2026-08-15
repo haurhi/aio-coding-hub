@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::super::events::{emit_gateway_debug_log, emit_gateway_debug_log_lazy};
 use super::super::proxy::{
-    is_fake_200_non_stream_body, upstream_client_error_rules, GatewayErrorCode,
+    detect_fake_200_non_stream_body, upstream_client_error_rules, Fake200Profile, GatewayErrorCode,
 };
 use super::super::util::{
     lossy_utf8_preview, now_unix_millis, now_unix_seconds, MAX_DEBUG_BODY_PREVIEW_BYTES,
@@ -187,7 +187,7 @@ where
     ) -> Self {
         Self {
             upstream,
-            tracker: usage::SseUsageTracker::new(&ctx.cli_key),
+            tracker: usage::SseUsageTracker::new_for_request(&ctx.cli_key, &ctx.path),
             ctx,
             first_byte_ms: initial_first_byte_ms,
             idle_timeout,
@@ -299,14 +299,15 @@ where
             }
             Poll::Ready(Some(Err(err))) => {
                 let completion_seen = self.tracker.completion_seen();
-                let codex_successish = is_codex_stream_tail_error_successish(
-                    &self.ctx.cli_key,
-                    &self.ctx.path,
-                    self.ctx.status,
-                    self.first_byte_ms.is_some(),
-                    completion_seen,
-                    completion_seen,
-                );
+                let codex_successish = !self.tracker.fake_200_detected()
+                    && is_codex_stream_tail_error_successish(
+                        &self.ctx.cli_key,
+                        &self.ctx.path,
+                        self.ctx.status,
+                        self.first_byte_ms.is_some(),
+                        completion_seen,
+                        completion_seen,
+                    );
                 if codex_successish {
                     emit_gateway_debug_log(
                         &self.ctx.app,
@@ -332,7 +333,12 @@ where
         self.finalized = true;
 
         let usage = self.tracker.finalize();
-        let terminal_signal = if error_code.is_some() {
+        let effective_error_code = if error_code.is_none() && self.tracker.fake_200_detected() {
+            Some(GatewayErrorCode::Fake200.as_str())
+        } else {
+            error_code
+        };
+        let terminal_signal = if effective_error_code.is_some() {
             Some("error")
         } else if self.tracker.completion_seen() {
             Some("completed")
@@ -350,6 +356,16 @@ where
         // Propagate fake 200 detection from tracker to finalize context.
         if self.tracker.fake_200_detected() {
             self.ctx.fake_200_detected = true;
+            if let Some(reason) = self.tracker.fake_200_reason() {
+                response_fixer::push_special_setting(
+                    &self.ctx.special_settings,
+                    serde_json::json!({
+                        "type": "fake_200_detection",
+                        "scope": "stream",
+                        "reason_code": reason.as_str(),
+                    }),
+                );
+            }
         }
         let usage_metrics = usage.as_ref().map(|u| u.metrics.clone());
         let requested_model = self
@@ -361,7 +377,7 @@ where
         emit_request_event_and_spawn_request_log(
             &self.ctx,
             StreamRequestCompletion::from_error_code(
-                error_code,
+                effective_error_code,
                 self.first_byte_ms,
                 requested_model,
                 usage_metrics,
@@ -435,15 +451,16 @@ where
             let completion_seen = self.tracker.completion_seen();
             let terminal_error_seen = self.tracker.terminal_error_seen();
 
-            let codex_successish = is_codex_drop_successish(
-                &self.ctx.cli_key,
-                &self.ctx.path,
-                self.ctx.status,
-                self.first_byte_ms.is_some(),
-                completion_seen,
-                usage_seen,
-                terminal_error_seen,
-            );
+            let codex_successish = !self.tracker.fake_200_detected()
+                && is_codex_drop_successish(
+                    &self.ctx.cli_key,
+                    &self.ctx.path,
+                    self.ctx.status,
+                    self.first_byte_ms.is_some(),
+                    completion_seen,
+                    usage_seen,
+                    terminal_error_seen,
+                );
 
             if codex_successish {
                 self.finalize(None);
@@ -609,14 +626,15 @@ where
             // For Codex /v1/responses, completion_seen implies response.completed
             // was received (which carries usage). We treat this as a proxy for
             // usage_seen to avoid consuming tracker state before tee.finalize().
-            let codex_successish = is_codex_stream_terminal_error_successish(
-                &tee.ctx.cli_key,
-                &tee.ctx.path,
-                tee.ctx.status,
-                saw_stream_output,
-                completion_seen,
-                completion_seen,
-            );
+            let codex_successish = !tee.tracker.fake_200_detected()
+                && is_codex_stream_terminal_error_successish(
+                    &tee.ctx.cli_key,
+                    &tee.ctx.path,
+                    tee.ctx.status,
+                    saw_stream_output,
+                    completion_seen,
+                    completion_seen,
+                );
 
             if codex_successish {
                 tee.finalize(None);
@@ -673,16 +691,17 @@ where
             // Codex SSE: 2xx + saw output + no terminal error => treat client disconnect as success.
             // Do NOT require completion_seen: ChatGPT backend's response.completed may arrive
             // after the client disconnects and the drain window may not capture it.
-            let codex_successish = is_codex_client_abort_successish(
-                &tee.ctx.cli_key,
-                &tee.ctx.path,
-                tee.ctx.status,
-                saw_stream_output,
-                completion_seen,
-                usage_seen,
-                terminal_error_seen,
-                upstream_ended_normally,
-            );
+            let codex_successish = !tee.tracker.fake_200_detected()
+                && is_codex_client_abort_successish(
+                    &tee.ctx.cli_key,
+                    &tee.ctx.path,
+                    tee.ctx.status,
+                    saw_stream_output,
+                    completion_seen,
+                    usage_seen,
+                    terminal_error_seen,
+                    upstream_ended_normally,
+                );
             if codex_successish {
                 tee.finalize(None);
             } else {
@@ -745,11 +764,14 @@ where
         }
         self.finalized = true;
 
-        let effective_error_code = if error_code.is_none()
-            && !self.truncated
-            && !self.buffer.is_empty()
-            && is_fake_200_non_stream_body(&self.buffer)
-        {
+        let detection = (!self.truncated).then(|| {
+            detect_fake_200_non_stream_body(
+                &self.buffer,
+                Fake200Profile::for_request(&self.ctx.cli_key, &self.ctx.path),
+            )
+        });
+        let detection = detection.flatten();
+        let effective_error_code = if error_code.is_none() && detection.is_some() {
             Some(GatewayErrorCode::Fake200.as_str())
         } else {
             error_code
@@ -758,6 +780,16 @@ where
             self.ctx.fake_200_detected = true;
             self.ctx.fake_200_quota_exhausted =
                 upstream_client_error_rules::match_quota_exhausted(&self.buffer);
+            if let Some(detection) = detection {
+                response_fixer::push_special_setting(
+                    &self.ctx.special_settings,
+                    serde_json::json!({
+                        "type": "fake_200_detection",
+                        "scope": "response",
+                        "reason_code": detection.reason.as_str(),
+                    }),
+                );
+            }
         }
 
         let usage = if self.truncated || self.buffer.is_empty() {

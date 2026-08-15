@@ -3,6 +3,7 @@ use crate::gateway::proxy::failover::should_reuse_provider;
 use crate::gateway::runtime::GatewayAppState;
 use crate::providers;
 use crate::{circuit_breaker, session_manager};
+use std::collections::HashSet;
 
 pub(super) struct ProviderSelection {
     pub(super) effective_sort_mode_id: Option<i64>,
@@ -10,6 +11,88 @@ pub(super) struct ProviderSelection {
     pub(super) bound_provider_order: Option<Vec<i64>>,
     pub(super) active_sort_mode_id: Option<i64>,
     pub(super) session_bound_sort_mode_id: Option<Option<i64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ModelPolicyFilterResult {
+    pub(super) original_provider_ids: Vec<i64>,
+    pub(super) ineligible_provider_ids: Vec<i64>,
+    pub(super) invalid_provider_ids: Vec<i64>,
+}
+
+pub(super) fn filter_providers_by_model_policy(
+    providers: &mut Vec<providers::ProviderForGateway>,
+    requested_model: Option<&str>,
+    forced_provider_id: Option<i64>,
+) -> ModelPolicyFilterResult {
+    let original_provider_ids = providers.iter().map(|provider| provider.id).collect();
+    let Some(requested_model) = requested_model.filter(|model| !model.is_empty()) else {
+        return ModelPolicyFilterResult {
+            original_provider_ids,
+            ineligible_provider_ids: Vec::new(),
+            invalid_provider_ids: Vec::new(),
+        };
+    };
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CandidateClass {
+        Blocked,
+        Explicit,
+        Fallback,
+        Invalid,
+    }
+
+    let classified = providers
+        .iter()
+        .map(|provider| {
+            let class = match provider.model_policy_status {
+                providers::ProviderModelPolicyStatus::Legacy => CandidateClass::Fallback,
+                providers::ProviderModelPolicyStatus::Ready => match provider.model_policy.as_ref()
+                {
+                    Some(policy) => match policy.eligibility(requested_model) {
+                        providers::ProviderModelEligibility::Blocked => CandidateClass::Blocked,
+                        providers::ProviderModelEligibility::Explicit => CandidateClass::Explicit,
+                        providers::ProviderModelEligibility::Fallback => CandidateClass::Fallback,
+                    },
+                    None => CandidateClass::Invalid,
+                },
+                providers::ProviderModelPolicyStatus::Invalid => CandidateClass::Invalid,
+            };
+            (provider.id, class)
+        })
+        .collect::<Vec<_>>();
+    // Explicit-first narrowing is a routing preference, not an eligibility rule:
+    // a forced provider (x-aio-provider-id) must only be rejected when its own
+    // policy blocks the model, not because a sibling declared it explicitly.
+    let use_explicit = forced_provider_id.is_none()
+        && classified
+            .iter()
+            .any(|(_, class)| *class == CandidateClass::Explicit);
+    let is_eligible = |class: CandidateClass| {
+        class == CandidateClass::Explicit || (!use_explicit && class == CandidateClass::Fallback)
+    };
+
+    let invalid_provider_ids = classified
+        .iter()
+        .filter_map(|(id, class)| (*class == CandidateClass::Invalid).then_some(*id))
+        .collect();
+    let ineligible_provider_ids = classified
+        .iter()
+        .filter_map(|(id, class)| {
+            (*class != CandidateClass::Invalid && !is_eligible(*class)).then_some(*id)
+        })
+        .collect();
+    let eligible_ids = classified
+        .iter()
+        .filter_map(|(id, class)| is_eligible(*class).then_some(*id))
+        .collect::<HashSet<_>>();
+    providers.retain(|provider| eligible_ids.contains(&provider.id));
+
+    ModelPolicyFilterResult {
+        original_provider_ids,
+        ineligible_provider_ids,
+        invalid_provider_ids,
+    }
 }
 
 pub(super) fn select_providers_with_session_binding<R: tauri::Runtime>(

@@ -1,5 +1,6 @@
 //! Config export: read DB tables and skill files into a ConfigBundle.
 
+use crate::providers::{ClaudeModels, ProviderModelPolicyStatus, ProviderModelPolicyV1};
 use crate::shared::error::{db_err, AppResult};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -68,6 +69,7 @@ SELECT
   oauth_last_refreshed_at,
   oauth_last_error,
   claude_models_json,
+  model_policy_json,
   supported_models_json,
   model_mapping_json,
   enabled,
@@ -92,8 +94,11 @@ ORDER BY cli_key ASC, sort_order ASC, id ASC
 
     let rows = stmt
         .query_map([], |row| {
+            let cli_key: String = row.get("cli_key")?;
             let base_url: String = row.get("base_url")?;
             let base_urls_json: String = row.get("base_urls_json")?;
+            let claude_models_json: String = row.get("claude_models_json")?;
+            let model_policy_json: Option<String> = row.get("model_policy_json")?;
             let mut base_urls =
                 serde_json::from_str::<Vec<String>>(&base_urls_json).unwrap_or_default();
             base_urls.retain(|value| !value.trim().is_empty());
@@ -101,58 +106,93 @@ ORDER BY cli_key ASC, sort_order ASC, id ASC
                 base_urls.push(base_url);
             }
 
-            Ok(ProviderExport {
-                id: row.get("id")?,
-                cli_key: row.get("cli_key")?,
-                name: row.get("name")?,
-                base_urls,
-                base_url_mode: row.get("base_url_mode")?,
-                api_key_plaintext: row.get("api_key_plaintext")?,
-                auth_mode: row
-                    .get::<_, Option<String>>("auth_mode")?
-                    .unwrap_or_else(|| "api_key".to_string()),
-                oauth_provider_type: row.get("oauth_provider_type")?,
-                oauth_access_token: row.get("oauth_access_token")?,
-                oauth_refresh_token: row.get("oauth_refresh_token")?,
-                oauth_id_token: row.get("oauth_id_token")?,
-                oauth_token_expiry: row.get("oauth_expires_at")?,
-                oauth_scopes: None,
-                oauth_token_uri: row.get("oauth_token_uri")?,
-                oauth_client_id: row.get("oauth_client_id")?,
-                oauth_client_secret: row.get("oauth_client_secret")?,
-                oauth_email: row.get("oauth_email")?,
-                oauth_refresh_lead_seconds: normalize_oauth_refresh_lead_seconds(
-                    row.get::<_, i64>("oauth_refresh_lead_s")?,
-                ),
-                oauth_last_refreshed_at: row.get("oauth_last_refreshed_at")?,
-                oauth_last_error: row.get("oauth_last_error")?,
-                claude_models_json: row.get("claude_models_json")?,
-                supported_models_json: row.get("supported_models_json")?,
-                model_mapping_json: row.get("model_mapping_json")?,
-                enabled: row.get::<_, i64>("enabled")? != 0,
-                priority: row.get("priority")?,
-                cost_multiplier: row.get("cost_multiplier")?,
-                limit_5h_usd: row.get("limit_5h_usd")?,
-                limit_daily_usd: row.get("limit_daily_usd")?,
-                limit_weekly_usd: row.get("limit_weekly_usd")?,
-                limit_monthly_usd: row.get("limit_monthly_usd")?,
-                limit_total_usd: row.get("limit_total_usd")?,
-                daily_reset_mode: row.get("daily_reset_mode")?,
-                daily_reset_time: row.get("daily_reset_time")?,
-                tags_json: row.get("tags_json")?,
-                note: row.get("note")?,
-                source_provider_id: row.get("source_provider_id")?,
-                source_provider_cli_key: row
-                    .get::<_, Option<i64>>("source_provider_id")?
-                    .and_then(|source_id| provider_cli_key_by_id.get(&source_id).cloned()),
-                bridge_type: row.get("bridge_type")?,
-            })
+            Ok((
+                ProviderExport {
+                    id: row.get("id")?,
+                    cli_key,
+                    name: row.get("name")?,
+                    base_urls,
+                    base_url_mode: row.get("base_url_mode")?,
+                    api_key_plaintext: row.get("api_key_plaintext")?,
+                    auth_mode: row
+                        .get::<_, Option<String>>("auth_mode")?
+                        .unwrap_or_else(|| "api_key".to_string()),
+                    oauth_provider_type: row.get("oauth_provider_type")?,
+                    oauth_access_token: row.get("oauth_access_token")?,
+                    oauth_refresh_token: row.get("oauth_refresh_token")?,
+                    oauth_id_token: row.get("oauth_id_token")?,
+                    oauth_token_expiry: row.get("oauth_expires_at")?,
+                    oauth_scopes: None,
+                    oauth_token_uri: row.get("oauth_token_uri")?,
+                    oauth_client_id: row.get("oauth_client_id")?,
+                    oauth_client_secret: row.get("oauth_client_secret")?,
+                    oauth_email: row.get("oauth_email")?,
+                    oauth_refresh_lead_seconds: normalize_oauth_refresh_lead_seconds(
+                        row.get::<_, i64>("oauth_refresh_lead_s")?,
+                    ),
+                    oauth_last_refreshed_at: row.get("oauth_last_refreshed_at")?,
+                    oauth_last_error: row.get("oauth_last_error")?,
+                    claude_models_json: String::new(),
+                    claude_models: None,
+                    model_policy: None,
+                    supported_models_json: row.get("supported_models_json")?,
+                    model_mapping_json: row.get("model_mapping_json")?,
+                    enabled: row.get::<_, i64>("enabled")? != 0,
+                    priority: row.get("priority")?,
+                    cost_multiplier: row.get("cost_multiplier")?,
+                    limit_5h_usd: row.get("limit_5h_usd")?,
+                    limit_daily_usd: row.get("limit_daily_usd")?,
+                    limit_weekly_usd: row.get("limit_weekly_usd")?,
+                    limit_monthly_usd: row.get("limit_monthly_usd")?,
+                    limit_total_usd: row.get("limit_total_usd")?,
+                    daily_reset_mode: row.get("daily_reset_mode")?,
+                    daily_reset_time: row.get("daily_reset_time")?,
+                    tags_json: row.get("tags_json")?,
+                    note: row.get("note")?,
+                    source_provider_id: row.get("source_provider_id")?,
+                    source_provider_cli_key: row
+                        .get::<_, Option<i64>>("source_provider_id")?
+                        .and_then(|source_id| provider_cli_key_by_id.get(&source_id).cloned()),
+                    bridge_type: row.get("bridge_type")?,
+                },
+                model_policy_json,
+                claude_models_json,
+            ))
         })
         .map_err(|e| db_err!("failed to query providers for export: {e}"))?;
 
     let mut providers = Vec::new();
     for row in rows {
-        providers.push(row.map_err(|e| db_err!("failed to read provider export row: {e}"))?);
+        let (mut provider, model_policy_json, claude_models_json) =
+            row.map_err(|e| db_err!("failed to read provider export row: {e}"))?;
+        let (model_policy, status) =
+            ProviderModelPolicyV1::decode(model_policy_json.as_deref(), &provider.cli_key);
+        match status {
+            ProviderModelPolicyStatus::Ready => provider.model_policy = model_policy,
+            ProviderModelPolicyStatus::Legacy => {
+                provider.claude_models = Some(
+                    serde_json::from_str::<ClaudeModels>(&claude_models_json).map_err(|error| {
+                        crate::shared::error::AppError::new(
+                            "PROVIDER_MODEL_POLICY_INVALID",
+                            format!(
+                                "legacy model mapping is invalid for provider {}: {error}",
+                                provider.name
+                            ),
+                        )
+                    })?,
+                );
+            }
+            ProviderModelPolicyStatus::Invalid => {
+                // A single corrupted policy must not block the whole backup; the
+                // policy is already broken, so export the safe default instead.
+                tracing::warn!(
+                    provider = %provider.name,
+                    "invalid model policy replaced with the default during export"
+                );
+                provider.model_policy = Some(crate::providers::ProviderModelPolicyV1::all());
+            }
+        }
+        providers.push(provider);
     }
     Ok(providers)
 }

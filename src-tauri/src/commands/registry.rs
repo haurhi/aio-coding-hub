@@ -104,6 +104,7 @@ macro_rules! generated_command_registry {
             provider_copy_api_key_to_clipboard => crate::commands::providers::provider_copy_api_key_to_clipboard,
             base_url_ping_ms => crate::commands::providers::base_url_ping_ms,
             provider_test_availability => crate::commands::provider_availability::provider_test_availability,
+            provider_models_discover => crate::commands::providers::provider_models_discover,
             provider_oauth_start_flow => crate::commands::providers::provider_oauth_start_flow,
             provider_oauth_start_device_flow => crate::commands::providers::provider_oauth_start_device_flow,
             provider_oauth_poll_device_flow => crate::commands::providers::provider_oauth_poll_device_flow,
@@ -128,9 +129,9 @@ macro_rules! generated_command_registry {
             sort_mode_providers_set_order => crate::commands::sort_modes::sort_mode_providers_set_order,
             sort_mode_provider_set_enabled => crate::commands::sort_modes::sort_mode_provider_set_enabled,
             // ── model_prices ──
-            model_prices_list => crate::commands::model_prices::model_prices_list,
+            model_prices_list_all => crate::commands::model_prices::model_prices_list_all,
             model_price_upsert => crate::commands::model_prices::model_price_upsert,
-            model_prices_sync_basellm => crate::commands::model_prices::model_prices_sync_basellm,
+            model_prices_sync => crate::commands::model_prices::model_prices_sync,
             model_price_aliases_get => crate::commands::model_prices::model_price_aliases_get,
             model_price_aliases_set => crate::commands::model_prices::model_price_aliases_set,
             // ── prompts ──
@@ -288,7 +289,8 @@ pub(crate) fn export_typescript_bindings(output_path: &str) -> Result<(), String
         .typ::<crate::gateway::events::GatewayRequestSignalEvent>()
         .typ::<crate::gateway::events::GatewayAttemptEvent>()
         .typ::<crate::gateway::events::GatewayLogEvent>()
-        .typ::<crate::gateway::events::GatewayCircuitEvent>();
+        .typ::<crate::gateway::events::GatewayCircuitEvent>()
+        .typ::<crate::app::provider_service::CodexCatalogEventPayload>();
 
     builder
         .export(
@@ -351,6 +353,14 @@ mod tests {
         assert!(
             generated_command_names().contains(&"model_price_upsert"),
             "model_price_upsert should stay in the shared generated command registry"
+        );
+    }
+
+    #[test]
+    fn includes_provider_model_discovery_in_generated_command_registry() {
+        assert!(
+            generated_command_names().contains(&"provider_models_discover"),
+            "provider_models_discover should stay in the shared generated command registry"
         );
     }
 

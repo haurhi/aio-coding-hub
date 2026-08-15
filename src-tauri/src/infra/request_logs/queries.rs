@@ -95,6 +95,9 @@ pub(super) struct AttemptRow {
     decision: Option<String>,
     reason: Option<String>,
     session_reuse: Option<bool>,
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    upstream_sent: bool,
 }
 
 pub(super) fn parse_attempts(attempts_json: &str) -> Vec<AttemptRow> {
@@ -133,6 +136,16 @@ pub(super) fn final_provider_from_attempts(attempts: &[AttemptRow]) -> (i64, Str
         Some(a) => (a.provider_id, a.provider_name.clone()),
         None => (0, "Unknown".to_string()),
     }
+}
+
+pub(super) fn final_reasoning_effort_from_attempts(attempts: &[AttemptRow]) -> Option<String> {
+    super::semantics::final_reasoning_effort(attempts.iter().map(|attempt| {
+        (
+            attempt.outcome.as_str(),
+            attempt.upstream_sent,
+            attempt.reasoning_effort.as_deref(),
+        )
+    }))
 }
 
 pub(super) fn route_from_attempts(attempts: &[AttemptRow]) -> Vec<RequestLogRouteHop> {
@@ -329,6 +342,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<RequestLogSummary, rusqlite
     let attempt_count = attempts.len() as i64;
     let (start_provider_id, start_provider_name) = start_provider_from_attempts(&attempts);
     let (final_provider_id, final_provider_name) = final_provider_from_attempts(&attempts);
+    let reasoning_effort = final_reasoning_effort_from_attempts(&attempts);
     let route = route_from_attempts(&attempts);
     // has_failover: 切换过 provider（route 中有多个 hop）。注意 provider_id>0 的
     // skipped attempt 也计入 hop（见 route_includes_skipped_attempts 测试）；前端
@@ -353,6 +367,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<RequestLogSummary, rusqlite
         excluded_from_stats: row.get::<_, i64>("excluded_from_stats").unwrap_or(0) != 0,
         special_settings_json: row.get("special_settings_json")?,
         requested_model: row.get("requested_model")?,
+        reasoning_effort,
         status,
         error_code,
         is_interrupted,
@@ -392,6 +407,7 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
     let attempts_json: String = row.get("attempts_json")?;
     let attempts = parse_attempts(&attempts_json);
     let (final_provider_id, final_provider_name) = final_provider_from_attempts(&attempts);
+    let reasoning_effort = final_reasoning_effort_from_attempts(&attempts);
     let cost_usd = cost_usd_from_femto(row.get("cost_usd_femto")?);
     let status: Option<i64> = row.get("status")?;
     let error_code: Option<String> = row.get("error_code")?;
@@ -424,6 +440,7 @@ fn row_to_detail(row: &rusqlite::Row<'_>) -> Result<RequestLogDetail, rusqlite::
         effective_input_tokens: None,
         usage_json: row.get("usage_json")?,
         requested_model: row.get("requested_model")?,
+        reasoning_effort,
         final_provider_id,
         final_provider_name,
         final_provider_source_id: None,
@@ -647,8 +664,9 @@ pub fn get_by_trace_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        final_provider_from_attempts, get_by_id, get_by_trace_id, list_after_id_all, list_recent,
-        list_recent_all, load_source_provider_info_map, parse_attempts, route_from_attempts,
+        final_provider_from_attempts, final_reasoning_effort_from_attempts, get_by_id,
+        get_by_trace_id, list_after_id_all, list_recent, list_recent_all,
+        load_source_provider_info_map, parse_attempts, route_from_attempts,
         start_provider_from_attempts,
     };
     use crate::db;
@@ -810,6 +828,39 @@ INSERT INTO request_logs (
         assert_eq!(route[0].provider_id, 12);
         assert_eq!(route[0].provider_name, "Claude Bridge");
         assert!(!route[0].ok);
+    }
+
+    #[test]
+    fn final_reasoning_effort_prefers_success_then_last_sent_attempt() {
+        let attempts = parse_attempts(
+            r#"[
+                {"provider_id":1,"provider_name":"A","outcome":"failed","reasoning_effort":"xhigh"},
+                {"provider_id":2,"provider_name":"B","outcome":"failed","reasoning_effort":"low","upstream_sent":true},
+                {"provider_id":3,"provider_name":"C","outcome":"success","reasoning_effort":"high","upstream_sent":true},
+                {"provider_id":4,"provider_name":"D","outcome":"failed","reasoning_effort":"max","upstream_sent":true}
+            ]"#,
+        );
+        assert_eq!(
+            final_reasoning_effort_from_attempts(&attempts).as_deref(),
+            Some("high")
+        );
+
+        let failed = parse_attempts(
+            r#"[
+                {"provider_id":1,"provider_name":"A","outcome":"failed","reasoning_effort":"low","upstream_sent":true},
+                {"provider_id":2,"provider_name":"B","outcome":"failed","reasoning_effort":"max","upstream_sent":true}
+            ]"#,
+        );
+        assert_eq!(
+            final_reasoning_effort_from_attempts(&failed).as_deref(),
+            Some("max")
+        );
+        assert_eq!(
+            final_reasoning_effort_from_attempts(&parse_attempts(
+                r#"[{"provider_id":1,"provider_name":"A","outcome":"failed","reasoning_effort":"high"}]"#
+            )),
+            None
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AIO Coding Hub Dev",
-  "version": "0.60.16",
+  "version": "0.60.17",
   "identifier": "io.aio.codinghub.dev",
   "build": {
     "beforeDevCommand": "pnpm dev",

@@ -57,6 +57,8 @@ function makeProvider(overrides: Partial<ProviderSummary> = {}): ProviderSummary
     oauth_last_error: null,
     source_provider_id: null,
     bridge_type: null,
+    model_policy_status: "ready",
+    model_policy: { version: 1, mode: "all", modelPatterns: [], mappings: [] },
     api_key_configured: overrides.api_key_configured ?? false,
     ...overrides,
     model_mapping: overrides.model_mapping ?? {},

@@ -302,7 +302,7 @@ impl ManagedChild {
         let job = match WindowsJob::attach(child.id()) {
             Ok(job) => job,
             Err(_) => {
-                terminate_windows_process_tree(child.id());
+                crate::shared::process::terminate_windows_process_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(ProtocolError::Spawn);
@@ -406,13 +406,13 @@ impl ManagedChild {
 
     fn terminate_tree(&mut self) {
         #[cfg(unix)]
-        terminate_unix_process_group(self.process_id);
+        crate::shared::process::terminate_unix_process_group(self.process_id);
         #[cfg(windows)]
         {
             // A .cmd/.bat wrapper may create its Node child before the wrapper
             // is attached to the Job Object. taskkill /T covers that race;
             // closing the Job Object still handles descendants created later.
-            terminate_windows_process_tree(self.child.id());
+            crate::shared::process::terminate_windows_process_tree(self.child.id());
         }
         let _ = self.child.kill();
         #[cfg(windows)]
@@ -455,15 +455,7 @@ fn build_command(launch: &CodexLaunchSpec) -> Command {
 
 fn configure_command(command: &mut Command) {
     #[cfg(unix)]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        command.pre_exec(|| {
-            if setsid() == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    crate::shared::process::configure_unix_process_group(command);
 
     #[cfg(windows)]
     {
@@ -581,46 +573,9 @@ fn parse_jsonrpc_response(
     }
 }
 
-#[cfg(unix)]
-extern "C" {
-    fn setsid() -> i32;
-    fn kill(pid: i32, signal: i32) -> i32;
-}
-
-#[cfg(unix)]
-fn terminate_unix_process_group(process_id: u32) {
-    let Ok(process_id) = i32::try_from(process_id) else {
-        return;
-    };
-    unsafe {
-        const SIGTERM: i32 = 15;
-        const SIGKILL: i32 = 9;
-        let _ = kill(-process_id, SIGTERM);
-        thread::sleep(Duration::from_millis(30));
-        let _ = kill(-process_id, SIGKILL);
-    }
-}
-
 #[cfg(windows)]
 struct WindowsJob {
     handle: windows_sys::Win32::Foundation::HANDLE,
-}
-
-#[cfg(windows)]
-fn terminate_windows_process_tree(process_id: u32) {
-    use std::os::windows::process::CommandExt;
-
-    let taskkill_path = std::env::var_os("SystemRoot")
-        .map(|root| Path::new(&root).join("System32").join("taskkill.exe"))
-        .filter(|path| path.is_file());
-    let mut command = match taskkill_path {
-        Some(path) => Command::new(path),
-        None => Command::new("taskkill"),
-    };
-    command
-        .args(["/PID", &process_id.to_string(), "/T", "/F"])
-        .creation_flags(WINDOWS_CREATE_NO_WINDOW);
-    let _ = command.status();
 }
 
 #[cfg(windows)]

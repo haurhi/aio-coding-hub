@@ -4,6 +4,8 @@ import type {
   ProviderOAuthDeviceCodeStartResult,
   ProviderOAuthStatusResult,
   ProviderExtensionValuesInput,
+  ProviderModelPolicyV1,
+  ProviderModelPolicyStatus,
   ProviderUpsertInput,
   ProviderSummary,
 } from "../../services/providers/providers";
@@ -25,7 +27,7 @@ export type ProviderActionContext = {
   editingProviderId: number | null;
   editProvider: ProviderSummary | null;
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onOpenChange: (open: boolean, options?: { bypassDirty?: boolean }) => void;
   onSaved: (cliKey: CliKey) => void;
 };
 
@@ -93,6 +95,8 @@ export type ProviderEditorPayloadContext = {
   isCodexGatewaySource: boolean;
   sourceProviderId: number | null;
   selectedCx2ccSourceProvider: ProviderSummary | null;
+  modelPolicyStatus: ProviderModelPolicyStatus;
+  modelPolicy: ProviderModelPolicyV1 | null;
   formValues: ProviderEditorDialogFormInput;
   extensionValues?: ProviderExtensionValuesInput[] | null;
 };

@@ -84,7 +84,8 @@ async fn run(app_handle: tauri::AppHandle) {
     };
 
     set_startup_stage(&app_handle, AppStartupStage::SyncingCliProxy);
-    crate::app::startup_gateway::sync_cli_proxy_after_autostart(&app_handle, &status).await;
+    crate::app::startup_gateway::sync_cli_proxy_after_autostart(&app_handle, db.clone(), &status)
+        .await;
 
     set_startup_stage(&app_handle, AppStartupStage::FinalizingWsl);
     crate::app::startup_wsl::finalize(&app_handle, db, status.port, settings).await;

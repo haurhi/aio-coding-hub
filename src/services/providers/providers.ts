@@ -6,6 +6,14 @@ import {
   type ProviderAvailabilityResult,
   type ProviderBaseUrlMode as GeneratedProviderBaseUrlMode,
   type ProviderExtensionValuesInput,
+  type ProviderModelMode as GeneratedProviderModelMode,
+  type ProviderModelPolicyStatus as GeneratedProviderModelPolicyStatus,
+  type ProviderModelPolicyV1 as GeneratedProviderModelPolicyV1,
+  type ProviderModelMapping as GeneratedProviderModelMapping,
+  type ProviderModelDiscoveryErrorCode as GeneratedProviderModelDiscoveryErrorCode,
+  type ProviderModelDiscoveryInput as GeneratedProviderModelDiscoveryInput,
+  type ProviderModelDiscoveryResult as GeneratedProviderModelDiscoveryResult,
+  type ProviderModelDiscoveryUnsupportedReason as GeneratedProviderModelDiscoveryUnsupportedReason,
   type ProviderOAuthDeviceCodeCancelResult as GeneratedProviderOAuthDeviceCodeCancelResult,
   type ProviderOAuthDeviceCodePollResult as GeneratedProviderOAuthDeviceCodePollResult,
   type ProviderOAuthDeviceCodeStartResult as GeneratedProviderOAuthDeviceCodeStartResult,
@@ -50,10 +58,21 @@ export type {
 export type { CliKey } from "../../constants/clis";
 
 export type ClaudeModels = GeneratedClaudeModels;
-export type ProviderModelMapping = Record<string, string>;
+export type LegacyProviderModelMapping = Record<string, string>;
 export type DailyResetMode = GeneratedDailyResetMode;
 export type ProviderAuthMode = GeneratedProviderAuthMode;
 export type ProviderBaseUrlMode = GeneratedProviderBaseUrlMode;
+export type ProviderModelMode = GeneratedProviderModelMode;
+export type ProviderModelPolicyStatus = GeneratedProviderModelPolicyStatus;
+export type ProviderModelPolicyV1 = GeneratedProviderModelPolicyV1;
+export type ProviderModelMapping = GeneratedProviderModelMapping;
+export type ProviderModelDiscoveryErrorCode = GeneratedProviderModelDiscoveryErrorCode;
+export type ProviderModelDiscoveryResult = GeneratedProviderModelDiscoveryResult;
+export type ProviderModelDiscoveryUnsupportedReason =
+  GeneratedProviderModelDiscoveryUnsupportedReason;
+export type ProviderModelDiscoveryInput = Omit<GeneratedProviderModelDiscoveryInput, "cliKey"> & {
+  cliKey: CliKey;
+};
 
 const CLI_KEY_VALUES = CLI_KEYS;
 const PROVIDER_AUTH_MODE_VALUES = [
@@ -63,11 +82,11 @@ const PROVIDER_AUTH_MODE_VALUES = [
 export const MAX_PROVIDER_ORDER_IDS = 512;
 
 export type ProviderSummary = Override<
-  GeneratedProviderSummary & { model_mapping?: ProviderModelMapping },
+  GeneratedProviderSummary & { model_mapping?: LegacyProviderModelMapping },
   {
     cli_key: CliKey;
     auth_mode: ProviderAuthMode;
-    model_mapping: ProviderModelMapping;
+    model_mapping: LegacyProviderModelMapping;
   }
 >;
 
@@ -94,6 +113,7 @@ type ProviderUpsertFieldMap = {
   priority: "priority";
   claudeModels: "claudeModels";
   modelMapping: "modelMapping";
+  modelPolicy: "modelPolicy";
   limit5hUsd: "limit5hUsd";
   limitDailyUsd: "limitDailyUsd";
   dailyResetMode: "dailyResetMode";
@@ -124,7 +144,7 @@ export type ProviderUpsertInput = Omit<
   ProviderUpsertOptionalKeys | "cliKey"
 > & {
   cliKey: CliKey;
-  modelMapping?: ProviderModelMapping | null;
+  modelMapping?: LegacyProviderModelMapping | null;
 } & Partial<Pick<ProviderUpsertAuthority, ProviderUpsertOptionalKeys>>;
 
 type ProviderUpsertTransportInput = Omit<
@@ -132,7 +152,7 @@ type ProviderUpsertTransportInput = Omit<
   "streamIdleTimeoutSeconds"
 > & {
   streamIdleTimeoutSeconds?: GeneratedProviderUpsertInput["streamIdleTimeoutSeconds"];
-  modelMapping?: ProviderModelMapping | null;
+  modelMapping?: LegacyProviderModelMapping | null;
 };
 
 function toCliKey(value: string, label: string): CliKey {
@@ -153,7 +173,7 @@ function toProviderAuthMode(value: string, label: string): ProviderAuthMode {
 
 function toProviderSummary(value: GeneratedProviderSummary): ProviderSummary {
   const valueWithMapping = value as GeneratedProviderSummary & {
-    model_mapping?: ProviderModelMapping | null;
+    model_mapping?: LegacyProviderModelMapping | null;
   };
   return {
     ...value,
@@ -191,6 +211,7 @@ function toProviderUpsertPayload(input: ProviderUpsertInput): ProviderUpsertTran
     priority: input.priority ?? null,
     claudeModels: input.claudeModels ?? null,
     modelMapping: input.modelMapping ?? null,
+    modelPolicy: input.modelPolicy ?? null,
     limit5hUsd: input.limit5hUsd ?? null,
     limitDailyUsd: input.limitDailyUsd ?? null,
     dailyResetMode: input.dailyResetMode ?? null,
@@ -243,6 +264,24 @@ export async function providersList(cliKey: CliKey) {
       mapGeneratedCommandResponse(await commands.providersList(normalizedCliKey), (rows) =>
         rows.map(toProviderSummary)
       ),
+  });
+}
+
+export async function providerModelsDiscover(input: ProviderModelDiscoveryInput) {
+  const payload = {
+    ...input,
+    providerId: input.providerId == null ? null : validateProviderId(input.providerId),
+    cliKey: validateProviderCliKey(input.cliKey),
+  } satisfies GeneratedProviderModelDiscoveryInput;
+
+  return invokeGeneratedIpc<ProviderModelDiscoveryResult>({
+    title: "获取上游模型失败",
+    cmd: "provider_models_discover",
+    args: { input: payload },
+    invoke: () =>
+      commands.providerModelsDiscover(payload) as Promise<
+        GeneratedCommandResult<ProviderModelDiscoveryResult>
+      >,
   });
 }
 

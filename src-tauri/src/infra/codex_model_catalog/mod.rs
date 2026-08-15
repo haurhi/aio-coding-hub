@@ -1,6 +1,9 @@
 //! Read the model capability catalog exposed by the installed Codex CLI.
 
+pub(crate) mod projection;
 mod protocol;
+
+pub(crate) const CODEX_CATALOG_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 use crate::{cli_manager, codex_paths};
 use serde::Serialize;

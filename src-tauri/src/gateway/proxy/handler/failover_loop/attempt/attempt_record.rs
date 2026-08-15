@@ -60,6 +60,8 @@ async fn record_system_failure_and_decide_impl<R: tauri::Runtime>(
         provider_base_url_base,
         provider_index,
         session_reuse,
+        claude_model_mapping,
+        model_redirect,
         ..
     } = provider_ctx;
 
@@ -146,6 +148,10 @@ async fn record_system_failure_and_decide_impl<R: tauri::Runtime>(
         circuit_trigger_error_code: None,
         provider_bridged: Some(provider_ctx.provider_bridged),
         timeout_secs,
+        reasoning_effort: attempt_ctx.reasoning_effort.map(str::to_string),
+        upstream_sent: attempt_ctx.upstream_sent,
+        claude_model_mapping: claude_model_mapping.cloned(),
+        model_redirect: model_redirect.cloned(),
     });
 
     emit_attempt_event_and_log_with_circuit_before(

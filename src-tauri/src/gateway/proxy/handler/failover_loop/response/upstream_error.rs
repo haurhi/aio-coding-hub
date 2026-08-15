@@ -39,6 +39,46 @@ use axum::http::{header, HeaderValue};
 
 use super::provider_iterator::is_responses_request_path;
 
+const CLAUDE_CODE_CLIENT_RESTRICTION_REASON: &str = "claude_code_client_restriction";
+const CLAUDE_CODE_CLIENT_RESTRICTION_PHRASE: &str = "this group only allows claude code clients";
+
+fn contains_claude_code_client_restriction(message: &str) -> bool {
+    let normalized = message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    normalized.contains(CLAUDE_CODE_CLIENT_RESTRICTION_PHRASE)
+}
+
+fn matches_claude_code_client_restriction(
+    cli_key: &str,
+    status: reqwest::StatusCode,
+    body: &[u8],
+) -> bool {
+    if cli_key != "claude" || status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        return false;
+    }
+
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        for message in [
+            value.pointer("/error/message"),
+            value.get("message"),
+            value.pointer("/error/error/message"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        {
+            if contains_claude_code_client_restriction(message) {
+                return true;
+            }
+        }
+    }
+
+    contains_claude_code_client_restriction(&String::from_utf8_lossy(body))
+}
+
 fn upstream_error_decision(
     is_count_tokens: bool,
     base_decision: FailoverDecision,
@@ -168,8 +208,11 @@ pub(super) struct UpstreamRequestState<'a> {
     pub(super) codex_additional_tools_retry_pending: &'a mut bool,
     pub(super) codex_agent_message_rectifier_retried: &'a mut bool,
     pub(super) codex_agent_message_retry_pending: &'a mut bool,
+    pub(super) thinking_effort_conflict_rectifier_retried: &'a mut bool,
     pub(super) thinking_signature_rectifier_retried: &'a mut bool,
     pub(super) thinking_budget_rectifier_retried: &'a mut bool,
+    pub(super) gemini_function_id_rectifier_retried: &'a mut bool,
+    pub(super) additional_repair_retry_slots: &'a mut u32,
 }
 
 fn codex_request_has_previous_response_id(body: &[u8]) -> bool {
@@ -571,6 +614,8 @@ pub(super) struct HandleNonSuccessResponseInput<'a, R: tauri::Runtime = tauri::W
     pub(super) loop_state: LoopState<'a, R>,
     pub(super) enable_thinking_signature_rectifier: bool,
     pub(super) enable_thinking_budget_rectifier: bool,
+    pub(super) enable_thinking_effort_conflict_rectifier: bool,
+    pub(super) enable_gemini_function_id_rectifier: bool,
     pub(super) resp: reqwest::Response,
     pub(super) upstream: UpstreamRequestState<'a>,
 }
@@ -585,6 +630,8 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         loop_state,
         enable_thinking_signature_rectifier,
         enable_thinking_budget_rectifier,
+        enable_thinking_effort_conflict_rectifier,
+        enable_gemini_function_id_rectifier,
         resp,
         upstream,
     } = input;
@@ -593,11 +640,15 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
     let is_count_tokens =
         is_claude_count_tokens_request(ctx.cli_key.as_str(), ctx.forwarded_path.as_str());
 
+    let reactive_rectifier_enabled = (ctx.cli_key == "claude"
+        && (enable_thinking_effort_conflict_rectifier
+            || enable_thinking_signature_rectifier
+            || enable_thinking_budget_rectifier))
+        || (ctx.cli_key == "gemini" && enable_gemini_function_id_rectifier);
     if !is_count_tokens
-        && ctx.cli_key == "claude"
         && status.as_u16() == 400
         && !attempt_ctx.cx2cc_active
-        && (enable_thinking_signature_rectifier || enable_thinking_budget_rectifier)
+        && reactive_rectifier_enabled
     {
         return thinking_signature_rectifier_400::handle_thinking_rectifiers_400(
             thinking_signature_rectifier_400::HandleThinkingRectifiers400Input {
@@ -607,6 +658,8 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                 loop_state,
                 enable_thinking_signature_rectifier,
                 enable_thinking_budget_rectifier,
+                enable_thinking_effort_conflict_rectifier,
+                enable_gemini_function_id_rectifier,
                 resp,
                 status,
                 response_headers,
@@ -665,6 +718,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
     let mut abort_body_truncated = false;
     let mut matched_rule_id: Option<&'static str> = None;
     let mut matched_429_concurrency_limit = false;
+    let mut matched_claude_client_restriction = false;
     // Body preview for errors where preserving the upstream diagnostic text matters.
     let mut upstream_body_preview: Option<String> = None;
     let need_client_error_scan = !is_count_tokens
@@ -744,6 +798,26 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
                     if !truncated.is_empty() {
                         upstream_body_preview = Some(truncated);
                     }
+                }
+                matched_claude_client_restriction = matches_claude_code_client_restriction(
+                    ctx.cli_key.as_str(),
+                    status,
+                    body_for_scan.as_ref(),
+                );
+                if matched_claude_client_restriction {
+                    decision = FailoverDecision::SwitchProvider;
+                    emit_gateway_log(
+                        &state.app,
+                        "debug",
+                        "CLAUDE_CODE_CLIENT_RESTRICTION",
+                        format!(
+                            "[FAILOVER] trace_id={} provider_id={} status={} reason_code={}",
+                            ctx.trace_id,
+                            provider_id,
+                            status.as_u16(),
+                            CLAUDE_CODE_CLIENT_RESTRICTION_REASON,
+                        ),
+                    );
                 }
                 if need_client_error_scan {
                     if matches!(status.as_u16(), 402 | 429)
@@ -969,6 +1043,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
     if !is_count_tokens
         && matches!(category, ErrorCategory::ProviderError)
         && !oauth_quota_exhausted
+        && !matched_claude_client_restriction
     {
         let change = provider_router::record_failure_and_emit_transition(
             provider_router::RecordCircuitArgs::from_state(
@@ -996,6 +1071,7 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         && provider_cooldown_secs > 0
         && matches!(category, ErrorCategory::ProviderError)
         && !oauth_quota_exhausted
+        && !matched_claude_client_restriction
         && matches!(
             decision,
             FailoverDecision::SwitchProvider | FailoverDecision::Abort
@@ -1011,7 +1087,12 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         *circuit_snapshot = snap;
     }
 
-    let reason = if matched_429_concurrency_limit {
+    let reason = if matched_claude_client_restriction {
+        format!(
+            "status={} rule={CLAUDE_CODE_CLIENT_RESTRICTION_REASON}",
+            status.as_u16()
+        )
+    } else if matched_429_concurrency_limit {
         format!("status={} rule=429_concurrency_limit", status.as_u16())
     } else {
         let base = match matched_rule_id {
@@ -1031,7 +1112,11 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         decision.as_str()
     );
     let selection_method = dc::selection_method(provider_index, retry_index, session_reuse);
-    let reason_code = category.reason_code();
+    let reason_code = if matched_claude_client_restriction {
+        CLAUDE_CODE_CLIENT_RESTRICTION_REASON
+    } else {
+        category.reason_code()
+    };
 
     attempts.push(FailoverAttempt {
         provider_id,
@@ -1058,6 +1143,10 @@ pub(super) async fn handle_non_success_response<R: tauri::Runtime>(
         circuit_trigger_error_code: None,
         provider_bridged: Some(provider_ctx.provider_bridged),
         timeout_secs: None,
+        reasoning_effort: attempt_ctx.reasoning_effort.map(str::to_string),
+        upstream_sent: attempt_ctx.upstream_sent,
+        claude_model_mapping: provider_ctx.claude_model_mapping.cloned(),
+        model_redirect: provider_ctx.model_redirect.cloned(),
     });
 
     emit_attempt_event_and_log(
@@ -1329,13 +1418,14 @@ pub(super) async fn handle_reqwest_error<R: tauri::Runtime>(
 mod tests {
     use super::{
         convert_codex_agent_messages_to_user_messages, error_body_scan_limit_usize,
-        matches_codex_additional_tools_error, matches_codex_agent_message_error,
-        matches_codex_previous_response_id_error, matches_codex_reasoning_context_error,
-        maybe_rectify_codex_additional_tools, maybe_rectify_codex_agent_messages,
-        maybe_rectify_codex_reasoning_context, read_response_body_for_error_scan,
-        remove_codex_additional_tools_input_items, remove_codex_previous_response_id,
-        remove_codex_reasoning_context, reqwest_error_decision, retry_after_reset_at,
-        should_scan_codex_previous_response_id_error, upstream_error_decision, FailoverDecision,
+        matches_claude_code_client_restriction, matches_codex_additional_tools_error,
+        matches_codex_agent_message_error, matches_codex_previous_response_id_error,
+        matches_codex_reasoning_context_error, maybe_rectify_codex_additional_tools,
+        maybe_rectify_codex_agent_messages, maybe_rectify_codex_reasoning_context,
+        read_response_body_for_error_scan, remove_codex_additional_tools_input_items,
+        remove_codex_previous_response_id, remove_codex_reasoning_context, reqwest_error_decision,
+        retry_after_reset_at, should_scan_codex_previous_response_id_error,
+        upstream_error_decision, FailoverDecision,
     };
     use axum::body::Bytes;
     use axum::http::{header, HeaderMap, HeaderValue};
@@ -1431,6 +1521,41 @@ mod tests {
 
         let abort_decision = upstream_error_decision(false, FailoverDecision::Abort, 1, 5);
         assert!(matches!(abort_decision, FailoverDecision::Abort));
+    }
+
+    #[test]
+    fn claude_client_restriction_match_is_status_and_cli_specific() {
+        let body = br#"{"error":{"message":"No available accounts: this group only allows Claude Code clients","type":"api_error"},"type":"error"}"#;
+
+        assert!(matches_claude_code_client_restriction(
+            "claude",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body,
+        ));
+        assert!(!matches_claude_code_client_restriction(
+            "codex",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body,
+        ));
+        assert!(!matches_claude_code_client_restriction(
+            "claude",
+            reqwest::StatusCode::BAD_GATEWAY,
+            body,
+        ));
+        assert!(!matches_claude_code_client_restriction(
+            "claude",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            br#"{"error":{"message":"No available accounts"}}"#,
+        ));
+    }
+
+    #[test]
+    fn claude_client_restriction_match_normalizes_case_and_whitespace() {
+        assert!(matches_claude_code_client_restriction(
+            "claude",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            b"upstream: THIS GROUP only allows\nClaude Code clients",
+        ));
     }
 
     #[tokio::test]

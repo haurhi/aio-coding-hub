@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { tauriOpenUrl } from "../../../test/mocks/tauri";
 import { SortableProviderCard, type SortableProviderCardProps } from "../SortableProviderCard";
@@ -70,6 +70,8 @@ function makeProvider(partial: Partial<ProviderSummary> = {}): ProviderSummary {
     oauth_last_error: null,
     source_provider_id: null,
     bridge_type: null,
+    model_policy_status: "ready",
+    model_policy: { version: 1, mode: "all", modelPatterns: [], mappings: [] },
     api_key_configured: partial.api_key_configured ?? false,
     ...partial,
     model_mapping: partial.model_mapping ?? {},
@@ -101,6 +103,15 @@ function renderCard(
 describe("pages/providers/SortableProviderCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("shows an invalid policy badge only when the model policy failed to decode", () => {
+    renderCard({ model_policy_status: "invalid", model_policy: null });
+    expect(screen.getByText("策略无效")).toBeInTheDocument();
+
+    cleanup();
+    renderCard();
+    expect(screen.queryByText("策略无效")).not.toBeInTheDocument();
   });
 
   it("binds sortable listeners to the provider name drag handle", () => {

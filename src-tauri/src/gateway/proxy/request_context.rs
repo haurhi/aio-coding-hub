@@ -53,8 +53,11 @@ pub(super) struct RequestContext<R: tauri::Runtime = tauri::Wry> {
     pub(super) unavailable_fingerprint_key: u64,
     pub(super) unavailable_fingerprint_debug: String,
     pub(super) abort_guard: RequestAbortGuard<R>,
+    pub(super) enable_thinking_effort_conflict_rectifier: bool,
     pub(super) enable_thinking_signature_rectifier: bool,
     pub(super) enable_thinking_budget_rectifier: bool,
+    pub(super) enable_gemini_function_id_rectifier: bool,
+    pub(super) codex_priority_billing_source: crate::settings::CodexPriorityBillingSource,
     pub(super) enable_claude_metadata_user_id_injection: bool,
     #[allow(dead_code)]
     pub(super) cx2cc_settings: super::cx2cc::settings::Cx2ccSettings,
@@ -110,8 +113,11 @@ impl<R: tauri::Runtime> RequestContext<R> {
             fingerprint_debug,
             unavailable_fingerprint_key,
             unavailable_fingerprint_debug,
+            enable_thinking_effort_conflict_rectifier,
             enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier,
+            enable_gemini_function_id_rectifier,
+            codex_priority_billing_source,
             enable_claude_metadata_user_id_injection,
             cx2cc_settings,
             enable_response_fixer,
@@ -119,12 +125,6 @@ impl<R: tauri::Runtime> RequestContext<R> {
             response_fixer_non_stream_config,
         } = parts;
 
-        let max_attempts_per_provider = Self::normalize_max_attempts_per_provider(
-            &cli_key,
-            enable_thinking_signature_rectifier,
-            enable_thinking_budget_rectifier,
-            max_attempts_per_provider,
-        );
         let (
             upstream_first_byte_timeout,
             upstream_stream_idle_timeout,
@@ -178,28 +178,16 @@ impl<R: tauri::Runtime> RequestContext<R> {
             unavailable_fingerprint_key,
             unavailable_fingerprint_debug,
             abort_guard,
+            enable_thinking_effort_conflict_rectifier,
             enable_thinking_signature_rectifier,
             enable_thinking_budget_rectifier,
+            enable_gemini_function_id_rectifier,
+            codex_priority_billing_source,
             enable_claude_metadata_user_id_injection,
             cx2cc_settings,
             enable_response_fixer,
             response_fixer_stream_config,
             response_fixer_non_stream_config,
-        }
-    }
-
-    fn normalize_max_attempts_per_provider(
-        cli_key: &str,
-        enable_thinking_signature_rectifier: bool,
-        enable_thinking_budget_rectifier: bool,
-        max_attempts_per_provider: u32,
-    ) -> u32 {
-        if cli_key == "claude"
-            && (enable_thinking_signature_rectifier || enable_thinking_budget_rectifier)
-        {
-            max_attempts_per_provider.max(2)
-        } else {
-            max_attempts_per_provider
         }
     }
 
@@ -302,8 +290,11 @@ pub(super) struct RequestContextParts<R: tauri::Runtime = tauri::Wry> {
     pub(super) fingerprint_debug: String,
     pub(super) unavailable_fingerprint_key: u64,
     pub(super) unavailable_fingerprint_debug: String,
+    pub(super) enable_thinking_effort_conflict_rectifier: bool,
     pub(super) enable_thinking_signature_rectifier: bool,
     pub(super) enable_thinking_budget_rectifier: bool,
+    pub(super) enable_gemini_function_id_rectifier: bool,
+    pub(super) codex_priority_billing_source: crate::settings::CodexPriorityBillingSource,
     pub(super) enable_claude_metadata_user_id_injection: bool,
     pub(super) cx2cc_settings: super::cx2cc::settings::Cx2ccSettings,
     pub(super) enable_response_fixer: bool,

@@ -1,11 +1,15 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import type { ActiveUiContribution, JsonValue } from "../../generated/bindings";
 import type {
   ClaudeModels,
+  ProviderModelDiscoveryInput,
+  ProviderModelDiscoveryResult,
   ProviderExtensionValuesInput,
   ProviderOAuthDeviceCodeStartResult,
+  ProviderModelPolicyStatus,
+  ProviderModelPolicyV1,
   ProviderSummary,
 } from "../../services/providers/providers";
 import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
@@ -38,6 +42,11 @@ import {
   normalizeTagsForCostMultiplier,
   withCx2ccDefaultModel,
 } from "./providerEditorUtils";
+import {
+  cloneProviderModelPolicy,
+  DEFAULT_PROVIDER_MODEL_POLICY,
+  type ProviderModelDiscoveryUiState,
+} from "./providerModelPolicy";
 import { copyApiKey as copyApiKeyAction } from "./useProviderEditorActions";
 import {
   handleOAuthLogin as oauthLoginAction,
@@ -47,7 +56,10 @@ import {
 } from "./providerEditorOAuthActions";
 import { runProviderEditorSave } from "./providerEditorSaveRunner";
 import { useProviderEditorEffects } from "./useProviderEditorEffects";
-import { providerOAuthCancelDeviceFlow } from "../../services/providers/providers";
+import {
+  providerModelsDiscover,
+  providerOAuthCancelDeviceFlow,
+} from "../../services/providers/providers";
 import { logToConsole } from "../../services/consoleLog";
 import { useContributionsForSlot } from "../../plugins/contributions/useActiveContributions";
 import { contributionKey, type ContributionValues } from "../../plugins/contributions/types";
@@ -227,6 +239,14 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const [modelMappingRows, setModelMappingRows] = useState<ModelMappingRow[]>(() => [
     newModelMappingRow(),
   ]);
+  const [modelPolicy, setModelPolicy] = useState<ProviderModelPolicyV1 | null>(() =>
+    cloneProviderModelPolicy(DEFAULT_PROVIDER_MODEL_POLICY)
+  );
+  const [modelPolicyStatus, setModelPolicyStatus] = useState<ProviderModelPolicyStatus>("ready");
+  const [modelPolicyDirty, setModelPolicyDirty] = useState(false);
+  const [modelDiscoveryState, setModelDiscoveryState] = useState<ProviderModelDiscoveryUiState>({
+    status: "idle",
+  });
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [streamIdleTimeoutSeconds, setStreamIdleTimeoutSeconds] = useState("");
@@ -255,6 +275,9 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const [codexGatewayBaseOrigin, setCodexGatewayBaseOrigin] = useState<string | null>(null);
   const oauthLoginAttemptSeqRef = useRef(0);
   const activeOAuthDeviceFlowRef = useRef<string | null>(null);
+  const discoveryEpochRef = useRef(0);
+  const baseUrlRowsRef = useRef(baseUrlRows);
+  baseUrlRowsRef.current = baseUrlRows;
   const queryClient = useQueryClient();
   const providerUpsertMutation = useProviderUpsertMutation();
   const providerDeleteMutation = useProviderDeleteMutation();
@@ -294,6 +317,57 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     ? `${codexGatewayBaseOrigin.replace(/\/$/, "")}/v1`
     : "当前网关 /v1";
 
+  const invalidateModelDiscovery = useCallback(
+    (
+      nextState: ProviderModelDiscoveryUiState = open ? { status: "changed" } : { status: "idle" }
+    ) => {
+      discoveryEpochRef.current += 1;
+      setModelDiscoveryState(nextState);
+    },
+    [open]
+  );
+
+  useEffect(() => {
+    discoveryEpochRef.current += 1;
+    setModelDiscoveryState({ status: "idle" });
+  }, [open, editingProviderId, cliKey]);
+
+  // Dirty flag for editor state living outside react-hook-form (base URLs, tags,
+  // auth mode, CX2CC source, claude models, stream timeout) so closing the dialog
+  // warns about these edits too.
+  const [editorDirty, setEditorDirty] = useState(false);
+  useEffect(() => {
+    setEditorDirty(false);
+  }, [open, editingProviderId, cliKey]);
+
+  const setBaseUrlModeFromUi = useCallback(
+    (next: ProviderBaseUrlMode) => {
+      if (next !== baseUrlMode) {
+        invalidateModelDiscovery();
+        setEditorDirty(true);
+      }
+      setBaseUrlMode(next);
+    },
+    [baseUrlMode, invalidateModelDiscovery]
+  );
+
+  const setBaseUrlRowsFromUi = useCallback(
+    (next: BaseUrlRow[] | ((previous: BaseUrlRow[]) => BaseUrlRow[])) => {
+      const previous = baseUrlRowsRef.current;
+      const resolved = typeof next === "function" ? next(previous) : next;
+      const urlsChanged =
+        previous.length !== resolved.length ||
+        previous.some((row, index) => row.url !== resolved[index]?.url);
+      if (urlsChanged) {
+        invalidateModelDiscovery();
+        setEditorDirty(true);
+      }
+      baseUrlRowsRef.current = resolved;
+      setBaseUrlRows(resolved);
+    },
+    [invalidateModelDiscovery]
+  );
+
   const syncFreeTagForCostMultiplier = useCallback((value: string) => {
     setTags((prev) => normalizeTagsForCostMultiplier(prev, value));
   }, []);
@@ -317,6 +391,11 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
 
   const setAuthModeFromUi = useCallback(
     (next: ProviderEditorAuthMode) => {
+      // Tab clicks re-fire onChange for the already-active tab; a same-value
+      // "change" must not invalidate discovery results or mark the editor dirty.
+      if (next === authMode) return;
+      invalidateModelDiscovery();
+      setEditorDirty(true);
       setAuthMode(next);
       if (next === "cx2cc") {
         setClaudeModels((prev) => withCx2ccDefaultModel(prev));
@@ -327,11 +406,19 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
         });
       }
     },
-    [cx2ccSourceValue, resolveCx2ccInheritedMultiplier, setCostMultiplierValue]
+    [
+      authMode,
+      cx2ccSourceValue,
+      invalidateModelDiscovery,
+      resolveCx2ccInheritedMultiplier,
+      setCostMultiplierValue,
+    ]
   );
 
   const setCx2ccSourceValueFromUi = useCallback(
     (value: string) => {
+      invalidateModelDiscovery();
+      setEditorDirty(true);
       setCx2ccSourceValue(value);
       if (authMode === "cx2cc") {
         setCostMultiplierValue(resolveCx2ccInheritedMultiplier(value), {
@@ -341,7 +428,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
         });
       }
     },
-    [authMode, resolveCx2ccInheritedMultiplier, setCostMultiplierValue]
+    [authMode, invalidateModelDiscovery, resolveCx2ccInheritedMultiplier, setCostMultiplierValue]
   );
 
   const title =
@@ -401,6 +488,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const setExtensionValue = useCallback(
     (contribution: ActiveUiContribution, fieldKey: string, value: JsonValue) => {
       const key = contributionKey(contribution);
+      setEditorDirty(true);
       setExtensionValuesState((prev) => ({
         ...prev,
         valuesByContributionKey: {
@@ -475,14 +563,51 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   }, []);
 
   const requestOpenChange = useCallback(
-    (nextOpen: boolean) => {
+    (nextOpen: boolean, options?: { bypassDirty?: boolean }) => {
       if (!nextOpen) {
+        if (
+          !options?.bypassDirty &&
+          (form.formState.isDirty || modelPolicyDirty || editorDirty) &&
+          typeof window !== "undefined" &&
+          !window.confirm("有未保存的修改，确定关闭吗？")
+        ) {
+          return;
+        }
+        invalidateModelDiscovery({ status: "idle" });
         cancelActiveOAuthLoginAttempt();
       }
       onOpenChange(nextOpen);
     },
-    [cancelActiveOAuthLoginAttempt, onOpenChange]
+    [
+      cancelActiveOAuthLoginAttempt,
+      editorDirty,
+      form.formState.isDirty,
+      invalidateModelDiscovery,
+      modelPolicyDirty,
+      onOpenChange,
+    ]
   );
+
+  const setModelPolicyFromUi = useCallback((next: ProviderModelPolicyV1) => {
+    setModelPolicy(next);
+    setModelPolicyStatus("ready");
+    setModelPolicyDirty(true);
+  }, []);
+
+  const setTagsFromUi = useCallback((next: React.SetStateAction<string[]>) => {
+    setEditorDirty(true);
+    setTags(next);
+  }, []);
+
+  const setClaudeModelsFromUi = useCallback((next: React.SetStateAction<ClaudeModels>) => {
+    setEditorDirty(true);
+    setClaudeModels(next);
+  }, []);
+
+  const setStreamIdleTimeoutSecondsFromUi = useCallback((next: string) => {
+    setEditorDirty(true);
+    setStreamIdleTimeoutSeconds(next);
+  }, []);
 
   useProviderEditorEffects({
     open,
@@ -504,6 +629,9 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     setModelMappingRows,
     setPingingAll,
     setClaudeModels,
+    setModelPolicy,
+    setModelPolicyStatus,
+    setModelPolicyDirty,
     setTags,
     setTagInput,
     setStreamIdleTimeoutSeconds,
@@ -519,7 +647,9 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     oauthStatusError: oauthStatusQuery.error,
   });
 
-  const apiKeyFieldReg = register("api_key");
+  const apiKeyFieldReg = register("api_key", {
+    onChange: () => invalidateModelDiscovery(),
+  });
 
   const claudeModelCount =
     cliKey === "claude"
@@ -533,6 +663,67 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const supportsCc2cx = cliKey === "codex";
   const supportsClaudeChatCompletions = cliKey === "claude";
 
+  const discoverModels = useCallback(async () => {
+    const epoch = ++discoveryEpochRef.current;
+    // OAuth discovery reads the stored token by provider id; an unsaved provider
+    // has neither, and the backend's "unsupported" reply would mislead the user.
+    if (authMode === "oauth" && editingProviderId == null) {
+      setModelDiscoveryState({ status: "oauth_unsaved" });
+      return;
+    }
+    setModelDiscoveryState({ status: "loading" });
+
+    const input: ProviderModelDiscoveryInput = {
+      providerId: editingProviderId,
+      cliKey,
+      authMode: authMode === "oauth" ? "oauth" : "api_key",
+      baseUrls: baseUrlRows.map((row) => row.url),
+      baseUrlMode,
+      apiKey: authMode === "api_key" ? form.getValues("api_key").trim() || null : null,
+      sourceProviderId: authMode === "cx2cc" ? sourceProviderId : null,
+      bridgeType: authMode === "cx2cc" ? "cx2cc" : null,
+    };
+
+    try {
+      const result: ProviderModelDiscoveryResult = await providerModelsDiscover(input);
+      if (discoveryEpochRef.current !== epoch) return;
+
+      if (result.status === "ready") {
+        setModelDiscoveryState({
+          status: "ready",
+          models: result.models,
+          origin: result.origin,
+          baseUrlIndex: result.base_url_index,
+        });
+        return;
+      }
+
+      if (result.status === "empty") {
+        setModelDiscoveryState({
+          status: "empty",
+          origin: result.origin,
+          baseUrlIndex: result.base_url_index,
+        });
+        return;
+      }
+
+      if (result.status === "unsupported") {
+        setModelDiscoveryState({ status: "unsupported", reason: result.reason });
+        return;
+      }
+
+      setModelDiscoveryState({
+        status: "error",
+        code: result.code,
+        httpStatus: result.http_status,
+      });
+    } catch {
+      if (discoveryEpochRef.current === epoch) {
+        setModelDiscoveryState({ status: "unexpected_error" });
+      }
+    }
+  }, [authMode, baseUrlMode, baseUrlRows, cliKey, editingProviderId, form, sourceProviderId]);
+
   const buildPayloadContext = useCallback(
     (): ProviderEditorPayloadContext => ({
       mode,
@@ -544,6 +735,8 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       tags,
       claudeModels,
       modelMappingRows,
+      modelPolicyStatus,
+      modelPolicy,
       streamIdleTimeoutSeconds,
       apiKeyConfigured,
       isCodexGatewaySource,
@@ -566,6 +759,8 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       tags,
       claudeModels,
       modelMappingRows,
+      modelPolicyStatus,
+      modelPolicy,
       streamIdleTimeoutSeconds,
       apiKeyConfigured,
       isCodexGatewaySource,
@@ -720,24 +915,29 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     apiKeyConfigured,
     copyingApiKey,
     tags,
-    setTags,
+    setTags: setTagsFromUi,
     tagInput,
     setTagInput,
     baseUrlMode,
-    setBaseUrlMode,
+    setBaseUrlMode: setBaseUrlModeFromUi,
     baseUrlRows,
-    setBaseUrlRows,
+    setBaseUrlRows: setBaseUrlRowsFromUi,
     pingingAll,
     setPingingAll,
     newBaseUrlRow,
     claudeModels,
-    setClaudeModels,
     modelMappingRows,
     setModelMappingRows,
     newModelMappingRow,
+    modelPolicy,
+    modelPolicyStatus,
+    setModelPolicy: setModelPolicyFromUi,
+    modelDiscoveryState,
+    discoverModels,
+    setClaudeModels: setClaudeModelsFromUi,
     claudeModelCount,
     streamIdleTimeoutSeconds,
-    setStreamIdleTimeoutSeconds,
+    setStreamIdleTimeoutSeconds: setStreamIdleTimeoutSecondsFromUi,
     oauthStatus,
     oauthLoading,
     oauthDeviceFlow,

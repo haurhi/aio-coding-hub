@@ -238,6 +238,38 @@ fn grok_stable_headers_take_priority_and_request_id_is_ignored() {
 }
 
 #[test]
+fn claude_metadata_user_id_supports_json_and_legacy_session_formats() {
+    let headers = HeaderMap::new();
+    let json_body = serde_json::json!({
+        "metadata": {
+            "user_id": "{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"json-session\"}"
+        }
+    });
+    assert_eq!(
+        SessionManager::extract_session_id_from_json(&headers, Some(&json_body)).as_deref(),
+        Some("json-session")
+    );
+
+    let legacy_body = serde_json::json!({
+        "metadata": {
+            "user_id": "user_device_account__session_legacy-session"
+        }
+    });
+    assert_eq!(
+        SessionManager::extract_session_id_from_json(&headers, Some(&legacy_body)).as_deref(),
+        Some("legacy-session")
+    );
+}
+
+#[test]
+fn malformed_claude_metadata_user_id_falls_back_without_panicking() {
+    let headers = HeaderMap::new();
+    let body = serde_json::json!({"metadata": {"user_id": "not-a-session"}});
+    let session_id = SessionManager::extract_session_id_from_json(&headers, Some(&body));
+    assert!(session_id.is_none());
+}
+
+#[test]
 fn extract_session_id_fallback_changes_when_message_fingerprint_changes() {
     let mut headers = HeaderMap::new();
     headers.insert(header::USER_AGENT, HeaderValue::from_static("ua"));

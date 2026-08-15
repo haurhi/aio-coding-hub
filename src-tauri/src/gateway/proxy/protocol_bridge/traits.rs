@@ -98,7 +98,7 @@ pub(crate) struct BridgeContext {
     /// Provider-level model mapping configuration.
     pub claude_models: crate::domain::providers::ClaudeModels,
     /// Exact client-facing model -> provider-facing model mapping.
-    pub model_mapping: crate::domain::providers::ProviderModelMapping,
+    pub model_mapping: crate::domain::providers::LegacyProviderModelMapping,
     /// CX2CC runtime settings for request/response translation.
     pub cx2cc_settings: crate::gateway::proxy::cx2cc::settings::Cx2ccSettings,
     /// Original model name from the client request (before mapping).

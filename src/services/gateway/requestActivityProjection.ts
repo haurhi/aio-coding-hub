@@ -8,7 +8,10 @@ import {
   type PersistedRequestLogActivityState,
 } from "./requestLogState";
 import type { RequestLogSummary } from "./requestLogs";
-import { resolveClaudeModelMappingFromSpecialSettings } from "./requestLogSpecialSettings";
+import {
+  resolveClaudeModelMappingFromSpecialSettings,
+  resolveModelRedirectFromSpecialSettings,
+} from "./requestLogSpecialSettings";
 import { MAX_ATTEMPTS_PER_TRACE } from "./traceLimits";
 import type { TraceSession, TraceSummary } from "./traceStore";
 
@@ -102,11 +105,18 @@ function mergeTraceWithRequestLog(
       requestLog.special_settings_json,
       requestLog.final_provider_id
     );
+  const modelRedirect =
+    trace.model_redirect ??
+    resolveModelRedirectFromSpecialSettings(
+      requestLog.special_settings_json,
+      requestLog.final_provider_id
+    );
   const enrichedTrace = {
     ...trace,
     session_id: trace.session_id ?? requestLog.session_id ?? null,
     requested_model: trace.requested_model ?? requestLog.requested_model ?? null,
     claude_model_mapping: claudeModelMapping,
+    model_redirect: modelRedirect,
     last_seen_ms: Math.max(trace.last_seen_ms, requestLogTsMs),
   };
 
@@ -125,6 +135,8 @@ function mergeTraceWithRequestLog(
     requested_model:
       summary?.requested_model ?? trace.requested_model ?? requestLog.requested_model ?? null,
     claude_model_mapping: summary?.claude_model_mapping ?? claudeModelMapping ?? null,
+    model_redirect: summary?.model_redirect ?? modelRedirect ?? null,
+    reasoning_effort: summary?.reasoning_effort ?? requestLog.reasoning_effort ?? null,
     status: summary?.status ?? requestLog.status ?? null,
     error_category: summary?.error_category ?? null,
     error_code: summary?.error_code ?? requestLog.error_code ?? null,
@@ -167,6 +179,7 @@ function traceFromActiveRequest(activeRequest: ActiveRequest): ActiveTraceSessio
     query: activeRequest.query ?? null,
     requested_model: activeRequest.requested_model ?? null,
     claude_model_mapping: activeRequest.current_attempt?.claude_model_mapping ?? null,
+    model_redirect: activeRequest.current_attempt?.model_redirect ?? null,
     first_seen_ms: createdAtMs,
     last_seen_ms: Math.max(createdAtMs, activeRequest.last_activity_ms ?? 0),
     attempts: activeRequest.current_attempt ? [activeRequest.current_attempt] : [],
@@ -201,6 +214,7 @@ function mergeTraceWithActiveRequestProgress(
     requested_model: trace.requested_model ?? activeRequest.requested_model ?? null,
     claude_model_mapping:
       trace.claude_model_mapping ?? currentAttempt?.claude_model_mapping ?? null,
+    model_redirect: trace.model_redirect ?? currentAttempt?.model_redirect ?? null,
     last_seen_ms: Math.max(trace.last_seen_ms, activeRequest.last_activity_ms ?? 0),
     attempts,
   };

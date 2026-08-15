@@ -1,21 +1,109 @@
-//! Usage: Handle Claude thinking rectifiers (signature/budget) 400 path inside `failover_loop::run`.
+//! Usage: Handle protocol-specific reactive rectifiers for upstream 400 responses.
 
+use super::attempt_executor::grant_repair_retry_slot_if_needed;
 use super::*;
 use crate::gateway::proxy::provider_router;
 use crate::gateway::proxy::upstream_client_error_rules;
-use crate::gateway::thinking_budget_rectifier;
+use crate::gateway::reactive_rectifier::{self, ReactiveRectifierKind, ReactiveRectifierSettings};
+use crate::gateway::{
+    gemini_function_id_rectifier, thinking_budget_rectifier, thinking_effort_conflict_rectifier,
+};
 
 pub(super) struct HandleThinkingRectifiers400Input<'a, R: tauri::Runtime = tauri::Wry> {
     pub(super) ctx: CommonCtx<'a, R>,
     pub(super) provider_ctx: ProviderCtx<'a>,
     pub(super) attempt_ctx: AttemptCtx<'a>,
     pub(super) loop_state: LoopState<'a, R>,
+    pub(super) enable_thinking_effort_conflict_rectifier: bool,
     pub(super) enable_thinking_signature_rectifier: bool,
     pub(super) enable_thinking_budget_rectifier: bool,
+    pub(super) enable_gemini_function_id_rectifier: bool,
     pub(super) resp: reqwest::Response,
     pub(super) status: StatusCode,
     pub(super) response_headers: HeaderMap,
     pub(super) upstream: super::upstream_error::UpstreamRequestState<'a>,
+}
+
+fn rectify_request(
+    kind: ReactiveRectifierKind,
+    message: &mut serde_json::Value,
+    trigger: &'static str,
+    provider_id: i64,
+    provider_name: &str,
+    retry_index: u32,
+    protocol_bridge_type: Option<&str>,
+    provider_base_url: Option<&str>,
+) -> (bool, serde_json::Value) {
+    let common = || {
+        serde_json::json!({
+            "type": kind.as_str(),
+            "scope": "attempt",
+            "providerId": provider_id,
+            "providerName": provider_name,
+            "trigger": trigger,
+            "attemptNumber": retry_index,
+            "retryAttemptNumber": retry_index + 1,
+        })
+    };
+
+    match kind {
+        ReactiveRectifierKind::ThinkingEffortConflict => {
+            let result = thinking_effort_conflict_rectifier::rectify(message);
+            let mut audit = common();
+            audit["hit"] = serde_json::json!(result.applied);
+            audit["removedOutputConfigEffort"] =
+                serde_json::json!(result.removed_output_config_effort);
+            audit["removedReasoningEffort"] = serde_json::json!(result.removed_reasoning_effort);
+            audit["thinkingType"] = serde_json::json!(result.thinking_type);
+            (result.applied, audit)
+        }
+        ReactiveRectifierKind::ThinkingSignature => {
+            let result =
+                thinking_signature_rectifier::rectify_anthropic_request_message_for_request(
+                    message,
+                    trigger,
+                    protocol_bridge_type,
+                    provider_base_url,
+                );
+            let mut audit = common();
+            audit["hit"] = serde_json::json!(result.applied);
+            audit["removedThinkingBlocks"] = serde_json::json!(result.removed_thinking_blocks);
+            audit["removedRedactedThinkingBlocks"] =
+                serde_json::json!(result.removed_redacted_thinking_blocks);
+            audit["removedSignatureFields"] = serde_json::json!(result.removed_signature_fields);
+            audit["removedTopLevelThinking"] = serde_json::json!(result.removed_top_level_thinking);
+            audit["disabledTopLevelThinking"] =
+                serde_json::json!(result.disabled_top_level_thinking);
+            audit["mergedAdjacentAssistantMessages"] =
+                serde_json::json!(result.merged_adjacent_assistant_messages);
+            (result.applied, audit)
+        }
+        ReactiveRectifierKind::ThinkingBudget => {
+            let result = thinking_budget_rectifier::rectify_anthropic_request_message(message);
+            let mut audit = common();
+            audit["hit"] = serde_json::json!(result.applied);
+            audit["before"] = serde_json::json!({
+                "maxTokens": result.before.max_tokens,
+                "thinkingType": result.before.thinking_type,
+                "thinkingBudgetTokens": result.before.thinking_budget_tokens,
+            });
+            audit["after"] = serde_json::json!({
+                "maxTokens": result.after.max_tokens,
+                "thinkingType": result.after.thinking_type,
+                "thinkingBudgetTokens": result.after.thinking_budget_tokens,
+            });
+            (result.applied, audit)
+        }
+        ReactiveRectifierKind::GeminiFunctionId => {
+            let result = gemini_function_id_rectifier::rectify(message);
+            let mut audit = common();
+            audit["hit"] = serde_json::json!(result.applied);
+            audit["strippedFunctionCallIds"] = serde_json::json!(result.stripped_function_call_ids);
+            audit["strippedFunctionResponseIds"] =
+                serde_json::json!(result.stripped_function_response_ids);
+            (result.applied, audit)
+        }
+    }
 }
 
 pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
@@ -26,8 +114,10 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         provider_ctx,
         attempt_ctx,
         loop_state,
+        enable_thinking_effort_conflict_rectifier,
         enable_thinking_signature_rectifier,
         enable_thinking_budget_rectifier,
+        enable_gemini_function_id_rectifier,
         resp,
         status,
         mut response_headers,
@@ -35,8 +125,12 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
     } = input;
     let upstream_body_bytes = upstream.upstream_body_bytes;
     let strip_request_content_encoding = upstream.strip_request_content_encoding;
+    let thinking_effort_conflict_rectifier_retried =
+        upstream.thinking_effort_conflict_rectifier_retried;
     let thinking_signature_rectifier_retried = upstream.thinking_signature_rectifier_retried;
     let thinking_budget_rectifier_retried = upstream.thinking_budget_rectifier_retried;
+    let gemini_function_id_rectifier_retried = upstream.gemini_function_id_rectifier_retried;
+    let additional_repair_retry_slots = upstream.additional_repair_retry_slots;
     let introspection_body = ctx.introspection_body;
 
     let CommonCtxOwned {
@@ -54,7 +148,6 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         special_settings,
         provider_health_neutral,
         provider_cooldown_secs,
-        max_attempts_per_provider,
         enable_response_fixer,
         response_fixer_non_stream_config,
         ..
@@ -72,6 +165,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
     let AttemptCtx {
         attempt_index: _,
         retry_index,
+        provider_max_attempts,
         attempt_started_ms,
         attempt_started,
         circuit_before,
@@ -87,10 +181,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         abort_guard,
     } = loop_state;
 
-    if cli_key == "claude"
-        && status.as_u16() == 400
-        && (enable_thinking_signature_rectifier || enable_thinking_budget_rectifier)
-    {
+    if status.as_u16() == 400 {
         let buffered_body =
             match super::upstream_error::read_response_body_for_error_scan(resp).await {
                 Ok(super::upstream_error::BoundedResponseBody { body, truncated: _ }) => body,
@@ -151,19 +242,26 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
             super::upstream_error::error_body_scan_limit_usize(),
         );
         let upstream_body_text = String::from_utf8_lossy(body_for_scan.as_ref()).to_string();
-        let signature_trigger = enable_thinking_signature_rectifier
-            .then(|| {
-                thinking_signature_rectifier::detect_trigger_for_request(
+        let matched_rectifier = reactive_rectifier::detect(
+            cli_key.as_str(),
+            &upstream_body_text,
+            ReactiveRectifierSettings {
+                thinking_effort_conflict: enable_thinking_effort_conflict_rectifier,
+                thinking_signature: enable_thinking_signature_rectifier,
+                thinking_budget: enable_thinking_budget_rectifier,
+                gemini_function_id: enable_gemini_function_id_rectifier,
+            },
+        )
+        .and_then(|mut matched| {
+            if matched.kind == ReactiveRectifierKind::ThinkingSignature {
+                matched.trigger = thinking_signature_rectifier::detect_trigger_for_request(
                     &upstream_body_text,
                     protocol_bridge_type,
                     Some(provider_base_url_base.as_str()),
-                )
-            })
-            .flatten();
-        let budget_trigger = signature_trigger
-            .is_none()
-            .then(|| thinking_budget_rectifier::detect_trigger(&upstream_body_text))
-            .flatten();
+                )?;
+            }
+            Some(matched)
+        });
 
         let mut rectified_applied = false;
         let mut rectifier_kind: Option<&'static str> = None;
@@ -177,11 +275,19 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
         let mut decision = base_decision;
         let mut should_record_circuit_failure = matches!(category, ErrorCategory::ProviderError);
 
-        if let Some(trigger) = signature_trigger {
-            rectifier_kind = Some("thinking_signature_rectifier");
-            rectifier_trigger = Some(trigger);
+        if let Some(matched) = matched_rectifier.filter(|matched| matched.enabled) {
+            rectifier_kind = Some(matched.kind.as_str());
+            rectifier_trigger = Some(matched.trigger);
+            let already_retried = match matched.kind {
+                ReactiveRectifierKind::ThinkingEffortConflict => {
+                    *thinking_effort_conflict_rectifier_retried
+                }
+                ReactiveRectifierKind::ThinkingSignature => *thinking_signature_rectifier_retried,
+                ReactiveRectifierKind::ThinkingBudget => *thinking_budget_rectifier_retried,
+                ReactiveRectifierKind::GeminiFunctionId => *gemini_function_id_rectifier_retried,
+            };
 
-            if *thinking_signature_rectifier_retried {
+            if already_retried {
                 rectifier_retried = true;
                 should_record_circuit_failure = false;
                 category = ErrorCategory::NonRetryableClientError;
@@ -193,105 +299,48 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                             serde_json::from_slice::<serde_json::Value>(introspection_body)
                         })
                         .unwrap_or(serde_json::Value::Null);
-                let rectified =
-                    thinking_signature_rectifier::rectify_anthropic_request_message_for_request(
-                        &mut message_value,
-                        trigger,
-                        protocol_bridge_type,
-                        Some(provider_base_url_base.as_str()),
-                    );
-
-                response_fixer::push_special_setting(
-                    &special_settings,
-                    serde_json::json!({
-                        "type": "thinking_signature_rectifier",
-                        "scope": "request",
-                        "hit": rectified.applied,
-                        "providerId": provider_id,
-                        "providerName": provider_name_base.clone(),
-                        "trigger": trigger,
-                        "attemptNumber": retry_index,
-                        "retryAttemptNumber": retry_index + 1,
-                        "removedThinkingBlocks": rectified.removed_thinking_blocks,
-                        "removedRedactedThinkingBlocks": rectified.removed_redacted_thinking_blocks,
-                        "removedSignatureFields": rectified.removed_signature_fields,
-                        "removedTopLevelThinking": rectified.removed_top_level_thinking,
-                        "disabledTopLevelThinking": rectified.disabled_top_level_thinking,
-                        "mergedAdjacentAssistantMessages": rectified.merged_adjacent_assistant_messages,
-                    }),
-                );
-
-                if rectified.applied {
-                    if let Ok(next) = serde_json::to_vec(&message_value) {
-                        *upstream_body_bytes = Bytes::from(next);
-                        *strip_request_content_encoding = true;
-                        *thinking_signature_rectifier_retried = true;
-                        rectified_applied = true;
-                        should_record_circuit_failure = false;
-                        decision = FailoverDecision::RetrySameProvider;
-                    }
-                }
-
-                if !rectified_applied {
-                    should_record_circuit_failure = false;
-                    category = ErrorCategory::NonRetryableClientError;
-                    decision = FailoverDecision::Abort;
-                }
-            }
-        } else if let Some(trigger) = budget_trigger.filter(|_| enable_thinking_budget_rectifier) {
-            rectifier_kind = Some("thinking_budget_rectifier");
-            rectifier_trigger = Some(trigger);
-
-            if *thinking_budget_rectifier_retried {
-                rectifier_retried = true;
-                should_record_circuit_failure = false;
-                category = ErrorCategory::NonRetryableClientError;
-                decision = FailoverDecision::Abort;
-            } else {
-                let mut message_value =
-                    serde_json::from_slice::<serde_json::Value>(upstream_body_bytes.as_ref())
-                        .or_else(|_| {
-                            serde_json::from_slice::<serde_json::Value>(introspection_body)
-                        })
-                        .unwrap_or(serde_json::Value::Null);
-                let rectified = thinking_budget_rectifier::rectify_anthropic_request_message(
+                let (mutation_applied, mut audit) = rectify_request(
+                    matched.kind,
                     &mut message_value,
+                    matched.trigger,
+                    provider_id,
+                    provider_name_base.as_str(),
+                    retry_index,
+                    protocol_bridge_type,
+                    Some(provider_base_url_base.as_str()),
                 );
 
-                response_fixer::push_special_setting(
-                    &special_settings,
-                    serde_json::json!({
-                        "type": "thinking_budget_rectifier",
-                        "scope": "request",
-                        "hit": rectified.applied,
-                        "providerId": provider_id,
-                        "providerName": provider_name_base.clone(),
-                        "trigger": trigger,
-                        "attemptNumber": retry_index,
-                        "retryAttemptNumber": retry_index + 1,
-                        "before": {
-                            "maxTokens": rectified.before.max_tokens,
-                            "thinkingType": rectified.before.thinking_type,
-                            "thinkingBudgetTokens": rectified.before.thinking_budget_tokens,
-                        },
-                        "after": {
-                            "maxTokens": rectified.after.max_tokens,
-                            "thinkingType": rectified.after.thinking_type,
-                            "thinkingBudgetTokens": rectified.after.thinking_budget_tokens,
-                        },
-                    }),
-                );
-
-                if rectified.applied {
+                if mutation_applied {
                     if let Ok(next) = serde_json::to_vec(&message_value) {
                         *upstream_body_bytes = Bytes::from(next);
                         *strip_request_content_encoding = true;
-                        *thinking_budget_rectifier_retried = true;
+                        match matched.kind {
+                            ReactiveRectifierKind::ThinkingEffortConflict => {
+                                *thinking_effort_conflict_rectifier_retried = true;
+                            }
+                            ReactiveRectifierKind::ThinkingSignature => {
+                                *thinking_signature_rectifier_retried = true;
+                            }
+                            ReactiveRectifierKind::ThinkingBudget => {
+                                *thinking_budget_rectifier_retried = true;
+                            }
+                            ReactiveRectifierKind::GeminiFunctionId => {
+                                *gemini_function_id_rectifier_retried = true;
+                            }
+                        }
+                        let granted_retry_slot = grant_repair_retry_slot_if_needed(
+                            additional_repair_retry_slots,
+                            retry_index,
+                            provider_max_attempts,
+                        );
+                        audit["grantedRetrySlot"] = serde_json::json!(granted_retry_slot);
                         rectified_applied = true;
                         should_record_circuit_failure = false;
                         decision = FailoverDecision::RetrySameProvider;
                     }
                 }
+
+                response_fixer::push_special_setting(&special_settings, audit);
 
                 if !rectified_applied {
                     should_record_circuit_failure = false;
@@ -316,12 +365,6 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                 category = ErrorCategory::NonRetryableClientError;
                 decision = FailoverDecision::Abort;
             }
-        }
-
-        if matches!(decision, FailoverDecision::RetrySameProvider)
-            && retry_index >= max_attempts_per_provider
-        {
-            decision = FailoverDecision::SwitchProvider;
         }
 
         let mut circuit_state_before = Some(circuit_before.state.as_str());
@@ -423,6 +466,10 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
             circuit_trigger_error_code: None,
             provider_bridged: Some(provider_ctx.provider_bridged),
             timeout_secs: None,
+            reasoning_effort: attempt_ctx.reasoning_effort.map(str::to_string),
+            upstream_sent: attempt_ctx.upstream_sent,
+            claude_model_mapping: provider_ctx.claude_model_mapping.cloned(),
+            model_redirect: provider_ctx.model_redirect.cloned(),
         });
 
         emit_attempt_event_and_log(

@@ -108,6 +108,14 @@ pub(super) struct FailoverAttempt {
     // (never parsed out of `outcome`); serializes as explicit null per the
     // gateway event contract.
     pub(super) timeout_secs: Option<u32>,
+    pub(super) reasoning_effort: Option<String>,
+    pub(super) upstream_sent: bool,
+    // Model mapping applied for this attempt, carried in-memory so request_end
+    // selects final values from attempts instead of re-parsing special_settings JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) claude_model_mapping: Option<ClaudeModelMapping>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model_redirect: Option<ModelRedirect>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, specta::Type)]
@@ -119,6 +127,16 @@ pub(super) struct ClaudeModelMapping {
     pub(super) provider_id: i64,
     pub(super) provider_name: String,
     pub(super) applied: bool,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ModelRedirect {
+    pub(super) stage: String,
+    pub(super) provider_id: i64,
+    pub(super) provider_name: String,
+    pub(super) source_model: String,
+    pub(super) target_model: String,
 }
 
 #[derive(Debug, Serialize, Clone, specta::Type)]
@@ -147,6 +165,8 @@ pub(crate) struct GatewayRequestEvent {
     // frontend never re-derives the formula (single source of truth).
     effective_input_tokens: Option<i64>,
     claude_model_mapping: Option<ClaudeModelMapping>,
+    model_redirect: Option<ModelRedirect>,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, specta::Type)]
@@ -194,6 +214,7 @@ pub(crate) struct GatewayAttemptEvent {
     pub(super) circuit_failure_count: Option<u32>,
     pub(super) circuit_failure_threshold: Option<u32>,
     pub(super) claude_model_mapping: Option<ClaudeModelMapping>,
+    pub(super) model_redirect: Option<ModelRedirect>,
 }
 
 #[derive(Debug, Serialize, Clone, specta::Type)]
@@ -333,11 +354,29 @@ fn bound_optional_claude_model_mapping(
     mapping.map(bound_claude_model_mapping)
 }
 
+fn bound_model_redirect(mut redirect: ModelRedirect) -> ModelRedirect {
+    redirect.stage = truncate_chars(std::mem::take(&mut redirect.stage), EVENT_STATE_MAX_CHARS);
+    redirect.provider_name = truncate_chars(
+        std::mem::take(&mut redirect.provider_name),
+        EVENT_SHORT_TEXT_MAX_CHARS,
+    );
+    redirect.source_model = truncate_chars(
+        std::mem::take(&mut redirect.source_model),
+        EVENT_SHORT_TEXT_MAX_CHARS,
+    );
+    redirect.target_model = truncate_chars(
+        std::mem::take(&mut redirect.target_model),
+        EVENT_SHORT_TEXT_MAX_CHARS,
+    );
+    redirect
+}
+
 fn bound_failover_attempt(mut attempt: FailoverAttempt) -> FailoverAttempt {
     attempt.provider_name = truncate_chars(attempt.provider_name, EVENT_SHORT_TEXT_MAX_CHARS);
     attempt.base_url = truncate_chars(attempt.base_url, EVENT_URL_MAX_CHARS);
     attempt.outcome = truncate_chars(attempt.outcome, EVENT_STATE_MAX_CHARS);
     truncate_optional_chars(&mut attempt.reason, EVENT_QUERY_MAX_CHARS);
+    truncate_optional_chars(&mut attempt.reasoning_effort, EVENT_STATE_MAX_CHARS);
     attempt
 }
 
@@ -361,6 +400,8 @@ fn bound_request_event(mut payload: GatewayRequestEvent) -> GatewayRequestEvent 
     payload.attempts = trim_request_event_attempts(payload.attempts);
     payload.claude_model_mapping =
         bound_optional_claude_model_mapping(payload.claude_model_mapping);
+    payload.model_redirect = payload.model_redirect.map(bound_model_redirect);
+    truncate_optional_chars(&mut payload.reasoning_effort, EVENT_STATE_MAX_CHARS);
     payload
 }
 
@@ -399,6 +440,16 @@ fn request_event_effective_input_tokens(
     )
 }
 
+fn final_reasoning_effort(attempts: &[FailoverAttempt]) -> Option<String> {
+    crate::infra::request_logs::semantics::final_reasoning_effort(attempts.iter().map(|attempt| {
+        (
+            attempt.outcome.as_str(),
+            attempt.upstream_sent,
+            attempt.reasoning_effort.as_deref(),
+        )
+    }))
+}
+
 pub(super) fn bound_attempt_event(mut payload: GatewayAttemptEvent) -> GatewayAttemptEvent {
     payload.method = truncate_chars(payload.method, EVENT_METHOD_MAX_CHARS);
     payload.path = truncate_chars(payload.path, EVENT_PATH_MAX_CHARS);
@@ -409,6 +460,7 @@ pub(super) fn bound_attempt_event(mut payload: GatewayAttemptEvent) -> GatewayAt
     payload.outcome = truncate_chars(payload.outcome, EVENT_STATE_MAX_CHARS);
     payload.claude_model_mapping =
         bound_optional_claude_model_mapping(payload.claude_model_mapping);
+    payload.model_redirect = payload.model_redirect.map(bound_model_redirect);
     payload
 }
 
@@ -442,6 +494,7 @@ pub(super) fn emit_request_event<R: tauri::Runtime>(
     ttfb_ms: Option<u128>,
     attempts: Vec<FailoverAttempt>,
     claude_model_mapping: Option<ClaudeModelMapping>,
+    model_redirect: Option<ModelRedirect>,
     usage: Option<usage::UsageMetrics>,
 ) {
     emit_request_signal(
@@ -460,6 +513,7 @@ pub(super) fn emit_request_event<R: tauri::Runtime>(
 
     let usage = usage.unwrap_or_default();
     let effective_input_tokens = request_event_effective_input_tokens(&cli_key, &attempts, &usage);
+    let reasoning_effort = final_reasoning_effort(&attempts);
     let payload = GatewayRequestEvent {
         trace_id,
         cli_key,
@@ -483,6 +537,8 @@ pub(super) fn emit_request_event<R: tauri::Runtime>(
         cache_creation_1h_input_tokens: usage.cache_creation_1h_input_tokens,
         effective_input_tokens,
         claude_model_mapping,
+        model_redirect,
+        reasoning_effort,
     };
 
     gated_emit(
@@ -610,6 +666,16 @@ mod tests {
         }
     }
 
+    fn sample_redirect() -> ModelRedirect {
+        ModelRedirect {
+            stage: "provider".to_string(),
+            provider_id: 7,
+            provider_name: "Provider A".to_string(),
+            source_model: "gpt-original".to_string(),
+            target_model: "gpt-upstream".to_string(),
+        }
+    }
+
     fn sample_attempt(provider_id: i64) -> FailoverAttempt {
         FailoverAttempt {
             provider_id,
@@ -636,6 +702,10 @@ mod tests {
             circuit_trigger_error_code: None,
             provider_bridged: Some(false),
             timeout_secs: None,
+            reasoning_effort: None,
+            upstream_sent: false,
+            claude_model_mapping: None,
+            model_redirect: None,
         }
     }
 
@@ -756,6 +826,10 @@ mod tests {
                 circuit_trigger_error_code: None,
                 provider_bridged: Some(false),
                 timeout_secs: None,
+                reasoning_effort: Some("high".to_string()),
+                upstream_sent: true,
+                claude_model_mapping: None,
+                model_redirect: None,
             }],
             input_tokens: Some(1200),
             output_tokens: Some(350),
@@ -767,6 +841,8 @@ mod tests {
             // claude + non-bridged provider: effective input == raw input.
             effective_input_tokens: Some(1200),
             claude_model_mapping: Some(fixture_mapping()),
+            model_redirect: None,
+            reasoning_effort: Some("high".to_string()),
         };
 
         assert_matches_fixture(
@@ -839,6 +915,7 @@ mod tests {
             circuit_failure_count: Some(0),
             circuit_failure_threshold: Some(5),
             claude_model_mapping: Some(fixture_mapping()),
+            model_redirect: None,
         };
 
         assert_matches_fixture(
@@ -1012,6 +1089,7 @@ mod tests {
                 provider_name: repeated_ascii(EVENT_SHORT_TEXT_MAX_CHARS + 1),
                 applied: true,
             }),
+            model_redirect: None,
         };
 
         let bounded = bound_attempt_event(payload);
@@ -1075,6 +1153,7 @@ mod tests {
             circuit_failure_count: None,
             circuit_failure_threshold: None,
             claude_model_mapping: Some(sample_mapping()),
+            model_redirect: Some(sample_redirect()),
         };
 
         let value = serde_json::to_value(payload).expect("serializable attempt event");
@@ -1087,6 +1166,16 @@ mod tests {
                 "providerId": 7,
                 "providerName": "Provider A",
                 "applied": true,
+            }))
+        );
+        assert_eq!(
+            value.get("model_redirect"),
+            Some(&json!({
+                "stage": "provider",
+                "providerId": 7,
+                "providerName": "Provider A",
+                "sourceModel": "gpt-original",
+                "targetModel": "gpt-upstream"
             }))
         );
     }
@@ -1116,9 +1205,12 @@ mod tests {
             cache_creation_1h_input_tokens: None,
             effective_input_tokens: None,
             claude_model_mapping: None,
+            model_redirect: None,
+            reasoning_effort: None,
         };
 
         let value = serde_json::to_value(payload).expect("serializable request event");
         assert_eq!(value.get("claude_model_mapping"), Some(&json!(null)));
+        assert_eq!(value.get("model_redirect"), Some(&json!(null)));
     }
 }

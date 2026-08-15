@@ -17,6 +17,7 @@ const ENV_KEY_DISABLE_ERROR_REPORTING: &str = "DISABLE_ERROR_REPORTING";
 #[cfg(not(windows))]
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+const CODEX_CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
 const CMD_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const COMMAND_OUTPUT_STREAM_LIMIT: usize = 16 * 1024;
 const COMMAND_OUTPUT_READ_CHUNK_SIZE: usize = 8 * 1024;
@@ -128,19 +129,23 @@ fn read_limited_command_output<R: Read>(
     })
 }
 
-fn spawn_limited_output_reader<R>(reader: R) -> JoinHandle<std::io::Result<LimitedCommandOutput>>
+fn spawn_limited_output_reader<R>(
+    reader: R,
+    limit: usize,
+) -> JoinHandle<std::io::Result<LimitedCommandOutput>>
 where
     R: Read + Send + 'static,
 {
-    std::thread::spawn(move || read_limited_command_output(reader, COMMAND_OUTPUT_STREAM_LIMIT))
+    std::thread::spawn(move || read_limited_command_output(reader, limit))
 }
 
 fn collect_output_reader(
     task: Option<JoinHandle<std::io::Result<LimitedCommandOutput>>>,
     stream_name: &str,
+    limit: usize,
 ) -> crate::shared::error::AppResult<LimitedCommandOutput> {
     let Some(task) = task else {
-        return Ok(LimitedCommandOutput::empty(COMMAND_OUTPUT_STREAM_LIMIT));
+        return Ok(LimitedCommandOutput::empty(limit));
     };
 
     match task.join() {
@@ -154,9 +159,10 @@ fn collect_limited_process_output(
     status: std::process::ExitStatus,
     stdout_task: Option<JoinHandle<std::io::Result<LimitedCommandOutput>>>,
     stderr_task: Option<JoinHandle<std::io::Result<LimitedCommandOutput>>>,
+    limit: usize,
 ) -> crate::shared::error::AppResult<LimitedProcessOutput> {
-    let stdout = collect_output_reader(stdout_task, "stdout")?;
-    let stderr = collect_output_reader(stderr_task, "stderr")?;
+    let stdout = collect_output_reader(stdout_task, "stdout", limit)?;
+    let stderr = collect_output_reader(stderr_task, "stderr", limit)?;
     Ok(LimitedProcessOutput {
         status,
         stdout,
@@ -167,9 +173,10 @@ fn collect_limited_process_output(
 fn drain_limited_output_readers(
     stdout_task: Option<JoinHandle<std::io::Result<LimitedCommandOutput>>>,
     stderr_task: Option<JoinHandle<std::io::Result<LimitedCommandOutput>>>,
+    limit: usize,
 ) {
-    let _ = collect_output_reader(stdout_task, "stdout");
-    let _ = collect_output_reader(stderr_task, "stderr");
+    let _ = collect_output_reader(stdout_task, "stdout", limit);
+    let _ = collect_output_reader(stderr_task, "stderr", limit);
 }
 
 fn limited_output_to_string(output: &LimitedCommandOutput, stream_name: &str) -> String {
@@ -187,43 +194,72 @@ fn limited_output_to_string(output: &LimitedCommandOutput, stream_name: &str) ->
 }
 
 fn command_output_with_timeout(
+    cmd: Command,
+    timeout: Duration,
+    label: String,
+) -> crate::shared::error::AppResult<LimitedProcessOutput> {
+    command_output_with_timeout_limit(cmd, timeout, label, COMMAND_OUTPUT_STREAM_LIMIT)
+}
+
+fn command_output_with_timeout_limit(
     mut cmd: Command,
     timeout: Duration,
     label: String,
+    output_limit: usize,
 ) -> crate::shared::error::AppResult<LimitedProcessOutput> {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    #[cfg(unix)]
+    crate::shared::process::configure_unix_process_group(&mut cmd);
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to execute {label}: {e}"))?;
-    let stdout_task = child.stdout.take().map(spawn_limited_output_reader);
-    let stderr_task = child.stderr.take().map(spawn_limited_output_reader);
+    let stdout_task = child
+        .stdout
+        .take()
+        .map(|reader| spawn_limited_output_reader(reader, output_limit));
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|reader| spawn_limited_output_reader(reader, output_limit));
 
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return collect_limited_process_output(status, stdout_task, stderr_task);
+                return collect_limited_process_output(
+                    status,
+                    stdout_task,
+                    stderr_task,
+                    output_limit,
+                );
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    drain_limited_output_readers(stdout_task, stderr_task);
+                    terminate_command(&mut child);
+                    drain_limited_output_readers(stdout_task, stderr_task, output_limit);
                     return Err(format!("{label} timed out after {}ms", timeout.as_millis()).into());
                 }
                 std::thread::sleep(CMD_POLL_INTERVAL);
             }
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                drain_limited_output_readers(stdout_task, stderr_task);
+                terminate_command(&mut child);
+                drain_limited_output_readers(stdout_task, stderr_task, output_limit);
                 return Err(format!("failed to wait for {label}: {e}").into());
             }
         }
     }
+}
+
+fn terminate_command(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    crate::shared::process::terminate_unix_process_group(child.id());
+    #[cfg(windows)]
+    crate::shared::process::terminate_windows_process_tree(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn home_dir<R: tauri::Runtime>(
@@ -487,8 +523,8 @@ fn find_exe_in_path(names: &[String]) -> Option<PathBuf> {
     None
 }
 
-fn scan_executable(
-    app: &tauri::AppHandle,
+fn scan_executable<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     cmd: &str,
 ) -> crate::shared::error::AppResult<Option<PathBuf>> {
     let names = exe_names_for(cmd);
@@ -716,8 +752,8 @@ fn runtime_path_for_executable(exe: &Path) -> crate::shared::error::AppResult<Os
     }
 }
 
-pub(crate) fn codex_launch_spec(
-    app: &tauri::AppHandle,
+pub(crate) fn codex_launch_spec<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
 ) -> crate::shared::error::AppResult<Option<CodexLaunchSpec>> {
     let exe = match resolve_executable_via_login_shell("codex") {
         Ok(Some(path)) => Some(path),
@@ -732,6 +768,78 @@ pub(crate) fn codex_launch_spec(
         version: run_version(&executable).ok(),
         executable,
     }))
+}
+
+pub(crate) fn codex_bundled_model_catalog_json(
+    launch: &CodexLaunchSpec,
+    codex_home: &Path,
+) -> crate::shared::error::AppResult<Vec<u8>> {
+    #[cfg(windows)]
+    let mut command = {
+        let is_script = launch
+            .executable
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("cmd") || value.eq_ignore_ascii_case("bat"))
+            .unwrap_or(false);
+        if is_script {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/D", "/S", "/C"]);
+            command.arg(format!(
+                "\"{}\" debug models --bundled",
+                launch.executable.to_string_lossy().replace('"', "\\\"")
+            ));
+            command
+        } else {
+            let mut command = Command::new(&launch.executable);
+            command.args(["debug", "models", "--bundled"]);
+            command
+        }
+    };
+
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = Command::new(&launch.executable);
+        command.args(["debug", "models", "--bundled"]);
+        command
+    };
+
+    command
+        .env("CODEX_HOME", codex_home)
+        .env("PATH", &launch.runtime_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command_output_with_timeout_limit(
+        command,
+        CODEX_CATALOG_TIMEOUT,
+        format!("{} debug models --bundled", launch.executable.display()),
+        crate::infra::codex_model_catalog::CODEX_CATALOG_MAX_BYTES,
+    )?;
+    if output.stdout.truncated {
+        return Err(format!(
+            "CLI_PROXY_CODEX_CATALOG_FAILED: bundled catalog exceeds {} bytes",
+            crate::infra::codex_model_catalog::CODEX_CATALOG_MAX_BYTES
+        )
+        .into());
+    }
+    if !output.status.success() {
+        let stderr = limited_output_to_string(&output.stderr, "stderr");
+        let message = if stderr.is_empty() {
+            "Codex bundled catalog command failed".to_string()
+        } else {
+            stderr
+        };
+        return Err(format!("CLI_PROXY_CODEX_CATALOG_FAILED: {message}").into());
+    }
+    if output.stdout.bytes.is_empty() {
+        return Err("CLI_PROXY_CODEX_CATALOG_FAILED: bundled catalog is empty".into());
+    }
+    Ok(output.stdout.bytes)
 }
 
 fn cli_probe(app: &tauri::AppHandle, cmd: &str) -> crate::shared::error::AppResult<CliProbeResult> {

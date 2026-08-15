@@ -179,7 +179,6 @@ describe("query/keys", () => {
   it("builds modelPrices keys", () => {
     expect(modelPricesKeys.all).toEqual(["modelPrices"]);
     expect(modelPricesKeys.lists()).toEqual(["modelPrices", "list"]);
-    expect(modelPricesKeys.list("claude")).toEqual(["modelPrices", "list", "claude"]);
     expect(modelPricesKeys.aliases()).toEqual(["modelPrices", "aliases"]);
   });
 

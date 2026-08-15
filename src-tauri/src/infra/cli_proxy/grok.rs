@@ -186,7 +186,12 @@ pub(super) fn rebind_grok_manifest_after_home_change<R: tauri::Runtime>(
     let old_target_snapshots = previous_manifest
         .files
         .iter()
-        .map(|entry| super::snapshot_file(std::path::Path::new(&entry.path)))
+        .map(|entry| {
+            super::snapshot_file(
+                std::path::Path::new(&entry.path),
+                super::CLI_PROXY_FILE_MAX_BYTES,
+            )
+        })
         .collect::<AppResult<Vec<_>>>()?;
     let new_target_snapshots = super::snapshot_target_files(&captured)?;
     let backup_snapshots = super::snapshot_backup_files(app, "grok", &captured)?;
