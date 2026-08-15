@@ -63,6 +63,21 @@ where
 
         match ctrl {
             LoopControl::ContinueRetry => {
+                let reasoning_context_retry_pending =
+                    std::mem::take(&mut retry_state.codex_reasoning_context_retry_pending);
+                let additional_tools_retry_pending =
+                    std::mem::take(&mut retry_state.codex_additional_tools_retry_pending);
+                let agent_message_retry_pending =
+                    std::mem::take(&mut retry_state.codex_agent_message_retry_pending);
+                let reactive_rectifier_retry_pending =
+                    std::mem::take(&mut retry_state.reactive_rectifier_retry_pending);
+                let repair_retry_pending = reasoning_context_retry_pending
+                    || additional_tools_retry_pending
+                    || agent_message_retry_pending
+                    || reactive_rectifier_retry_pending;
+                if retry_index >= prepared.provider_regular_max_attempts && !repair_retry_pending {
+                    break;
+                }
                 let Some(next_retry_index) = retry_index.checked_add(1) else {
                     break;
                 };

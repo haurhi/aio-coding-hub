@@ -130,6 +130,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
     let thinking_signature_rectifier_retried = upstream.thinking_signature_rectifier_retried;
     let thinking_budget_rectifier_retried = upstream.thinking_budget_rectifier_retried;
     let gemini_function_id_rectifier_retried = upstream.gemini_function_id_rectifier_retried;
+    let reactive_rectifier_retry_pending = upstream.reactive_rectifier_retry_pending;
     let additional_repair_retry_slots = upstream.additional_repair_retry_slots;
     let introspection_body = ctx.introspection_body;
 
@@ -333,6 +334,7 @@ pub(super) async fn handle_thinking_rectifiers_400<R: tauri::Runtime>(
                             retry_index,
                             provider_max_attempts,
                         );
+                        *reactive_rectifier_retry_pending = true;
                         audit["grantedRetrySlot"] = serde_json::json!(granted_retry_slot);
                         rectified_applied = true;
                         should_record_circuit_failure = false;

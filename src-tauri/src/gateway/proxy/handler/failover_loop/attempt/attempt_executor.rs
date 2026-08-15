@@ -25,6 +25,7 @@ pub(super) struct RetryLoopState {
     pub(super) thinking_signature_rectifier_retried: bool,
     pub(super) thinking_budget_rectifier_retried: bool,
     pub(super) gemini_function_id_rectifier_retried: bool,
+    pub(super) reactive_rectifier_retry_pending: bool,
     pub(super) additional_repair_retry_slots: u32,
 }
 
@@ -44,6 +45,7 @@ impl RetryLoopState {
             thinking_signature_rectifier_retried: false,
             thinking_budget_rectifier_retried: false,
             gemini_function_id_rectifier_retried: false,
+            reactive_rectifier_retry_pending: false,
             additional_repair_retry_slots: 0,
         }
     }

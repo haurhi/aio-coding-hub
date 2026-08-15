@@ -229,6 +229,7 @@ where
                     .thinking_budget_rectifier_retried,
                 gemini_function_id_rectifier_retried: &mut retry_state
                     .gemini_function_id_rectifier_retried,
+                reactive_rectifier_retry_pending: &mut retry_state.reactive_rectifier_retry_pending,
                 additional_repair_retry_slots: &mut retry_state.additional_repair_retry_slots,
             },
         },

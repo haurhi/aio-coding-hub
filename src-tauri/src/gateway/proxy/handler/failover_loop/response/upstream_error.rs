@@ -212,6 +212,7 @@ pub(super) struct UpstreamRequestState<'a> {
     pub(super) thinking_signature_rectifier_retried: &'a mut bool,
     pub(super) thinking_budget_rectifier_retried: &'a mut bool,
     pub(super) gemini_function_id_rectifier_retried: &'a mut bool,
+    pub(super) reactive_rectifier_retry_pending: &'a mut bool,
     pub(super) additional_repair_retry_slots: &'a mut u32,
 }
 
