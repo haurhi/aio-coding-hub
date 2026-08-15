@@ -143,7 +143,10 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
         />
         <LimitsSection form={f} />
         <CodexModelMappingSection form={f} />
-        {f.cliKey === "claude" && f.authMode === "cx2cc" ? <ClaudeModelSection form={f} /> : null}
+        {f.cliKey === "claude" &&
+        (f.authMode === "cx2cc" || f.authMode === "claude_chat_completions") ? (
+          <ClaudeModelSection form={f} />
+        ) : null}
 
         <div className="flex items-center justify-between border-t border-border pt-3 dark:border-border">
           <div className="flex items-center gap-2">
